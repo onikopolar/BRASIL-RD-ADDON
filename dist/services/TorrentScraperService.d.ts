@@ -1,0 +1,83 @@
+export interface TorrentResult {
+    title: string;
+    magnet: string;
+    seeders: number;
+    leechers: number;
+    size: string;
+    quality: string;
+    provider: string;
+    language: string;
+    type: 'movie' | 'series';
+    relevanceScore: number;
+    sizeInBytes: number;
+    season?: number;
+    lastUpdated: Date;
+}
+export declare class TorrentScraperService {
+    private readonly providers;
+    private readonly torrentIndexerConfig;
+    private readonly maxRetries;
+    private readonly retryDelay;
+    private readonly qualityPriority;
+    private readonly ignoredWords;
+    private readonly promotionalKeywords;
+    private readonly qualityPatterns;
+    constructor();
+    searchTorrents(query: string, type?: 'movie' | 'series', targetSeason?: number): Promise<TorrentResult[]>;
+    /**
+     * DETECÇÃO DE QUALIDADE MUITO MELHORADA
+     */
+    private extractQuality;
+    /**
+     * INFERÊNCIA INTELIGENTE PELO CONTEXTO
+     */
+    private inferQualityFromContext;
+    /**
+     * DETECTAR QUALIDADE DE ARQUIVOS (quando disponível)
+     */
+    private detectQualityFromFilename;
+    private applyStrictFiltering;
+    private isExactlyRelevant;
+    private extractMainTitle;
+    private extractEssentialKeywords;
+    private containsMainTitle;
+    private calculateKeywordMatch;
+    private isPromotionalContent;
+    private isCorrectSeason;
+    private searchTorrentIndexer;
+    private mapTorrentIndexerResult;
+    private getTorrentIndexerHeaders;
+    private generateSeasonQueries;
+    private processSettledResults;
+    private removeDuplicateResults;
+    private groupByQuality;
+    private selectBestFromEachQuality;
+    private getProviderPriority;
+    private logSearchResults;
+    private searchProvider;
+    private searchViaAPI;
+    private searchViaHTML;
+    private parseAPIResults;
+    private parseHtmlResults;
+    private isRelevantResult;
+    private extractMagnetFromContent;
+    private createTorrentResultFromAPI;
+    private createTorrentResult;
+    private extractSizeFromContent;
+    private enrichWithMagnets;
+    private fetchMagnetForResult;
+    private calculateRelevanceScore;
+    private extractMainPhrases;
+    private cleanTitle;
+    private extractSeasonNumber;
+    private extractSize;
+    private calculateSizeInBytes;
+    private extractLanguage;
+    private estimateSeeders;
+    private estimateLeechers;
+    private fetchWithRetry;
+    private getProviderFromUrl;
+    private getRequestHeaders;
+    private getAPIHeaders;
+    private delay;
+}

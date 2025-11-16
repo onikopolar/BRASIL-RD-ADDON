@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Brasil RD - Configuração</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header class="header">
+            <h1>Brasil RD Addon</h1>
+            <p>Configure sua chave do Real-Debrid para começar</p>
+        </header>
+
+        <main class="main">
+            <div class="config-card">
+                <h2>Configuração do Real-Debrid</h2>
+                
+                <div class="form-group">
+                    <label for="apiKey">Chave API do Real-Debrid:</label>
+                    <input 
+                        type="password" 
+                        id="apiKey" 
+                        placeholder="Cole sua chave API aqui..."
+                        class="api-input"
+                    >
+                    <small class="help-text">
+                        Como obter: 
+                        <a href="https://real-debrid.com/apitoken" target="_blank">
+                            real-debrid.com/apitoken
+                        </a>
+                    </small>
+                </div>
+
+                <div class="form-group">
+                    <label for="serverUrl">URL do Servidor:</label>
+                    <input 
+                        type="text" 
+                        id="serverUrl" 
+                        value="http://localhost:7000" 
+                        readonly
+                        class="url-input"
+                    >
+                    <small class="help-text">
+                        Esta é a URL do addon para configurar no Stremio
+                    </small>
+                </div>
+
+                <div class="actions">
+                    <button id="saveBtn" class="btn btn-primary">
+                        Salvar Configuração
+                    </button>
+                    <button id="testBtn" class="btn btn-secondary">
+                        Testar Conexão
+                    </button>
+                </div>
+
+                <div id="status" class="status hidden"></div>
+            </div>
+
+            <div class="info-card">
+                <h3>Como Usar:</h3>
+                <ol>
+                    <li>Obtenha sua API key no site do Real-Debrid</li>
+                    <li>Cole a chave no campo acima</li>
+                    <li>Clique em "Salvar Configuração"</li>
+                    <li>Adicione no Stremio: http://localhost:7000/manifest.json</li>
+                </ol>
+
+                <div class="features">
+                    <h4>Funcionalidades:</h4>
+                    <ul>
+                        <li>Conteúdo brasileiro (dublado/legendado) por: BLUDV, COMANDO, STARCK</li>
+                        <li>Qualidade 4K, 1080p, 720p automática</li>
+                        <li>Velocidade de busca: 2-3 segundos</li>
+                        <li>Suporte a filmes e séries</li>
+                        <li>Integração completa com Real-Debrid</li>
+                        <li>Conteúdo faltante pode ser feito request - solicite pelo Instagram: gu.dwn</li>
+                    </ul>
+                </div>
+            </div>
+
+            <div class="warning-card">
+                <h3>Aviso de Segurança</h3>
+                <p>Este é o projeto oficial desenvolvido por ONIKO. Não garanto a segurança com outros clones ou versões não-oficiais deste projeto. Use apenas a versão oficial disponivel no repositorio original.</p>
+            </div>
+        </main>
+
+        <footer class="footer">
+            <p>Brasil RD Addon - Versao Beta</p>
+        </footer>
+    </div>
+
+    <script src="config.js"></script>
+</body>
+</html>

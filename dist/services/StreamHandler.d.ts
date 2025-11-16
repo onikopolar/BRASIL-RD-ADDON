@@ -1,0 +1,91 @@
+import { Stream, StreamRequest, CuratedMagnet } from '../types/index';
+export declare class StreamHandler {
+    private readonly rdService;
+    private readonly magnetService;
+    private readonly cacheService;
+    private readonly torrentScraper;
+    private readonly imdbScraper;
+    private readonly logger;
+    private readonly processingConfig;
+    private readonly qualityPriority;
+    private readonly videoExtensions;
+    private readonly episodePatterns;
+    private readonly promotionalKeywords;
+    private readonly torrentCache;
+    private readonly seasonCache;
+    private readonly torrentCacheTTL;
+    private readonly downloadTimeout;
+    private readonly downloadPollInterval;
+    constructor();
+    handleStreamRequest(request: StreamRequest): Promise<{
+        streams: Stream[];
+    }>;
+    private calculateDynamicCacheTTL;
+    private processStreamRequest;
+    private processSeriesRequest;
+    private processMovieRequest;
+    private processSeriesScraping;
+    private processMovieScraping;
+    private fallbackToRegularScraping;
+    private processTorrentsWithRateLimit;
+    private extractSeasonFromTitle;
+    private extractImdbIdFromRequest;
+    private getSeasonCacheKey;
+    private getOrAddSeasonTorrent;
+    private processEpisodeFromSeason;
+    private processCuratedMagnets;
+    private processScrapedTorrent;
+    private processSeriesTorrent;
+    private processMovieTorrent;
+    private createSeriesStream;
+    private createPendingSeriesStream;
+    private createPendingMovieStream;
+    private mapRealDebridStatus;
+    private findEpisodeFilesByQuality;
+    private extractQualityFromFilename;
+    private extractQualityFromName;
+    private fetchTitleFromImdb;
+    private sortFilesByEpisode;
+    private extractEpisodeInfo;
+    private compareEpisodeInfo;
+    private filterPromotionalFiles;
+    private identifyMainFile;
+    private processMagnetSafely;
+    private processMagnet;
+    private processSpecificEpisode;
+    private processAllEpisodes;
+    private extractEpisodeFromRequest;
+    private findEpisodeFile;
+    private filterAndSortVideoFiles;
+    private generateStreamTitle;
+    private generateEpisodeStreamTitle;
+    private extractHashFromMagnet;
+    private generateCacheKey;
+    private sortStreamsByQuality;
+    private calculateQualityScore;
+    private sanitizeFilename;
+    addCuratedMagnet(magnet: CuratedMagnet): void;
+    removeCuratedMagnet(imdbId: string, magnetLink: string): boolean;
+    private invalidateRelatedCache;
+    getStats(): {
+        cache: {
+            size: number;
+            keys: string[];
+        };
+        magnets: {
+            totalMagnets: number;
+            uniqueTitles: number;
+        };
+        torrentCache: {
+            size: number;
+            entries: string[];
+        };
+        seasonCache: {
+            size: number;
+            entries: string[];
+        };
+    };
+    clearCache(): void;
+    validateMagnet(magnet: string): boolean;
+    private delay;
+}
