@@ -115,12 +115,9 @@ builder.defineStreamHandler(async (args) => {
 // Obter a interface do addon
 const addonInterface = builder.getInterface();
 // Usar o router do Stremio SDK para as rotas do addon
+// Isso cria automaticamente: /manifest.json e /stream/*
 const addonRouter = (0, stremio_addon_sdk_1.getRouter)(addonInterface);
 app.use(addonRouter);
-// Rota do manifesto Stremio (para compatibilidade)
-app.get('/manifest.json', (req, res) => {
-    res.json(addonInterface.manifest);
-});
 // Inicialização do servidor
 async function main() {
     const port = parseInt(process.env.PORT || '8080');
