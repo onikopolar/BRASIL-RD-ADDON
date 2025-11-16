@@ -13,10 +13,12 @@ import realdebridRouter from './routes/realdebrid';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
-const app = express();
 
-// Middlewares
-app.use(cors({
+// Servidor Express para a interface web
+const webApp = express();
+
+// Middlewares para a interface web
+webApp.use(cors({
     origin: [
         'https://app.strem.io',
         'https://web.stremio.com',
@@ -25,25 +27,25 @@ app.use(cors({
     methods: ['GET', 'POST', 'OPTIONS'],
     credentials: true
 }));
-app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public')));
+webApp.use(express.json());
+webApp.use(express.static(path.join(process.cwd(), 'public')));
 
-// Rotas da API
-app.use('/api', configRouter);
-app.use('/api/realdebrid', realdebridRouter);
+// Rotas da API para a interface web
+webApp.use('/api', configRouter);
+webApp.use('/api/realdebrid', realdebridRouter);
 
 // Rota principal para a UI
-app.get('/', (req, res) => {
+webApp.get('/', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'public/index.html'));
 });
 
 // Rota de saúde
-app.get('/health', (req, res) => {
+webApp.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Rota do manifesto Stremio
-app.get('/manifest.json', (req, res) => {
+// Rota do manifesto Stremio - IMPORTANTE: deve estar na mesma porta do addon
+webApp.get('/manifest.json', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'public/manifest.json'));
 });
 
@@ -93,29 +95,44 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 async function main(): Promise<void> {
     const addonInterface = builder.getInterface();
     
-    // Porta única para tudo
-    const port = parseInt(process.env.PORT || '8080');
+    // Porta principal para o addon Stremio (usada pelo Railway)
+    const addonPort = parseInt(process.env.PORT || '8080');
+    
+    // Porta alternativa para a interface web (addonPort + 1)
+    const webPort = addonPort + 1;
 
     try {
-        logger.info('Iniciando servidor no Railway', {
-            port: port
+        logger.info('Iniciando servidores', {
+            addonPort: addonPort,
+            webPort: webPort
         });
 
-        // Servir APENAS o addon Stremio - sem servidor Express separado
+        // Iniciar servidor da interface web na porta alternativa
+        const webServer = webApp.listen(webPort, '0.0.0.0', () => {
+            logger.info('Interface web iniciada com sucesso', { 
+                port: webPort,
+                uiUrl: `http://0.0.0.0:${webPort}`,
+                manifestUrl: `https://brasil-rd-addon.up.railway.app/manifest.json`
+            });
+        });
+
+        // Aguardar um pouco para garantir que a interface web esteja rodando
+        await new Promise(resolve => setTimeout(resolve, 1000));
+
+        // Servir addon Stremio na porta principal (Railway)
         await serveHTTP(addonInterface, { 
-            port: port,
+            port: addonPort,
             cacheMaxAge: 0
         });
 
-        logger.info('Addon Stremio iniciado com sucesso no Railway', {
-            port: port
+        logger.info('Addon Stremio iniciado com sucesso', {
+            port: addonPort
         });
 
     } catch (error: any) {
-        logger.error('Falha crítica ao iniciar servidor no Railway', {
+        logger.error('Falha crítica ao iniciar servidores', {
             error: error.message,
-            code: error.code,
-            port: port
+            code: error.code
         });
         process.exit(1);
     }
