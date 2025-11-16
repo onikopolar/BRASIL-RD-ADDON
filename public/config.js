@@ -157,15 +157,28 @@ class RealDebridConfig {
         const manifestUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
         const stremioProtocolUrl = `stremio://${manifestUrl}`;
         
-        // Tenta abrir via protocolo stremio:// correto
+        const originalHref = window.location.href;
+        
+        console.log('Iniciando redirecionamento para Stremio...');
+        
         window.location.href = stremioProtocolUrl;
-
-        // Fallback seguro
+        
         setTimeout(() => {
-            this.showStatus(`Se o Stremio não abriu automaticamente: 
-            1. Copie esta URL: ${manifestUrl}
-            2. No Stremio, vá em Addons → (+) → Digite a URL`, 'info');
-        }, 1000);
+            if (window.location.href === originalHref || window.location.href.includes('brasil-rd-addon')) {
+                console.log('Redirecionamento automatico falhou, mostrando instrucoes manuais');
+                this.showStatus(`Configuracao salva com sucesso! Para adicionar ao Stremio:
+
+1. Abra o Stremio no seu computador
+2. Clique em "Addons" no menu lateral  
+3. Clique no botao "+" (Adicionon)
+4. Cole esta URL: ${manifestUrl}
+5. Clique em "Instalar"
+
+O addon Brasil RD sera instalado e estara pronto para uso!`, 'info');
+            } else {
+                console.log('Redirecionamento automatico bem-sucedido');
+            }
+        }, 100);
     }
 
     async testConnection() {
