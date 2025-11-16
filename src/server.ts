@@ -4,7 +4,7 @@ dotenv.config();
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
-import { addonBuilder, serveHTTP } from 'stremio-addon-sdk';
+import { addonBuilder, getRouter } from 'stremio-addon-sdk';
 import { StreamHandler } from './services/StreamHandler';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types/index';
@@ -14,11 +14,11 @@ import realdebridRouter from './routes/realdebrid';
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
 
-// Servidor Express para a interface web
-const webApp = express();
+// Criar app Express
+const app = express();
 
-// Middlewares para a interface web
-webApp.use(cors({
+// Middlewares
+app.use(cors({
     origin: [
         'https://app.strem.io',
         'https://web.stremio.com',
@@ -27,26 +27,21 @@ webApp.use(cors({
     methods: ['GET', 'POST', 'OPTIONS'],
     credentials: true
 }));
-webApp.use(express.json());
-webApp.use(express.static(path.join(process.cwd(), 'public')));
+app.use(express.json());
+app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Rotas da API para a interface web
-webApp.use('/api', configRouter);
-webApp.use('/api/realdebrid', realdebridRouter);
+// Rotas da API para configuração
+app.use('/api', configRouter);
+app.use('/api/realdebrid', realdebridRouter);
 
 // Rota principal para a UI
-webApp.get('/', (req, res) => {
+app.get('/', (req, res) => {
     res.sendFile(path.join(process.cwd(), 'public/index.html'));
 });
 
 // Rota de saúde
-webApp.get('/health', (req, res) => {
+app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Rota do manifesto Stremio - IMPORTANTE: deve estar na mesma porta do addon
-webApp.get('/manifest.json', (req, res) => {
-    res.sendFile(path.join(process.cwd(), 'public/manifest.json'));
 });
 
 // Builder do Addon Stremio
@@ -91,46 +86,36 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
     }
 });
 
+// Obter a interface do addon
+const addonInterface = builder.getInterface();
+
+// Usar o router do Stremio SDK para as rotas do addon
+const addonRouter = getRouter(addonInterface);
+app.use(addonRouter);
+
+// Rota do manifesto Stremio (para compatibilidade)
+app.get('/manifest.json', (req, res) => {
+    res.json(addonInterface.manifest);
+});
+
 // Inicialização do servidor
 async function main(): Promise<void> {
-    const addonInterface = builder.getInterface();
-    
-    // Porta principal para o addon Stremio (usada pelo Railway)
-    const addonPort = parseInt(process.env.PORT || '8080');
-    
-    // Porta alternativa para a interface web (addonPort + 1)
-    const webPort = addonPort + 1;
+    const port = parseInt(process.env.PORT || '8080');
 
     try {
-        logger.info('Iniciando servidores', {
-            addonPort: addonPort,
-            webPort: webPort
-        });
+        logger.info('Iniciando servidor Brasil RD', { port });
 
-        // Iniciar servidor da interface web na porta alternativa
-        const webServer = webApp.listen(webPort, '0.0.0.0', () => {
-            logger.info('Interface web iniciada com sucesso', { 
-                port: webPort,
-                uiUrl: `http://0.0.0.0:${webPort}`,
+        // Iniciar servidor Express
+        app.listen(port, '0.0.0.0', () => {
+            logger.info('Servidor iniciado com sucesso', { 
+                port,
+                uiUrl: `http://0.0.0.0:${port}`,
                 manifestUrl: `https://brasil-rd-addon.up.railway.app/manifest.json`
             });
         });
 
-        // Aguardar um pouco para garantir que a interface web esteja rodando
-        await new Promise(resolve => setTimeout(resolve, 1000));
-
-        // Servir addon Stremio na porta principal (Railway)
-        await serveHTTP(addonInterface, { 
-            port: addonPort,
-            cacheMaxAge: 0
-        });
-
-        logger.info('Addon Stremio iniciado com sucesso', {
-            port: addonPort
-        });
-
     } catch (error: any) {
-        logger.error('Falha crítica ao iniciar servidores', {
+        logger.error('Falha crítica ao iniciar servidor', {
             error: error.message,
             code: error.code
         });
