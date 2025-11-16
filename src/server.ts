@@ -1,99 +1,50 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-import express from 'express';
-import cors from 'cors';
-import path from 'path';
-import { addonBuilder, getRouter } from 'stremio-addon-sdk';
+import { addonBuilder, serveHTTP } from 'stremio-addon-sdk';
 import { StreamHandler } from './services/StreamHandler';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types/index';
-import configRouter from './routes/config';
-import realdebridRouter from './routes/realdebrid';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
 
-// Criar app Express
-const app = express();
-
-// Middlewares
-app.use(cors({
-    origin: [
-        'https://app.strem.io',
-        'https://web.stremio.com',
-        'stremio://'
-    ],
-    methods: ['GET', 'POST', 'OPTIONS'],
-    credentials: true
-}));
-app.use(express.json());
-app.use(express.static(path.join(process.cwd(), 'public')));
-
-// Rotas da API para configuração (mantemos para validação)
-app.use('/api', configRouter);
-app.use('/api/realdebrid', realdebridRouter);
-
-// Rota principal para a UI
-app.get('/', (req, res) => {
-    res.sendFile(path.join(process.cwd(), 'public/index.html'));
-});
-
-// Rota de saúde
-app.get('/health', (req, res) => {
-    res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Rota dinâmica do manifesto que aceita parâmetros
-app.get('/manifest.json', (req, res) => {
-    const { apiKey } = req.query;
-    
-    const manifest = {
-        id: 'com.brasil-rd',
-        version: '1.0.0',
-        name: 'Brasil RD',
-        description: 'Addon profissional brasileiro com Real-Debrid e magnet links curados',
-        logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
-        resources: ['stream'],
-        types: ['movie', 'series'],
-        catalogs: [],
-        idPrefixes: ['tt'],
-        // Adiciona comportamento configurável
-        behaviorHints: {
-            configurable: true,
-            configurationRequired: !apiKey // Requer configuração se não tiver API key
-        }
-    };
-
-    logger.info('Manifesto servido', { 
-        hasApiKey: !!apiKey,
-        clientIp: req.ip
-    });
-
-    res.json(manifest);
-});
-
-// Builder do Addon Stremio
+// Builder do Addon Stremio com sistema de configuração oficial do SDK
 const builder = new addonBuilder({
     id: 'com.brasil-rd',
     version: '1.0.0',
     name: 'Brasil RD',
     description: 'Addon profissional brasileiro com Real-Debrid e magnet links curados',
+    logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
     resources: ['stream'],
     types: ['movie', 'series'],
     catalogs: [],
-    idPrefixes: ['tt']
+    idPrefixes: ['tt'],
+    // Sistema de configuração oficial do SDK
+    behaviorHints: {
+        configurable: true,
+        configurationRequired: true
+    },
+    config: [
+    {
+        key: 'apiKey',
+        type: 'text', 
+        title: 'Chave API do Real-Debrid',
+        required: 'true'
+    }
+]
+
 });
 
-// Handler de streams DINÂMICO - usa API key da query string
+// Handler de streams usando sistema de configuração oficial do SDK
 builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
-    const { apiKey } = args.config || {};
+    const apiKey = args.config?.apiKey; // Configuração vinda do formulário do SDK
     
     const request: StreamRequest = {
         type: args.type,
         id: args.id,
         title: args.name || args.title,
-        apiKey: apiKey // Passa a API key para o stream handler
+        apiKey: apiKey
     };
 
     logger.info('Received stream request', { 
@@ -105,15 +56,14 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
     try {
         // Se não tem API key, retorna vazio
         if (!apiKey) {
-            logger.warn('Stream request sem API key');
+            logger.warn('Stream request sem API key - usuário precisa configurar o addon');
             return { streams: [] };
         }
 
         const result = await streamHandler.handleStreamRequest(request);
         logger.info('Stream response prepared', {
             requestId: request.id,
-            streamsCount: result.streams.length,
-            hasApiKey: true
+            streamsCount: result.streams.length
         });
         return result;
     } catch (error) {
@@ -125,31 +75,29 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
     }
 });
 
-// Obter a interface do addon
-const addonInterface = builder.getInterface();
-
-// Usar o router do Stremio SDK para as rotas do addon
-const addonRouter = getRouter(addonInterface);
-app.use(addonRouter);
-
-// Inicialização do servidor
+// Inicialização do servidor usando serveHTTP do SDK
 async function main(): Promise<void> {
     const port = parseInt(process.env.PORT || '8080');
 
     try {
-        logger.info('Iniciando servidor Brasil RD', { port });
+        logger.info('Iniciando Brasil RD Addon com SDK oficial', { port });
 
-        // Iniciar servidor Express
-        app.listen(port, '0.0.0.0', () => {
-            logger.info('Servidor iniciado com sucesso', { 
-                port,
-                uiUrl: `http://0.0.0.0:${port}`,
-                manifestUrl: `https://brasil-rd-addon.up.railway.app/manifest.json`
-            });
+        const addonInterface = builder.getInterface();
+
+        // Usar serveHTTP do SDK que fornece instalação automática
+        await serveHTTP(addonInterface, { 
+            port: port,
+            static: 'public', // Serve nossa pasta public como estática
+            cacheMaxAge: 0 // Desativa cache para desenvolvimento
+        });
+
+        logger.info('Brasil RD Addon iniciado com sucesso usando SDK oficial', {
+            port,
+            installUrl: `stremio://http://localhost:${port}/manifest.json`
         });
 
     } catch (error: any) {
-        logger.error('Falha crítica ao iniciar servidor', {
+        logger.error('Falha crítica ao iniciar servidor com SDK', {
             error: error.message,
             code: error.code
         });
