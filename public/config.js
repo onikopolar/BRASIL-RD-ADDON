@@ -156,41 +156,27 @@ class RealDebridConfig {
     redirectToStremio() {
         const manifestUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
         
-        // Detecta se é mobile ou desktop
-        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
-        const isStremioWeb = /Stremio|stremio/i.test(navigator.userAgent);
+        // Método mais confiável: abrir em nova aba com o link do addon
+        // O Stremio vai detectar automaticamente se estiver instalado
+        const newWindow = window.open(manifestUrl, '_blank');
         
-        console.log('Detectado:', {
-            userAgent: navigator.userAgent,
-            isMobile: isMobile,
-            isStremioWeb: isStremioWeb
-        });
+        // Fallback se popup for bloqueado
+        if (!newWindow || newWindow.closed || typeof newWindow.closed === 'undefined') {
+            this.showStatus(`Configuração salva! Para adicionar ao Stremio:
 
-        if (isStremioWeb) {
-            // Já está no Stremio Web - redireciona para instalação interna
-            window.location.href = `stremio:///addon/${manifestUrl}`;
-        } else if (isMobile) {
-            // Mobile - usa intent do Android
-            window.location.href = `intent://${manifestUrl}#Intent;package=com.stremio.leanback;scheme=stremio;end;`;
+ Método 1: Clique neste link → 
+<a href="${manifestUrl}" target="_blank" style="color: #4CAF50; text-decoration: underline; font-weight: bold;">
+ADICIONAR AO STREMIO AGORA
+</a>
+
+ Método 2: Copie e cole manualmente no Stremio:
+<code style="background: #2d3748; padding: 5px; border-radius: 3px; display: block; margin: 10px 0;">
+${manifestUrl}
+</code>
+
+ No celular: Abra o link no Stremio`, 'info');
         } else {
-            // Desktop - tenta protocolo stremio://
-            const stremioProtocolUrl = `stremio://${manifestUrl}`;
-            const originalHref = window.location.href;
-            
-            window.location.href = stremioProtocolUrl;
-            
-            // Fallback após delay curto
-            setTimeout(() => {
-                // Se ainda está na mesma página, mostra instruções
-                if (window.location.href === originalHref || window.location.href.includes('brasil-rd-addon')) {
-                    console.log('Redirecionamento automático falhou, mostrando instruções manuais');
-                    this.showStatus(`Configuração salva com sucesso! Para adicionar ao Stremio:
-
-1. TENHA o Stremio instalado no seu computador
-2. Clique neste link: <a href="stremio://${manifestUrl}" style="color: #fff; text-decoration: underline;">Abrir no Stremio</a>
-3. Ou cole manualmente no Stremio: ${manifestUrl}`, 'info');
-                }
-            }, 800);
+            this.showStatus('Redirecionando para o Stremio... Verifique o aplicativo!', 'success');
         }
     }
 
