@@ -7,18 +7,32 @@ class RealDebridConfig {
             'API_KEY_PLACEHOLDER',
             'REPLACE-WITH-API-KEY'
         ];
-        this.addonUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
+        this.baseUrl = window.location.origin;
         this.init();
     }
 
     async init() {
         this.bindEvents();
         this.updateUIForSDK();
+        await this.loadCurrentConfig();
+    }
+
+    async loadCurrentConfig() {
+        try {
+            const response = await fetch('/config');
+            const config = await response.json();
+            
+            if (config.apiKey) {
+                document.getElementById('apiKey').value = config.apiKey;
+            }
+        } catch (error) {
+            console.log('Nenhuma configuração anterior encontrada');
+        }
     }
 
     updateUIForSDK() {
         const saveBtn = document.getElementById('saveBtn');
-        saveBtn.textContent = 'Instalar com SDK Oficial do Stremio';
+        saveBtn.textContent = 'Salvar Configuração e Instalar Addon';
         this.updateInstructions();
     }
 
@@ -30,9 +44,9 @@ class RealDebridConfig {
                 <ol>
                     <li>Obtenha sua API key no site do Real-Debrid</li>
                     <li>Cole a chave no campo acima</li>
-                    <li>Clique em "Instalar com SDK Oficial do Stremio"</li>
-                    <li>O Stremio abrirá automaticamente</li>
-                    <li>Complete a configuração dentro do app</li>
+                    <li>Clique em "Salvar Configuração e Instalar Addon"</li>
+                    <li>Sua chave será salva no servidor</li>
+                    <li>Use o link abaixo para instalar no Stremio</li>
                 </ol>
 
                 <div class="features">
@@ -50,7 +64,7 @@ class RealDebridConfig {
     }
 
     bindEvents() {
-        document.getElementById('saveBtn').addEventListener('click', () => this.installWithSDK());
+        document.getElementById('saveBtn').addEventListener('click', () => this.saveConfigAndInstall());
         document.getElementById('apiKey').addEventListener('input', () => this.clearStatus());
         
         this.setupSecurityProtections();
@@ -98,7 +112,7 @@ class RealDebridConfig {
         );
     }
 
-    async installWithSDK() {
+    async saveConfigAndInstall() {
         const apiKey = document.getElementById('apiKey').value.trim();
 
         if (this.isSensitivePlaceholder(apiKey)) {
@@ -111,7 +125,7 @@ class RealDebridConfig {
             return;
         }
 
-        this.setLoadingState(true, 'Abrindo Stremio...');
+        this.setLoadingState(true, 'Salvando configuração...');
 
         try {
             if (!this.validateApiKeyBasic(apiKey)) {
@@ -119,59 +133,72 @@ class RealDebridConfig {
                 return;
             }
 
-            // Fluxo oficial do SDK Stremio
-            const stremioUrl = `stremio://${this.addonUrl}`;
-            
-            // Tenta abrir o Stremio via protocolo
-            window.location.href = stremioUrl;
-            
-            // Fallback: se o Stremio não abrir em 2 segundos, mostra instruções manuais
-            setTimeout(() => {
-                if (!document.hidden) {
-                    this.showManualInstall();
-                }
-            }, 2000);
+            // Salvar a configuração no backend
+            const saveResponse = await fetch('/config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ apiKey: apiKey })
+            });
+
+            const saveResult = await saveResponse.json();
+
+            if (saveResult.success) {
+                this.showInstallInstructions();
+            } else {
+                this.showStatus('Erro ao salvar configuração: ' + (saveResult.error || 'Erro desconhecido'), 'error');
+            }
 
         } catch (error) {
-            this.showStatus('Erro ao tentar abrir o Stremio', 'error');
+            this.showStatus('Erro de conexão com o servidor', 'error');
             console.error('Erro:', error);
         } finally {
             this.setLoadingState(false);
         }
     }
 
-    showManualInstall() {
+    showInstallInstructions() {
         const statusDiv = document.getElementById('status');
+        const addonUrl = `${this.baseUrl}/manifest.json`;
+        const stremioUrl = `stremio://${window.location.host}/manifest.json`;
         
         statusDiv.innerHTML = `
             <div class="success-install">
-                <h4>Stremio não detectado automaticamente</h4>
-                <p><strong>Siga estes passos para instalar manualmente:</strong></p>
+                <h4>Configuração Salva com Sucesso!</h4>
+                <p><strong>Agora instale o addon no Stremio:</strong></p>
                 
                 <div class="install-steps">
                     <ol>
-                        <li><strong>Abra o Stremio manualmente</strong></li>
-                        <li><strong>Vá até a seção "Addons"</strong></li>
-                        <li><strong>Clique em "Instalar pelo link"</strong></li>
-                        <li><strong>Cole este link:</strong></li>
+                        <li><strong>Método Automático (Recomendado):</strong></li>
+                        <li>Clique no botão abaixo para abrir o Stremio</li>
+                        <li>Ou use o método manual se o automático não funcionar</li>
                     </ol>
                 </div>
                 
+                <div class="actions">
+                    <button onclick="window.location.href='${stremioUrl}'" class="btn btn-primary">
+                        Abrir no Stremio (Automático)
+                    </button>
+                </div>
+                
                 <div class="copy-section">
+                    <p><strong>Método Manual:</strong></p>
                     <div class="url-container">
-                        <code class="url-code">${this.addonUrl}</code>
-                        <button class="copy-btn" onclick="this.copyToClipboard()">
+                        <code class="url-code">${addonUrl}</code>
+                        <button class="copy-btn" onclick="this.copyToClipboard('${addonUrl}')">
                             Copiar
                         </button>
                     </div>
+                    <small>Cole este link no Stremio: Addons → Instalar pelo link</small>
                 </div>
                 
                 <div class="notes">
                     <p><strong>Notas importantes:</strong></p>
                     <ul>
-                        <li>O Stremio irá solicitar a chave API durante a instalação</li>
-                        <li>Sua chave fica salva apenas no seu Stremio</li>
-                        <li>Não compartilhe sua chave API com ninguém</li>
+                        <li>Sua chave API foi salva com sucesso no servidor</li>
+                        <li>O addon agora está pronto para uso</li>
+                        <li>Durante a instalação, o Stremio pode solicitar confirmação</li>
                     </ul>
                 </div>
             </div>
@@ -180,8 +207,8 @@ class RealDebridConfig {
         statusDiv.style.display = 'block';
     }
 
-    copyToClipboard() {
-        navigator.clipboard.writeText(this.addonUrl).then(() => {
+    copyToClipboard(text) {
+        navigator.clipboard.writeText(text).then(() => {
             const copyBtn = event.target;
             const originalText = copyBtn.textContent;
             copyBtn.textContent = 'Copiado!';
@@ -218,7 +245,7 @@ class RealDebridConfig {
             saveBtn.classList.add('loading');
         } else {
             saveBtn.disabled = false;
-            saveBtn.textContent = 'Instalar com SDK Oficial do Stremio';
+            saveBtn.textContent = 'Salvar Configuração e Instalar Addon';
             saveBtn.classList.remove('loading');
         }
     }
@@ -243,6 +270,13 @@ class RealDebridConfig {
         statusDiv.style.display = 'none';
     }
 }
+
+// Adicionar método copyToClipboard ao escopo global
+window.copyToClipboard = function(text) {
+    navigator.clipboard.writeText(text).then(() => {
+        alert('Link copiado para a área de transferência!');
+    });
+};
 
 document.addEventListener('DOMContentLoaded', () => {
     new RealDebridConfig();
