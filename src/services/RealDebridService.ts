@@ -19,45 +19,35 @@ interface RealDebridUnrestrictResponse {
 }
 
 export class RealDebridService {
-  private readonly client: AxiosInstance;
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
 
   constructor() {
     this.logger = new Logger('RealDebridService');
-    this.validateConfiguration();
-    this.client = this.createHttpClient();
-    this.setupInterceptors();
   }
 
-  private validateConfiguration(): void {
-    if (!config.realDebrid.apiKey) {
-      throw new Error('REAL_DEBRID_API_KEY environment variable is required');
-    }
-    
-    if (config.realDebrid.apiKey.trim().length === 0) {
-      throw new Error('Real-Debrid API Key cannot be empty');
+  private createHttpClient(apiKey: string): AxiosInstance {
+    if (!apiKey || apiKey.trim().length === 0) {
+      throw new Error('Real-Debrid API Key is required');
     }
 
     if (!config.realDebrid.baseUrl) {
       throw new Error('Real-Debrid base URL is required');
     }
-  }
 
-  private createHttpClient(): AxiosInstance {
     return axios.create({
       baseURL: config.realDebrid.baseUrl,
       timeout: config.realDebrid.timeout || 30000,
       headers: {
-        'Authorization': `Bearer ${config.realDebrid.apiKey}`,
+        'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       }
     });
   }
 
-  private setupInterceptors(): void {
-    this.client.interceptors.request.use(
+  private setupInterceptors(client: AxiosInstance): void {
+    client.interceptors.request.use(
       (requestConfig) => {
         this.logger.debug('Real-Debrid API Request', {
           method: requestConfig.method?.toUpperCase(),
@@ -72,7 +62,7 @@ export class RealDebridService {
       }
     );
 
-    this.client.interceptors.response.use(
+    client.interceptors.response.use(
       (response: AxiosResponse) => {
         this.logger.debug('Real-Debrid API Response', {
           url: response.config.url,
@@ -111,12 +101,14 @@ export class RealDebridService {
     );
   }
 
-  async addMagnet(magnetLink: string): Promise<string> {
+  async addMagnet(magnetLink: string, apiKey: string): Promise<string> {
     this.validateMagnetLink(magnetLink);
+    const client = this.createHttpClient(apiKey);
+    this.setupInterceptors(client);
 
     try {
       const response = await this.retryableRequest<RealDebridTorrentAddResponse>(
-        () => this.client.post(
+        () => client.post(
           '/torrents/addMagnet',
           `magnet=${encodeURIComponent(magnetLink)}`,
           {
@@ -146,12 +138,14 @@ export class RealDebridService {
     }
   }
 
-  async getTorrentInfo(torrentId: string): Promise<RDTorrentInfo> {
+  async getTorrentInfo(torrentId: string, apiKey: string): Promise<RDTorrentInfo> {
     this.validateTorrentId(torrentId);
+    const client = this.createHttpClient(apiKey);
+    this.setupInterceptors(client);
 
     try {
       const response = await this.retryableRequest<RDTorrentInfo>(
-        () => this.client.get(`/torrents/info/${torrentId}`),
+        () => client.get(`/torrents/info/${torrentId}`),
         'getTorrentInfo'
       );
 
@@ -172,12 +166,14 @@ export class RealDebridService {
     }
   }
 
-  async selectFiles(torrentId: string, fileIds: string = 'all'): Promise<void> {
+  async selectFiles(torrentId: string, apiKey: string, fileIds: string = 'all'): Promise<void> {
     this.validateTorrentId(torrentId);
+    const client = this.createHttpClient(apiKey);
+    this.setupInterceptors(client);
 
     try {
       const response = await this.retryableRequest(
-        () => this.client.post(
+        () => client.post(
           `/torrents/selectFiles/${torrentId}`,
           `files=${fileIds}`,
           {
@@ -208,14 +204,17 @@ export class RealDebridService {
     }
   }
 
-  async unrestrictLink(link: string): Promise<string> {
+  async unrestrictLink(link: string, apiKey: string): Promise<string> {
     if (!link || link.trim().length === 0) {
       throw new Error('Link cannot be empty');
     }
 
+    const client = this.createHttpClient(apiKey);
+    this.setupInterceptors(client);
+
     try {
       const response = await this.retryableRequest<RealDebridUnrestrictResponse>(
-        () => this.client.post(
+        () => client.post(
           '/unrestrict/link',
           `link=${encodeURIComponent(link)}`,
           {
@@ -245,11 +244,11 @@ export class RealDebridService {
     }
   }
 
-  async getStreamLinkForFile(torrentId: string, fileId: number): Promise<string | null> {
+  async getStreamLinkForFile(torrentId: string, fileId: number, apiKey: string): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
     try {
-      const torrentInfo = await this.getTorrentInfo(torrentId);
+      const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
       
       if (torrentInfo.status !== 'downloaded') {
         this.logger.debug('Torrent not ready for streaming', {
@@ -289,7 +288,7 @@ export class RealDebridService {
       }
 
       const rdLink = torrentInfo.links[fileIndex];
-      const directLink = await this.unrestrictLink(rdLink);
+      const directLink = await this.unrestrictLink(rdLink, apiKey);
       
       this.logger.debug('Stream link obtained for file', {
         torrentId,
@@ -310,11 +309,11 @@ export class RealDebridService {
     }
   }
 
-  async getStreamLinkForTorrent(torrentId: string): Promise<string | null> {
+  async getStreamLinkForTorrent(torrentId: string, apiKey: string): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
     try {
-      const torrentInfo = await this.getTorrentInfo(torrentId);
+      const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
       
       if (torrentInfo.status !== 'downloaded') {
         this.logger.debug('Torrent not ready for streaming', {
@@ -330,7 +329,7 @@ export class RealDebridService {
       }
 
       const mainLink = torrentInfo.links[0];
-      const directLink = await this.unrestrictLink(mainLink);
+      const directLink = await this.unrestrictLink(mainLink, apiKey);
       
       this.logger.debug('Stream link obtained for torrent', {
         torrentId,
@@ -348,15 +347,18 @@ export class RealDebridService {
     }
   }
 
-  async getTorrentFiles(torrentId: string): Promise<RDFile[]> {
-    const torrentInfo = await this.getTorrentInfo(torrentId);
+  async getTorrentFiles(torrentId: string, apiKey: string): Promise<RDFile[]> {
+    const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
     return torrentInfo.files || [];
   }
 
-  async findExistingTorrent(magnetHash: string): Promise<RDTorrentInfo | null> {
+  async findExistingTorrent(magnetHash: string, apiKey: string): Promise<RDTorrentInfo | null> {
+    const client = this.createHttpClient(apiKey);
+    this.setupInterceptors(client);
+
     try {
       const response = await this.retryableRequest<RDTorrentInfo[]>(
-        () => this.client.get('/torrents', {
+        () => client.get('/torrents', {
           params: { limit: 5000 }
         }),
         'findExistingTorrent'
@@ -392,7 +394,7 @@ export class RealDebridService {
     }
   }
 
-  async processTorrent(magnetLink: string): Promise<{
+  async processTorrent(magnetLink: string, apiKey: string): Promise<{
     added: boolean;
     ready: boolean;
     status: string;
@@ -402,7 +404,7 @@ export class RealDebridService {
     const magnetHash = this.extractMagnetHash(magnetLink);
     
     try {
-      const existingTorrent = await this.findExistingTorrent(magnetHash);
+      const existingTorrent = await this.findExistingTorrent(magnetHash, apiKey);
       
       if (existingTorrent) {
         return {
@@ -414,10 +416,10 @@ export class RealDebridService {
         };
       }
 
-      const torrentId = await this.addMagnet(magnetLink);
-      await this.selectFiles(torrentId, 'all');
+      const torrentId = await this.addMagnet(magnetLink, apiKey);
+      await this.selectFiles(torrentId, apiKey, 'all');
       
-      const torrentInfo = await this.getTorrentInfo(torrentId);
+      const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
       
       return {
         added: true,

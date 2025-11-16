@@ -8,39 +8,30 @@ const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../config/index");
 const logger_1 = require("../utils/logger");
 class RealDebridService {
-    client;
     logger;
     maxRetries = 3;
     baseDelay = 1000;
     constructor() {
         this.logger = new logger_1.Logger('RealDebridService');
-        this.validateConfiguration();
-        this.client = this.createHttpClient();
-        this.setupInterceptors();
     }
-    validateConfiguration() {
-        if (!index_1.config.realDebrid.apiKey) {
-            throw new Error('REAL_DEBRID_API_KEY environment variable is required');
-        }
-        if (index_1.config.realDebrid.apiKey.trim().length === 0) {
-            throw new Error('Real-Debrid API Key cannot be empty');
+    createHttpClient(apiKey) {
+        if (!apiKey || apiKey.trim().length === 0) {
+            throw new Error('Real-Debrid API Key is required');
         }
         if (!index_1.config.realDebrid.baseUrl) {
             throw new Error('Real-Debrid base URL is required');
         }
-    }
-    createHttpClient() {
         return axios_1.default.create({
             baseURL: index_1.config.realDebrid.baseUrl,
             timeout: index_1.config.realDebrid.timeout || 30000,
             headers: {
-                'Authorization': `Bearer ${index_1.config.realDebrid.apiKey}`,
+                'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
             }
         });
     }
-    setupInterceptors() {
-        this.client.interceptors.request.use((requestConfig) => {
+    setupInterceptors(client) {
+        client.interceptors.request.use((requestConfig) => {
             this.logger.debug('Real-Debrid API Request', {
                 method: requestConfig.method?.toUpperCase(),
                 url: requestConfig.url,
@@ -51,7 +42,7 @@ class RealDebridService {
             this.logger.error('Request configuration error', { error: error.message });
             return Promise.reject(error);
         });
-        this.client.interceptors.response.use((response) => {
+        client.interceptors.response.use((response) => {
             this.logger.debug('Real-Debrid API Response', {
                 url: response.config.url,
                 status: response.status,
@@ -89,10 +80,12 @@ class RealDebridService {
             }
         });
     }
-    async addMagnet(magnetLink) {
+    async addMagnet(magnetLink, apiKey) {
         this.validateMagnetLink(magnetLink);
+        const client = this.createHttpClient(apiKey);
+        this.setupInterceptors(client);
         try {
-            const response = await this.retryableRequest(() => this.client.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnetLink)}`, {
+            const response = await this.retryableRequest(() => client.post('/torrents/addMagnet', `magnet=${encodeURIComponent(magnetLink)}`, {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 }
@@ -116,10 +109,12 @@ class RealDebridService {
             throw error;
         }
     }
-    async getTorrentInfo(torrentId) {
+    async getTorrentInfo(torrentId, apiKey) {
         this.validateTorrentId(torrentId);
+        const client = this.createHttpClient(apiKey);
+        this.setupInterceptors(client);
         try {
-            const response = await this.retryableRequest(() => this.client.get(`/torrents/info/${torrentId}`), 'getTorrentInfo');
+            const response = await this.retryableRequest(() => client.get(`/torrents/info/${torrentId}`), 'getTorrentInfo');
             this.logger.debug('Torrent info retrieved successfully', {
                 torrentId,
                 status: response.data.status,
@@ -136,10 +131,12 @@ class RealDebridService {
             throw error;
         }
     }
-    async selectFiles(torrentId, fileIds = 'all') {
+    async selectFiles(torrentId, apiKey, fileIds = 'all') {
         this.validateTorrentId(torrentId);
+        const client = this.createHttpClient(apiKey);
+        this.setupInterceptors(client);
         try {
-            const response = await this.retryableRequest(() => this.client.post(`/torrents/selectFiles/${torrentId}`, `files=${fileIds}`, {
+            const response = await this.retryableRequest(() => client.post(`/torrents/selectFiles/${torrentId}`, `files=${fileIds}`, {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 }
@@ -164,12 +161,14 @@ class RealDebridService {
             throw error;
         }
     }
-    async unrestrictLink(link) {
+    async unrestrictLink(link, apiKey) {
         if (!link || link.trim().length === 0) {
             throw new Error('Link cannot be empty');
         }
+        const client = this.createHttpClient(apiKey);
+        this.setupInterceptors(client);
         try {
-            const response = await this.retryableRequest(() => this.client.post('/unrestrict/link', `link=${encodeURIComponent(link)}`, {
+            const response = await this.retryableRequest(() => client.post('/unrestrict/link', `link=${encodeURIComponent(link)}`, {
                 headers: {
                     'Content-Type': 'application/x-www-form-urlencoded'
                 }
@@ -193,10 +192,10 @@ class RealDebridService {
             throw error;
         }
     }
-    async getStreamLinkForFile(torrentId, fileId) {
+    async getStreamLinkForFile(torrentId, fileId, apiKey) {
         this.validateTorrentId(torrentId);
         try {
-            const torrentInfo = await this.getTorrentInfo(torrentId);
+            const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
             if (torrentInfo.status !== 'downloaded') {
                 this.logger.debug('Torrent not ready for streaming', {
                     torrentId,
@@ -230,7 +229,7 @@ class RealDebridService {
                 return null;
             }
             const rdLink = torrentInfo.links[fileIndex];
-            const directLink = await this.unrestrictLink(rdLink);
+            const directLink = await this.unrestrictLink(rdLink, apiKey);
             this.logger.debug('Stream link obtained for file', {
                 torrentId,
                 fileId,
@@ -248,10 +247,10 @@ class RealDebridService {
             return null;
         }
     }
-    async getStreamLinkForTorrent(torrentId) {
+    async getStreamLinkForTorrent(torrentId, apiKey) {
         this.validateTorrentId(torrentId);
         try {
-            const torrentInfo = await this.getTorrentInfo(torrentId);
+            const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
             if (torrentInfo.status !== 'downloaded') {
                 this.logger.debug('Torrent not ready for streaming', {
                     torrentId,
@@ -264,7 +263,7 @@ class RealDebridService {
                 return null;
             }
             const mainLink = torrentInfo.links[0];
-            const directLink = await this.unrestrictLink(mainLink);
+            const directLink = await this.unrestrictLink(mainLink, apiKey);
             this.logger.debug('Stream link obtained for torrent', {
                 torrentId,
                 directLink: this.sanitizeLink(directLink)
@@ -279,13 +278,15 @@ class RealDebridService {
             return null;
         }
     }
-    async getTorrentFiles(torrentId) {
-        const torrentInfo = await this.getTorrentInfo(torrentId);
+    async getTorrentFiles(torrentId, apiKey) {
+        const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
         return torrentInfo.files || [];
     }
-    async findExistingTorrent(magnetHash) {
+    async findExistingTorrent(magnetHash, apiKey) {
+        const client = this.createHttpClient(apiKey);
+        this.setupInterceptors(client);
         try {
-            const response = await this.retryableRequest(() => this.client.get('/torrents', {
+            const response = await this.retryableRequest(() => client.get('/torrents', {
                 params: { limit: 5000 }
             }), 'findExistingTorrent');
             const torrents = response.data;
@@ -313,10 +314,10 @@ class RealDebridService {
             return null;
         }
     }
-    async processTorrent(magnetLink) {
+    async processTorrent(magnetLink, apiKey) {
         const magnetHash = this.extractMagnetHash(magnetLink);
         try {
-            const existingTorrent = await this.findExistingTorrent(magnetHash);
+            const existingTorrent = await this.findExistingTorrent(magnetHash, apiKey);
             if (existingTorrent) {
                 return {
                     added: true,
@@ -326,9 +327,9 @@ class RealDebridService {
                     progress: existingTorrent.progress
                 };
             }
-            const torrentId = await this.addMagnet(magnetLink);
-            await this.selectFiles(torrentId, 'all');
-            const torrentInfo = await this.getTorrentInfo(torrentId);
+            const torrentId = await this.addMagnet(magnetLink, apiKey);
+            await this.selectFiles(torrentId, apiKey, 'all');
+            const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
             return {
                 added: true,
                 ready: torrentInfo.status === 'downloaded',

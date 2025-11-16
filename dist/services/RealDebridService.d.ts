@@ -1,22 +1,20 @@
 import { RDTorrentInfo, RDFile } from '../types/index';
 export declare class RealDebridService {
-    private readonly client;
     private readonly logger;
     private readonly maxRetries;
     private readonly baseDelay;
     constructor();
-    private validateConfiguration;
     private createHttpClient;
     private setupInterceptors;
-    addMagnet(magnetLink: string): Promise<string>;
-    getTorrentInfo(torrentId: string): Promise<RDTorrentInfo>;
-    selectFiles(torrentId: string, fileIds?: string): Promise<void>;
-    unrestrictLink(link: string): Promise<string>;
-    getStreamLinkForFile(torrentId: string, fileId: number): Promise<string | null>;
-    getStreamLinkForTorrent(torrentId: string): Promise<string | null>;
-    getTorrentFiles(torrentId: string): Promise<RDFile[]>;
-    findExistingTorrent(magnetHash: string): Promise<RDTorrentInfo | null>;
-    processTorrent(magnetLink: string): Promise<{
+    addMagnet(magnetLink: string, apiKey: string): Promise<string>;
+    getTorrentInfo(torrentId: string, apiKey: string): Promise<RDTorrentInfo>;
+    selectFiles(torrentId: string, apiKey: string, fileIds?: string): Promise<void>;
+    unrestrictLink(link: string, apiKey: string): Promise<string>;
+    getStreamLinkForFile(torrentId: string, fileId: number, apiKey: string): Promise<string | null>;
+    getStreamLinkForTorrent(torrentId: string, apiKey: string): Promise<string | null>;
+    getTorrentFiles(torrentId: string, apiKey: string): Promise<RDFile[]>;
+    findExistingTorrent(magnetHash: string, apiKey: string): Promise<RDTorrentInfo | null>;
+    processTorrent(magnetLink: string, apiKey: string): Promise<{
         added: boolean;
         ready: boolean;
         status: string;

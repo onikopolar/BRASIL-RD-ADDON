@@ -5,7 +5,6 @@ import { TorrentScraperService } from './TorrentScraperService';
 import { ImdbScraperService } from './ImdbScraperService';
 import { Logger } from '../utils/logger';
 import { Stream, StreamRequest, CuratedMagnet, RDFile, RDTorrentInfo } from '../types/index';
-import { config } from '../config/index';
 
 interface EpisodeInfo {
   season: number;
@@ -128,6 +127,12 @@ export class StreamHandler {
   async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
     const cacheKey = this.generateCacheKey(request);
+    
+    // Verificar se temos API key válida
+    if (!request.apiKey) {
+      this.logger.warn('Stream request sem API key', { requestId });
+      return { streams: [] };
+    }
     
     try {
       // Verificar cache apenas para conteúdo baixado
@@ -261,7 +266,8 @@ export class StreamHandler {
           requestEpisode.season, 
           requestEpisode.episode, 
           title, 
-          request.id
+          request.id,
+          request.apiKey!
         );
         
         if (seasonStream) {
@@ -461,7 +467,7 @@ export class StreamHandler {
     return `season:${imdbId}:${season}`;
   }
 
-  private async getOrAddSeasonTorrent(imdbId: string, season: number, title: string): Promise<{ torrentId: string; files: RDFile[] } | null> {
+  private async getOrAddSeasonTorrent(imdbId: string, season: number, title: string, apiKey: string): Promise<{ torrentId: string; files: RDFile[] } | null> {
     const cacheKey = this.getSeasonCacheKey(imdbId, season);
     const cached = this.seasonCache.get(cacheKey);
     
@@ -488,7 +494,7 @@ export class StreamHandler {
       return null;
     }
 
-    const processResult = await this.rdService.processTorrent(bestTorrent.magnet);
+    const processResult = await this.rdService.processTorrent(bestTorrent.magnet, apiKey);
       
     if (!processResult.added || !processResult.torrentId) {
       this.logger.debug('Failed to process season torrent', { imdbId, season });
@@ -496,7 +502,7 @@ export class StreamHandler {
     }
 
     const torrentId = processResult.torrentId;
-    const torrentInfo = await this.rdService.getTorrentInfo(torrentId);
+    const torrentInfo = await this.rdService.getTorrentInfo(torrentId, apiKey);
 
     if (processResult.ready) {
       const videoFiles = this.filterAndSortVideoFiles(torrentInfo.files || []);
@@ -532,10 +538,11 @@ export class StreamHandler {
     season: number, 
     episode: number, 
     title: string,
-    requestId: string
+    requestId: string,
+    apiKey: string
   ): Promise<Stream | null> {
     
-    const seasonData = await this.getOrAddSeasonTorrent(imdbId, season, title);
+    const seasonData = await this.getOrAddSeasonTorrent(imdbId, season, title, apiKey);
     if (!seasonData) {
       return null;
     }
@@ -555,7 +562,7 @@ export class StreamHandler {
     }
 
     try {
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id);
+      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id, apiKey);
       if (!streamLink) {
         this.logger.debug('No stream link available for episode file', { requestId, torrentId, fileId: targetFile.id });
         return null;
@@ -618,7 +625,7 @@ export class StreamHandler {
     const requestId = request.id;
 
     try {
-      const processResult = await this.rdService.processTorrent(torrent.magnet);
+      const processResult = await this.rdService.processTorrent(torrent.magnet, request.apiKey!);
       
       if (!processResult.added || !processResult.torrentId) {
         this.logger.debug('Failed to process scraped torrent', { requestId, title: torrent.title });
@@ -626,7 +633,7 @@ export class StreamHandler {
       }
 
       const torrentId = processResult.torrentId;
-      const torrentInfo = await this.rdService.getTorrentInfo(torrentId);
+      const torrentInfo = await this.rdService.getTorrentInfo(torrentId, request.apiKey!);
 
       const videoFiles = this.filterAndSortVideoFiles(torrentInfo.files || []);
       if (videoFiles.length === 0) {
@@ -697,7 +704,7 @@ export class StreamHandler {
       // Processar CADA arquivo para criar múltiplas streams
       for (const file of episodeFiles) {
         try {
-          const streamLink = await this.rdService.getStreamLinkForFile(torrentId, file.id);
+          const streamLink = await this.rdService.getStreamLinkForFile(torrentId, file.id, request.apiKey!);
           const quality = this.extractQualityFromFilename(file.path);
           
           let stream: Stream;
@@ -773,7 +780,7 @@ export class StreamHandler {
       }
 
       try {
-        const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id);
+        const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
         const stream = streamLink 
           ? this.createSeriesStream(
               torrent, request, torrentId, streamLink, mainFile.path, 1, 1, torrent.quality, 'downloaded'
@@ -809,7 +816,7 @@ export class StreamHandler {
     }
 
     try {
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id);
+      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
       
       if (streamLink) {
         const stream: Stream = {
@@ -1132,7 +1139,7 @@ export class StreamHandler {
       return null;
     }
 
-    const processResult = await this.rdService.processTorrent(magnet.magnet);
+    const processResult = await this.rdService.processTorrent(magnet.magnet, request.apiKey!);
     
     if (!processResult.added || !processResult.torrentId) {
       this.logger.debug('Failed to process curated magnet', { requestId: request.id, magnetTitle: magnet.title });
@@ -1140,7 +1147,7 @@ export class StreamHandler {
     }
 
     const torrentId = processResult.torrentId;
-    const torrentInfo = await this.rdService.getTorrentInfo(torrentId);
+    const torrentInfo = await this.rdService.getTorrentInfo(torrentId, request.apiKey!);
     const videoFiles = this.filterAndSortVideoFiles(torrentInfo.files || []);
     
     if (videoFiles.length === 0) {
@@ -1179,7 +1186,7 @@ export class StreamHandler {
     }
 
     try {
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id);
+      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id, request.apiKey!);
       
       if (!streamLink && !this.processingConfig.allowPendingStreams) {
         this.logger.debug('No stream link for target episode file', { 
@@ -1244,7 +1251,7 @@ export class StreamHandler {
         return null;
       }
 
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id);
+      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
       
       if (!streamLink && !this.processingConfig.allowPendingStreams) {
         this.logger.debug('No stream link available for torrent', { requestId: request.id, torrentId });

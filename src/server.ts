@@ -30,7 +30,7 @@ app.use(cors({
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Rotas da API para configuração
+// Rotas da API para configuração (mantemos para validação)
 app.use('/api', configRouter);
 app.use('/api/realdebrid', realdebridRouter);
 
@@ -42,6 +42,35 @@ app.get('/', (req, res) => {
 // Rota de saúde
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Rota dinâmica do manifesto que aceita parâmetros
+app.get('/manifest.json', (req, res) => {
+    const { apiKey } = req.query;
+    
+    const manifest = {
+        id: 'com.brasil-rd',
+        version: '1.0.0',
+        name: 'Brasil RD',
+        description: 'Addon profissional brasileiro com Real-Debrid e magnet links curados',
+        logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
+        resources: ['stream'],
+        types: ['movie', 'series'],
+        catalogs: [],
+        idPrefixes: ['tt'],
+        // Adiciona comportamento configurável
+        behaviorHints: {
+            configurable: true,
+            configurationRequired: !apiKey // Requer configuração se não tiver API key
+        }
+    };
+
+    logger.info('Manifesto servido', { 
+        hasApiKey: !!apiKey,
+        clientIp: req.ip
+    });
+
+    res.json(manifest);
 });
 
 // Builder do Addon Stremio
@@ -56,31 +85,41 @@ const builder = new addonBuilder({
     idPrefixes: ['tt']
 });
 
-// Handler de streams
+// Handler de streams DINÂMICO - usa API key da query string
 builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
+    const { apiKey } = args.config || {};
+    
     const request: StreamRequest = {
         type: args.type,
         id: args.id,
-        title: args.name || args.title
+        title: args.name || args.title,
+        apiKey: apiKey // Passa a API key para o stream handler
     };
 
     logger.info('Received stream request', { 
         type: args.type, 
-        id: args.id, 
-        fullArgs: JSON.stringify(args) 
+        id: args.id,
+        hasApiKey: !!apiKey
     });
 
     try {
+        // Se não tem API key, retorna vazio
+        if (!apiKey) {
+            logger.warn('Stream request sem API key');
+            return { streams: [] };
+        }
+
         const result = await streamHandler.handleStreamRequest(request);
         logger.info('Stream response prepared', {
             requestId: request.id,
-            streamsCount: result.streams.length
+            streamsCount: result.streams.length,
+            hasApiKey: true
         });
         return result;
     } catch (error) {
         logger.error('Stream handler error', {
             error: error instanceof Error ? error.message : 'Unknown error',
-            request
+            request: { type: request.type, id: request.id }
         });
         return { streams: [] };
     }
@@ -90,7 +129,6 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 const addonInterface = builder.getInterface();
 
 // Usar o router do Stremio SDK para as rotas do addon
-// Isso cria automaticamente: /manifest.json e /stream/*
 const addonRouter = getRouter(addonInterface);
 app.use(addonRouter);
 

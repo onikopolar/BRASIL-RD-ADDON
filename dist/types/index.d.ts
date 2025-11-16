@@ -47,6 +47,7 @@ export interface StreamRequest {
     id: string;
     title?: string;
     imdbId?: string;
+    apiKey?: string;
 }
 export interface CacheData<T> {
     data: T;
