@@ -1,20 +1,76 @@
 class RealDebridConfig {
     constructor() {
-        this.apiBaseUrl = 'https://api.real-debrid.com/rest/1.0';
         this.stremioUrl = 'stremio://brasil-rd-addon.up.railway.app/manifest.json';
+        this.userInfo = null;
+        this.sensitivePlaceholders = [
+            'SUA-CHAVE-API-AQUI',
+            'YOUR-API-KEY-HERE',
+            'INSERT-API-KEY',
+            'API_KEY_PLACEHOLDER',
+            'REPLACE-WITH-API-KEY'
+        ];
         this.init();
     }
 
     async init() {
         this.bindEvents();
         await this.loadCurrentConfig();
-        await this.validateCurrentToken();
+        // Não valida automaticamente para evitar exposição
     }
 
     bindEvents() {
         document.getElementById('saveBtn').addEventListener('click', () => this.saveConfig());
         document.getElementById('testBtn').addEventListener('click', () => this.testConnection());
         document.getElementById('apiKey').addEventListener('input', () => this.clearStatus());
+        
+        // Proteção contra inspeção - limpa logs sensíveis
+        this.setupSecurityProtections();
+    }
+
+    setupSecurityProtections() {
+        // Override console methods para esconder dados sensíveis
+        const originalLog = console.log;
+        const originalError = console.error;
+        
+        console.log = (...args) => {
+            const sanitizedArgs = args.map(arg => this.sanitizeSensitiveData(arg));
+            originalLog.apply(console, sanitizedArgs);
+        };
+        
+        console.error = (...args) => {
+            const sanitizedArgs = args.map(arg => this.sanitizeSensitiveData(arg));
+            originalError.apply(console, sanitizedArgs);
+        };
+
+        // Proteção contra copy-paste de placeholder
+        document.getElementById('apiKey').addEventListener('paste', (e) => {
+            setTimeout(() => {
+                const pastedValue = e.target.value;
+                if (this.isSensitivePlaceholder(pastedValue)) {
+                    e.target.value = '';
+                    this.showStatus('Por favor, cole sua chave API real do Real-Debrid', 'warning');
+                }
+            }, 10);
+        });
+    }
+
+    sanitizeSensitiveData(data) {
+        if (typeof data === 'string') {
+            let sanitized = data;
+            this.sensitivePlaceholders.forEach(placeholder => {
+                sanitized = sanitized.replace(new RegExp(placeholder, 'gi'), '[REDACTED]');
+            });
+            // Remove chaves API reais (padrão: 40 caracteres alfanuméricos)
+            sanitized = sanitized.replace(/\b[a-zA-Z0-9]{40}\b/g, '[API_KEY_REDACTED]');
+            return sanitized;
+        }
+        return data;
+    }
+
+    isSensitivePlaceholder(value) {
+        return this.sensitivePlaceholders.some(placeholder => 
+            value.toLowerCase().includes(placeholder.toLowerCase())
+        );
     }
 
     async loadCurrentConfig() {
@@ -22,41 +78,56 @@ class RealDebridConfig {
             const response = await fetch('/api/config');
             if (response.ok) {
                 const config = await response.json();
-                if (config.apiKey) {
+                // SÓ preenche se for uma chave válida e não for placeholder
+                if (config.apiKey && 
+                    !this.isSensitivePlaceholder(config.apiKey) && 
+                    this.validateApiKeyFormat(config.apiKey)) {
                     document.getElementById('apiKey').value = config.apiKey;
-                    this.showStatus('Configuração atual carregada', 'info');
+                    this.showStatus('Configuração segura carregada', 'info');
+                } else {
+                    // Campo fica VAZIO por segurança
+                    document.getElementById('apiKey').value = '';
+                    this.showStatus('Insira sua chave API do Real-Debrid', 'info');
                 }
             }
         } catch (error) {
             console.error('Erro ao carregar configuração:', error);
+            // Em caso de erro, campo fica VAZIO
+            document.getElementById('apiKey').value = '';
         }
     }
 
     async saveConfig() {
         const apiKey = document.getElementById('apiKey').value.trim();
-        
-        if (!this.validateApiKeyFormat(apiKey)) {
-            this.showStatus('Formato de chave API inválido', 'error');
+
+        // Verificação EXTRA de segurança
+        if (this.isSensitivePlaceholder(apiKey)) {
+            this.showStatus('ERRO: Use uma chave API real do Real-Debrid, não o texto de exemplo', 'error');
             return;
         }
 
-        this.setLoadingState(true, 'Salvando...');
+        if (!this.validateApiKeyFormat(apiKey)) {
+            this.showStatus('Formato de chave API inválido. A chave deve ter entre 30-50 caracteres alfanuméricos.', 'error');
+            return;
+        }
+
+        this.setLoadingState(true, 'Validando e salvando com segurança...');
 
         try {
-            // Primeiro testa a chave
+            // Validação via nosso backend seguro
             const isValid = await this.validateApiKey(apiKey);
             if (!isValid) {
-                this.showStatus('Chave API inválida ou expirada', 'error');
+                this.showStatus('Chave API inválida, expirada ou sem permissões', 'error');
                 return;
             }
 
-            // Se válida, salva no servidor
+            // Salva no servidor APÓS validação
             const response = await fetch('/api/config', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({ 
+                body: JSON.stringify({
                     apiKey,
                     timestamp: new Date().toISOString()
                 })
@@ -65,19 +136,19 @@ class RealDebridConfig {
             const result = await response.json();
 
             if (response.ok) {
-                this.showStatus('Configuração salva e validada com sucesso! Redirecionando para Stremio...', 'success');
+                this.showStatus('Configuração validada e salva com sucesso! Redirecionando para Stremio...', 'success');
                 await this.updateUserInfo();
-                
-                // Redireciona para o Stremio após 2 segundos
+
+                // Redireciona após breve delay
                 setTimeout(() => {
                     this.redirectToStremio();
                 }, 2000);
-                
+
             } else {
                 this.showStatus(`Erro no servidor: ${result.error}`, 'error');
             }
         } catch (error) {
-            this.showStatus('Erro de conexão com o servidor', 'error');
+            this.showStatus('Erro de conexão segura com o servidor', 'error');
             console.error('Erro ao salvar configuração:', error);
         } finally {
             this.setLoadingState(false);
@@ -87,33 +158,38 @@ class RealDebridConfig {
     redirectToStremio() {
         // Tenta abrir via protocolo stremio://
         window.location.href = this.stremioUrl;
-        
-        // Fallback: mostra instruções se não conseguir abrir o Stremio
+
+        // Fallback seguro
         setTimeout(() => {
-            this.showStatus('Se o Stremio não abriu automaticamente, adicione manualmente: https://brasil-rd-addon.up.railway.app/manifest.json', 'info');
+            this.showStatus('Se o Stremio não abriu: Adicione manualmente via URL → https://brasil-rd-addon.up.railway.app/manifest.json', 'info');
         }, 1000);
     }
 
     async testConnection() {
         const apiKey = document.getElementById('apiKey').value.trim();
-        
+
         if (!apiKey) {
-            this.showStatus('Por favor, insira uma chave API', 'error');
+            this.showStatus('Por favor, insira uma chave API válida', 'error');
             return;
         }
 
-        this.setLoadingState(true, 'Testando conexão...');
+        if (this.isSensitivePlaceholder(apiKey)) {
+            this.showStatus('ERRO: Use uma chave API real para teste', 'error');
+            return;
+        }
+
+        this.setLoadingState(true, 'Testando conexão segura...');
 
         try {
             const isValid = await this.validateApiKey(apiKey);
             if (isValid) {
                 await this.updateUserInfo();
-                this.showStatus('Conexão com Real-Debrid bem-sucedida!', 'success');
+                this.showStatus('Conexão com Real-Debrid validada com sucesso!', 'success');
             } else {
                 this.showStatus('Falha na autenticação com Real-Debrid', 'error');
             }
         } catch (error) {
-            this.showStatus('Erro ao testar conexão: ' + error.message, 'error');
+            this.showStatus('Erro seguro ao testar conexão', 'error');
         } finally {
             this.setLoadingState(false);
         }
@@ -121,64 +197,57 @@ class RealDebridConfig {
 
     async validateApiKey(apiKey) {
         try {
-            const response = await fetch(`${this.apiBaseUrl}/user`, {
-                method: 'GET',
+            const response = await fetch('/api/realdebrid/validate', {
+                method: 'POST',
                 headers: {
-                    'Authorization': `Bearer ${apiKey}`,
                     'Content-Type': 'application/json'
-                }
+                },
+                body: JSON.stringify({ apiKey })
             });
 
-            if (response.status === 401) {
-                throw new Error('Token expirado ou inválido');
-            }
-
-            if (response.status === 403) {
-                throw new Error('Conta bloqueada ou sem permissões');
-            }
-
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                const errorData = await response.json();
+                throw new Error(errorData.error || `Erro ${response.status}`);
             }
 
-            const userData = await response.json();
-            this.userInfo = userData;
-            return true;
+            const result = await response.json();
+
+            if (result.valid && result.user) {
+                this.userInfo = result.user;
+                return true;
+            } else {
+                throw new Error(result.error || 'Token inválido');
+            }
 
         } catch (error) {
-            console.error('Erro na validação da API:', error);
+            console.error('Erro seguro na validação:', error);
             return false;
         }
     }
 
-    async validateCurrentToken() {
-        const apiKey = document.getElementById('apiKey').value.trim();
-        if (apiKey) {
-            const isValid = await this.validateApiKey(apiKey);
-            if (!isValid) {
-                this.showStatus('Chave API atual é inválida ou expirada', 'warning');
-            }
-        }
-    }
-
     validateApiKeyFormat(apiKey) {
-        // Verifica formato básico - chaves Real-Debrid geralmente têm 40+ caracteres
-        return apiKey && apiKey.length >= 20;
+        // Validação RIGOROSA do formato
+        return apiKey && 
+               apiKey.length >= 30 && 
+               apiKey.length <= 50 &&
+               /^[a-zA-Z0-9]+$/.test(apiKey) &&
+               !this.isSensitivePlaceholder(apiKey);
     }
 
     async updateUserInfo() {
         if (!this.userInfo) return;
 
-        // Atualiza a UI com informações do usuário
+        // Atualiza UI com informações SEGURAS (sem dados sensíveis)
         const statusDiv = document.getElementById('status');
         const userInfoHtml = `
             <div class="user-info">
-                <strong>Conta Real-Debrid:</strong> ${this.userInfo.username || this.userInfo.email} |
-                <strong>Tipo:</strong> ${this.userInfo.type || 'N/A'} |
+                <strong>Conta:</strong> ${this.userInfo.username || 'Usuário'} |
+                <strong>Tipo:</strong> ${this.userInfo.type || 'Standard'} |
+                <strong>Status:</strong> ${this.userInfo.premium ? 'Premium' : 'Free'} |
                 <strong>Pontos:</strong> ${this.userInfo.points || '0'}
             </div>
         `;
-        
+
         if (!statusDiv.querySelector('.user-info')) {
             statusDiv.innerHTML += userInfoHtml;
         }
@@ -207,26 +276,35 @@ class RealDebridConfig {
         statusDiv.className = `status ${type}`;
         statusDiv.style.display = 'block';
 
-        // Auto-esconder mensagens de sucesso após 8 segundos (para dar tempo de ver o redirecionamento)
         if (type === 'success') {
             setTimeout(() => {
-                statusDiv.style.display = 'none';
+                if (statusDiv.textContent === message) {
+                    statusDiv.style.display = 'none';
+                }
             }, 8000);
         }
     }
 
     clearStatus() {
         const statusDiv = document.getElementById('status');
-        statusDiv.style.display = 'none';
+        // Não limpa mensagens de usuário
+        if (!statusDiv.querySelector('.user-info')) {
+            statusDiv.style.display = 'none';
+        }
     }
 }
 
-// Inicialização quando o DOM estiver carregado
+// Inicialização SEGURA quando DOM carregar
 document.addEventListener('DOMContentLoaded', () => {
     new RealDebridConfig();
 });
 
-// Tratamento de erros globais
+// Tratamento SEGURO de erros globais
 window.addEventListener('error', (event) => {
-    console.error('Erro global:', event.error);
+    console.error('Erro global seguro:', event.error);
+});
+
+// Proteção contra inspeção no carregamento
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('Brasil RD Addon - Interface segura carregada');
 });

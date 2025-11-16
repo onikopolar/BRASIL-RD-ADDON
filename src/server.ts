@@ -8,6 +8,7 @@ import { StreamHandler } from './services/StreamHandler';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types/index';
 import configRouter from './routes/config';
+import realdebridRouter from './routes/realdebrid';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
@@ -17,8 +18,9 @@ const app = express();
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
-// Rotas da API de configuração
+// Rotas da API
 app.use('/api', configRouter);
+app.use('/api/realdebrid', realdebridRouter);
 
 // Rota principal para a UI
 app.get('/', (req, res) => {

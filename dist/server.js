@@ -44,14 +44,16 @@ const stremio_addon_sdk_1 = require("stremio-addon-sdk");
 const StreamHandler_1 = require("./services/StreamHandler");
 const logger_1 = require("./utils/logger");
 const config_1 = __importDefault(require("./routes/config"));
+const realdebrid_1 = __importDefault(require("./routes/realdebrid"));
 const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
 const app = (0, express_1.default)();
 // Middlewares
 app.use(express_1.default.json());
 app.use(express_1.default.static(path_1.default.join(process.cwd(), 'public')));
-// Rotas da API de configuração
+// Rotas da API
 app.use('/api', config_1.default);
+app.use('/api/realdebrid', realdebrid_1.default);
 // Rota principal para a UI
 app.get('/', (req, res) => {
     res.sendFile(path_1.default.join(process.cwd(), 'public/index.html'));
@@ -106,22 +108,27 @@ async function main() {
     const webPort = process.env.PORT ? parseInt(process.env.PORT) : 8080;
     const stremioPort = webPort + 1;
     try {
-        // Iniciar servidor Express
-        app.listen(webPort, '0.0.0.0', () => {
+        logger.info('Iniciando servidores', {
+            webPort: webPort,
+            stremioPort: stremioPort
+        });
+        // Iniciar servidor Express primeiro
+        const expressServer = app.listen(webPort, '0.0.0.0', () => {
             logger.info('Servidor web iniciado com sucesso', {
                 port: webPort,
                 uiUrl: `http://localhost:${webPort}`,
                 manifestUrl: `http://localhost:${webPort}/manifest.json`
             });
         });
+        // Aguardar um pouco para garantir que o Express esteja rodando
+        await new Promise(resolve => setTimeout(resolve, 1000));
         // Servir addon Stremio em porta diferente
         await (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
             port: stremioPort,
             cacheMaxAge: 0
         });
         logger.info('Addon Stremio iniciado com sucesso', {
-            stremioPort: stremioPort,
-            webPort: webPort
+            stremioPort: stremioPort
         });
     }
     catch (error) {
@@ -129,6 +136,14 @@ async function main() {
             logger.error('Porta ja esta em uso', {
                 port: error.port,
                 error: 'Tente usar uma porta diferente'
+            });
+            // Tentar com portas alternativas
+            const alternativePort = 3000;
+            logger.info('Tentando porta alternativa', { port: alternativePort });
+            const expressServer = app.listen(alternativePort, '0.0.0.0', () => {
+                logger.info('Servidor web iniciado na porta alternativa', {
+                    port: alternativePort
+                });
             });
         }
         else {
