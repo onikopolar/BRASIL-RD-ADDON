@@ -76,33 +76,36 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 async function main(): Promise<void> {
     const addonInterface = builder.getInterface();
     
-    // Porta configurada para ambiente Railway
-    const port = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+    // Portas diferentes para Express e Stremio SDK
+    const webPort = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+    const stremioPort = webPort + 1;
 
     try {
         // Iniciar servidor Express
-        const expressServer = app.listen(port, '0.0.0.0', () => {
-            logger.info('Brasil RD Addon started successfully', { 
-                port,
-                uiUrl: `http://localhost:${port}`,
-                manifestUrl: `http://localhost:${port}/manifest.json`
+        app.listen(webPort, '0.0.0.0', () => {
+            logger.info('Servidor web iniciado com sucesso', { 
+                port: webPort,
+                uiUrl: `http://localhost:${webPort}`,
+                manifestUrl: `http://localhost:${webPort}/manifest.json`
             });
         });
 
-        // Configurar timeout para evitar conflitos de porta
-        expressServer.setTimeout(30000);
-
-        // Servir addon Stremio
+        // Servir addon Stremio em porta diferente
         await serveHTTP(addonInterface, { 
-            port,
+            port: stremioPort,
             cacheMaxAge: 0
+        });
+
+        logger.info('Addon Stremio iniciado com sucesso', {
+            stremioPort: stremioPort,
+            webPort: webPort
         });
 
     } catch (error) {
         if ((error as any).code === 'EADDRINUSE') {
             logger.error('Porta ja esta em uso', {
-                port,
-                error: 'Tente usar uma porta diferente ou aguarde a liberacao da porta atual'
+                port: (error as any).port,
+                error: 'Tente usar uma porta diferente'
             });
         } else {
             logger.error('Falha ao iniciar addon', {
