@@ -93,104 +93,43 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 async function main(): Promise<void> {
     const addonInterface = builder.getInterface();
     
-    // Porta base - Railway define a PORT, senão usa 7000
-    const basePort = process.env.PORT ? parseInt(process.env.PORT) : 7000;
+    // NO Railway, use APENAS a PORT fornecida - SEM fallback
+    const port = parseInt(process.env.PORT || '8080');
 
     try {
-        logger.info('Iniciando servidor unificado', {
-            port: basePort
+        logger.info('Iniciando servidor no Railway', {
+            port: port
         });
 
-        // Iniciar servidor Express primeiro
-        const expressServer = app.listen(basePort, '0.0.0.0', () => {
-            logger.info('Servidor web iniciado com sucesso', { 
-                port: basePort,
-                uiUrl: `http://localhost:${basePort}`,
-                manifestUrl: `http://localhost:${basePort}/manifest.json`
+        // Iniciar servidor Express
+        const expressServer = app.listen(port, '0.0.0.0', () => {
+            logger.info('Servidor web iniciado com sucesso no Railway', { 
+                port: port,
+                uiUrl: `http://0.0.0.0:${port}`,
+                manifestUrl: `http://0.0.0.0:${port}/manifest.json`
             });
         });
 
         // Aguardar um pouco para garantir que o Express esteja rodando
         await new Promise(resolve => setTimeout(resolve, 1000));
 
-        // Servir addon Stremio na MESMA porta usando o mesmo servidor
+        // Servir addon Stremio na MESMA porta
         await serveHTTP(addonInterface, { 
-            port: basePort,
+            port: port,
             cacheMaxAge: 0
         });
 
-        logger.info('Addon Stremio integrado com sucesso', {
-            port: basePort
+        logger.info('Addon Stremio integrado com sucesso no Railway', {
+            port: port
         });
 
     } catch (error: any) {
-        if (error.code === 'EADDRINUSE') {
-            logger.error('Porta principal esta em uso', {
-                port: basePort,
-                error: 'Tentando portas alternativas'
-            });
-            
-            // Tentar com portas alternativas sequenciais
-            let alternativePort = basePort + 1;
-            let maxAttempts = 10;
-            let serverStarted = false;
-            
-            while (maxAttempts > 0 && !serverStarted) {
-                try {
-                    logger.info('Tentando porta alternativa', { port: alternativePort });
-                    
-                    // Iniciar servidor Express na porta alternativa
-                    const expressServer = app.listen(alternativePort, '0.0.0.0', () => {
-                        logger.info('Servidor web iniciado na porta alternativa', { 
-                            port: alternativePort,
-                            uiUrl: `http://localhost:${alternativePort}`,
-                            manifestUrl: `http://localhost:${alternativePort}/manifest.json`
-                        });
-                    });
-
-                    // Aguardar um pouco para garantir que o Express esteja rodando
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-
-                    // Servir addon Stremio na mesma porta alternativa
-                    await serveHTTP(addonInterface, { 
-                        port: alternativePort,
-                        cacheMaxAge: 0
-                    });
-
-                    logger.info('Addon Stremio integrado com sucesso na porta alternativa', {
-                        port: alternativePort
-                    });
-
-                    serverStarted = true;
-                    
-                } catch (altError: any) {
-                    if (altError.code === 'EADDRINUSE') {
-                        logger.warn('Porta alternativa também está em uso', {
-                            port: alternativePort
-                        });
-                        alternativePort++;
-                        maxAttempts--;
-                    } else {
-                        logger.error('Erro inesperado ao tentar porta alternativa', {
-                            port: alternativePort,
-                            error: altError.message
-                        });
-                        throw altError;
-                    }
-                }
-            }
-            
-            if (!serverStarted) {
-                logger.error('Todas as portas alternativas estao em uso. Nenhuma porta disponivel.');
-                process.exit(1);
-            }
-            
-        } else {
-            logger.error('Falha ao iniciar addon', {
-                error: error instanceof Error ? error.message : 'Erro desconhecido'
-            });
-            process.exit(1);
-        }
+        logger.error('Falha crítica ao iniciar servidor no Railway', {
+            error: error.message,
+            code: error.code,
+            port: port
+        });
+        process.exit(1);
     }
 }
 
