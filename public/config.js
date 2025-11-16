@@ -1,6 +1,7 @@
 class RealDebridConfig {
     constructor() {
         this.apiBaseUrl = 'https://api.real-debrid.com/rest/1.0';
+        this.stremioUrl = 'stremio://brasil-rd-addon.up.railway.app/manifest.json';
         this.init();
     }
 
@@ -64,8 +65,14 @@ class RealDebridConfig {
             const result = await response.json();
 
             if (response.ok) {
-                this.showStatus('Configuração salva e validada com sucesso!', 'success');
+                this.showStatus('Configuração salva e validada com sucesso! Redirecionando para Stremio...', 'success');
                 await this.updateUserInfo();
+                
+                // Redireciona para o Stremio após 2 segundos
+                setTimeout(() => {
+                    this.redirectToStremio();
+                }, 2000);
+                
             } else {
                 this.showStatus(`Erro no servidor: ${result.error}`, 'error');
             }
@@ -75,6 +82,16 @@ class RealDebridConfig {
         } finally {
             this.setLoadingState(false);
         }
+    }
+
+    redirectToStremio() {
+        // Tenta abrir via protocolo stremio://
+        window.location.href = this.stremioUrl;
+        
+        // Fallback: mostra instruções se não conseguir abrir o Stremio
+        setTimeout(() => {
+            this.showStatus('Se o Stremio não abriu automaticamente, adicione manualmente: https://brasil-rd-addon.up.railway.app/manifest.json', 'info');
+        }, 1000);
     }
 
     async testConnection() {
@@ -190,11 +207,11 @@ class RealDebridConfig {
         statusDiv.className = `status ${type}`;
         statusDiv.style.display = 'block';
 
-        // Auto-esconder mensagens de sucesso após 5 segundos
+        // Auto-esconder mensagens de sucesso após 8 segundos (para dar tempo de ver o redirecionamento)
         if (type === 'success') {
             setTimeout(() => {
                 statusDiv.style.display = 'none';
-            }, 5000);
+            }, 8000);
         }
     }
 

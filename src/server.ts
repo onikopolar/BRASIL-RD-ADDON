@@ -81,14 +81,22 @@ async function main(): Promise<void> {
     const stremioPort = webPort + 1;
 
     try {
-        // Iniciar servidor Express
-        app.listen(webPort, '0.0.0.0', () => {
+        logger.info('Iniciando servidores', {
+            webPort: webPort,
+            stremioPort: stremioPort
+        });
+
+        // Iniciar servidor Express primeiro
+        const expressServer = app.listen(webPort, '0.0.0.0', () => {
             logger.info('Servidor web iniciado com sucesso', { 
                 port: webPort,
                 uiUrl: `http://localhost:${webPort}`,
                 manifestUrl: `http://localhost:${webPort}/manifest.json`
             });
         });
+
+        // Aguardar um pouco para garantir que o Express esteja rodando
+        await new Promise(resolve => setTimeout(resolve, 1000));
 
         // Servir addon Stremio em porta diferente
         await serveHTTP(addonInterface, { 
@@ -97,8 +105,7 @@ async function main(): Promise<void> {
         });
 
         logger.info('Addon Stremio iniciado com sucesso', {
-            stremioPort: stremioPort,
-            webPort: webPort
+            stremioPort: stremioPort
         });
 
     } catch (error) {
@@ -107,6 +114,17 @@ async function main(): Promise<void> {
                 port: (error as any).port,
                 error: 'Tente usar uma porta diferente'
             });
+            
+            // Tentar com portas alternativas
+            const alternativePort = 3000;
+            logger.info('Tentando porta alternativa', { port: alternativePort });
+            
+            const expressServer = app.listen(alternativePort, '0.0.0.0', () => {
+                logger.info('Servidor web iniciado na porta alternativa', { 
+                    port: alternativePort 
+                });
+            });
+            
         } else {
             logger.error('Falha ao iniciar addon', {
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
