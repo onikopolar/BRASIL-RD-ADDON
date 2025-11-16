@@ -32,15 +32,33 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
+const express_1 = __importDefault(require("express"));
+const path_1 = __importDefault(require("path"));
 const stremio_addon_sdk_1 = require("stremio-addon-sdk");
 const StreamHandler_1 = require("./services/StreamHandler");
 const logger_1 = require("./utils/logger");
 const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
-// Builder do Addon Stremio com sistema de configuração oficial do SDK
+// Criar app Express
+const app = (0, express_1.default)();
+// Middlewares
+app.use(express_1.default.json());
+app.use(express_1.default.static(path_1.default.join(process.cwd(), 'public')));
+// Rota principal para nossa UI personalizada
+app.get('/', (req, res) => {
+    res.sendFile(path_1.default.join(process.cwd(), 'public/index.html'));
+});
+// Rota de configuração personalizada
+app.get('/configure', (req, res) => {
+    res.sendFile(path_1.default.join(process.cwd(), 'public/index.html'));
+});
+// Builder do Addon Stremio
 const builder = new stremio_addon_sdk_1.addonBuilder({
     id: 'com.brasil-rd',
     version: '1.0.0',
@@ -51,7 +69,6 @@ const builder = new stremio_addon_sdk_1.addonBuilder({
     types: ['movie', 'series'],
     catalogs: [],
     idPrefixes: ['tt'],
-    // Sistema de configuração oficial do SDK
     behaviorHints: {
         configurable: true,
         configurationRequired: true
@@ -65,9 +82,9 @@ const builder = new stremio_addon_sdk_1.addonBuilder({
         }
     ]
 });
-// Handler de streams usando sistema de configuração oficial do SDK
+// Handler de streams
 builder.defineStreamHandler(async (args) => {
-    const apiKey = args.config?.apiKey; // Configuração vinda do formulário do SDK
+    const apiKey = args.config?.apiKey;
     const request = {
         type: args.type,
         id: args.id,
@@ -80,9 +97,8 @@ builder.defineStreamHandler(async (args) => {
         hasApiKey: !!apiKey
     });
     try {
-        // Se não tem API key, retorna vazio
         if (!apiKey) {
-            logger.warn('Stream request sem API key - usuário precisa configurar o addon');
+            logger.warn('Stream request sem API key');
             return { streams: [] };
         }
         const result = await streamHandler.handleStreamRequest(request);
@@ -100,25 +116,26 @@ builder.defineStreamHandler(async (args) => {
         return { streams: [] };
     }
 });
-// Inicialização do servidor usando serveHTTP do SDK
+// Obter a interface do addon e usar o router do SDK
+const addonInterface = builder.getInterface();
+const addonRouter = (0, stremio_addon_sdk_1.getRouter)(addonInterface);
+app.use(addonRouter);
+// Inicialização do servidor
 async function main() {
     const port = parseInt(process.env.PORT || '8080');
     try {
-        logger.info('Iniciando Brasil RD Addon com SDK oficial', { port });
-        const addonInterface = builder.getInterface();
-        // Usar serveHTTP do SDK que fornece instalação automática
-        await (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
-            port: port,
-            static: 'public', // Serve nossa pasta public como estática
-            cacheMaxAge: 0 // Desativa cache para desenvolvimento
-        });
-        logger.info('Brasil RD Addon iniciado com sucesso usando SDK oficial', {
-            port,
-            installUrl: `stremio://http://localhost:${port}/manifest.json`
+        logger.info('Iniciando Brasil RD Addon com UI personalizada', { port });
+        // Iniciar servidor Express
+        app.listen(port, '0.0.0.0', () => {
+            logger.info('Servidor iniciado com sucesso', {
+                port,
+                uiUrl: `http://0.0.0.0:${port}`,
+                installUrl: `stremio://http://localhost:${port}/manifest.json`
+            });
         });
     }
     catch (error) {
-        logger.error('Falha crítica ao iniciar servidor com SDK', {
+        logger.error('Falha crítica ao iniciar servidor', {
             error: error.message,
             code: error.code
         });

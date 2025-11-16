@@ -1,7 +1,9 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-import { addonBuilder, serveHTTP } from 'stremio-addon-sdk';
+import express from 'express';
+import path from 'path';
+import { addonBuilder, getRouter } from 'stremio-addon-sdk';
 import { StreamHandler } from './services/StreamHandler';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types/index';
@@ -9,7 +11,24 @@ import { StreamRequest } from './types/index';
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
 
-// Builder do Addon Stremio com sistema de configuração oficial do SDK
+// Criar app Express
+const app = express();
+
+// Middlewares
+app.use(express.json());
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Rota principal para nossa UI personalizada
+app.get('/', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public/index.html'));
+});
+
+// Rota de configuração personalizada
+app.get('/configure', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public/index.html'));
+});
+
+// Builder do Addon Stremio
 const builder = new addonBuilder({
     id: 'com.brasil-rd',
     version: '1.0.0',
@@ -20,25 +39,23 @@ const builder = new addonBuilder({
     types: ['movie', 'series'],
     catalogs: [],
     idPrefixes: ['tt'],
-    // Sistema de configuração oficial do SDK
     behaviorHints: {
         configurable: true,
         configurationRequired: true
     },
     config: [
-    {
-        key: 'apiKey',
-        type: 'text', 
-        title: 'Chave API do Real-Debrid',
-        required: 'true'
-    }
-]
-
+        {
+            key: 'apiKey',
+            type: 'text', 
+            title: 'Chave API do Real-Debrid',
+            required: 'true'
+        }
+    ]
 });
 
-// Handler de streams usando sistema de configuração oficial do SDK
+// Handler de streams
 builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
-    const apiKey = args.config?.apiKey; // Configuração vinda do formulário do SDK
+    const apiKey = args.config?.apiKey;
     
     const request: StreamRequest = {
         type: args.type,
@@ -54,9 +71,8 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
     });
 
     try {
-        // Se não tem API key, retorna vazio
         if (!apiKey) {
-            logger.warn('Stream request sem API key - usuário precisa configurar o addon');
+            logger.warn('Stream request sem API key');
             return { streams: [] };
         }
 
@@ -75,29 +91,29 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
     }
 });
 
-// Inicialização do servidor usando serveHTTP do SDK
+// Obter a interface do addon e usar o router do SDK
+const addonInterface = builder.getInterface();
+const addonRouter = getRouter(addonInterface);
+app.use(addonRouter);
+
+// Inicialização do servidor
 async function main(): Promise<void> {
     const port = parseInt(process.env.PORT || '8080');
 
     try {
-        logger.info('Iniciando Brasil RD Addon com SDK oficial', { port });
+        logger.info('Iniciando Brasil RD Addon com UI personalizada', { port });
 
-        const addonInterface = builder.getInterface();
-
-        // Usar serveHTTP do SDK que fornece instalação automática
-        await serveHTTP(addonInterface, { 
-            port: port,
-            static: 'public', // Serve nossa pasta public como estática
-            cacheMaxAge: 0 // Desativa cache para desenvolvimento
-        });
-
-        logger.info('Brasil RD Addon iniciado com sucesso usando SDK oficial', {
-            port,
-            installUrl: `stremio://http://localhost:${port}/manifest.json`
+        // Iniciar servidor Express
+        app.listen(port, '0.0.0.0', () => {
+            logger.info('Servidor iniciado com sucesso', { 
+                port,
+                uiUrl: `http://0.0.0.0:${port}`,
+                installUrl: `stremio://http://localhost:${port}/manifest.json`
+            });
         });
 
     } catch (error: any) {
-        logger.error('Falha crítica ao iniciar servidor com SDK', {
+        logger.error('Falha crítica ao iniciar servidor', {
             error: error.message,
             code: error.code
         });
