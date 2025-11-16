@@ -118,31 +118,29 @@ builder.defineStreamHandler(async (args) => {
 // Inicialização do servidor
 async function main() {
     const addonInterface = builder.getInterface();
-    // Portas diferentes para Express e Stremio SDK
-    const webPort = process.env.PORT ? parseInt(process.env.PORT) : 8080;
-    const stremioPort = webPort + 1;
+    // Porta única para tudo
+    const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
     try {
-        logger.info('Iniciando servidores', {
-            webPort: webPort,
-            stremioPort: stremioPort
+        logger.info('Iniciando servidor unificado', {
+            port: port
         });
         // Iniciar servidor Express primeiro
-        const expressServer = app.listen(webPort, '0.0.0.0', () => {
+        const expressServer = app.listen(port, '0.0.0.0', () => {
             logger.info('Servidor web iniciado com sucesso', {
-                port: webPort,
-                uiUrl: `http://localhost:${webPort}`,
-                manifestUrl: `http://localhost:${webPort}/manifest.json`
+                port: port,
+                uiUrl: `http://localhost:${port}`,
+                manifestUrl: `http://localhost:${port}/manifest.json`
             });
         });
         // Aguardar um pouco para garantir que o Express esteja rodando
         await new Promise(resolve => setTimeout(resolve, 1000));
-        // Servir addon Stremio em porta diferente
+        // Servir addon Stremio na MESMA porta usando o mesmo servidor
         await (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
-            port: stremioPort,
+            port: port,
             cacheMaxAge: 0
         });
-        logger.info('Addon Stremio iniciado com sucesso', {
-            stremioPort: stremioPort
+        logger.info('Addon Stremio integrado com sucesso', {
+            port: port
         });
     }
     catch (error) {
