@@ -154,12 +154,17 @@ class RealDebridConfig {
     }
 
     redirectToStremio() {
-        // Tenta abrir via protocolo stremio://
-        window.location.href = this.stremioUrl;
+        const manifestUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
+        const stremioProtocolUrl = `stremio://${manifestUrl}`;
+        
+        // Tenta abrir via protocolo stremio:// correto
+        window.location.href = stremioProtocolUrl;
 
         // Fallback seguro
         setTimeout(() => {
-            this.showStatus('Se o Stremio não abriu: Adicione manualmente via URL → https://brasil-rd-addon.up.railway.app/manifest.json', 'info');
+            this.showStatus(`Se o Stremio não abriu automaticamente: 
+            1. Copie esta URL: ${manifestUrl}
+            2. No Stremio, vá em Addons → (+) → Digite a URL`, 'info');
         }, 1000);
     }
 
@@ -187,7 +192,7 @@ class RealDebridConfig {
                 this.showStatus('Falha na autenticação com Real-Debrid', 'error');
             }
         } catch (error) {
-            this.showStatus('🔒 Erro seguro ao testar conexão', 'error');
+            this.showStatus('Erro seguro ao testar conexão', 'error');
         } finally {
             this.setLoadingState(false);
         }
