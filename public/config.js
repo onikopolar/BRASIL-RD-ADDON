@@ -7,6 +7,7 @@ class RealDebridConfig {
             'API_KEY_PLACEHOLDER',
             'REPLACE-WITH-API-KEY'
         ];
+        this.addonUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
         this.init();
     }
 
@@ -16,14 +17,8 @@ class RealDebridConfig {
     }
 
     updateUIForSDK() {
-        // Atualiza a UI para refletir o fluxo do SDK
         const saveBtn = document.getElementById('saveBtn');
-        const testBtn = document.getElementById('testBtn');
-        
-        saveBtn.textContent = 'Instalar Addon no Stremio';
-        testBtn.style.display = 'none'; // Remove teste de conexão
-        
-        // Atualiza instruções
+        saveBtn.textContent = 'Instalar com SDK Oficial do Stremio';
         this.updateInstructions();
     }
 
@@ -31,13 +26,13 @@ class RealDebridConfig {
         const infoCard = document.querySelector('.info-card');
         if (infoCard) {
             infoCard.innerHTML = `
-                <h3>Como Usar:</h3>
+                <h3>Como Instalar (Fluxo Oficial SDK):</h3>
                 <ol>
                     <li>Obtenha sua API key no site do Real-Debrid</li>
                     <li>Cole a chave no campo acima</li>
-                    <li>Clique em "Instalar Addon no Stremio"</li>
-                    <li>O Stremio abrirá automaticamente para configuração</li>
-                    <li>Complete a instalação no Stremio</li>
+                    <li>Clique em "Instalar com SDK Oficial do Stremio"</li>
+                    <li>O Stremio abrirá automaticamente</li>
+                    <li>Complete a configuração dentro do app</li>
                 </ol>
 
                 <div class="features">
@@ -55,7 +50,7 @@ class RealDebridConfig {
     }
 
     bindEvents() {
-        document.getElementById('saveBtn').addEventListener('click', () => this.installAddon());
+        document.getElementById('saveBtn').addEventListener('click', () => this.installWithSDK());
         document.getElementById('apiKey').addEventListener('input', () => this.clearStatus());
         
         this.setupSecurityProtections();
@@ -103,7 +98,7 @@ class RealDebridConfig {
         );
     }
 
-    async installAddon() {
+    async installWithSDK() {
         const apiKey = document.getElementById('apiKey').value.trim();
 
         if (this.isSensitivePlaceholder(apiKey)) {
@@ -116,52 +111,56 @@ class RealDebridConfig {
             return;
         }
 
-        this.setLoadingState(true, 'Preparando instalação...');
+        this.setLoadingState(true, 'Abrindo Stremio...');
 
         try {
-            // Validação básica de formato
             if (!this.validateApiKeyBasic(apiKey)) {
                 this.showStatus('Formato de chave API inválido', 'error');
                 return;
             }
 
-            // Fluxo oficial do SDK - o Stremio cuida de tudo
-            this.showInstallInstructions();
+            // Fluxo oficial do SDK Stremio
+            const stremioUrl = `stremio://${this.addonUrl}`;
+            
+            // Tenta abrir o Stremio via protocolo
+            window.location.href = stremioUrl;
+            
+            // Fallback: se o Stremio não abrir em 2 segundos, mostra instruções manuais
+            setTimeout(() => {
+                if (!document.hidden) {
+                    this.showManualInstall();
+                }
+            }, 2000);
 
         } catch (error) {
-            this.showStatus('Erro ao preparar instalação', 'error');
+            this.showStatus('Erro ao tentar abrir o Stremio', 'error');
             console.error('Erro:', error);
         } finally {
             this.setLoadingState(false);
         }
     }
 
-    showInstallInstructions() {
+    showManualInstall() {
         const statusDiv = document.getElementById('status');
-        const baseUrl = 'https://brasil-rd-addon.up.railway.app';
         
         statusDiv.innerHTML = `
             <div class="success-install">
-                <h4>Pronto para Instalar!</h4>
-                <p><strong>Siga os passos abaixo para instalar o addon:</strong></p>
+                <h4>Stremio não detectado automaticamente</h4>
+                <p><strong>Siga estes passos para instalar manualmente:</strong></p>
                 
                 <div class="install-steps">
                     <ol>
-                        <li><strong>Abra o Stremio no seu dispositivo</strong></li>
+                        <li><strong>Abra o Stremio manualmente</strong></li>
                         <li><strong>Vá até a seção "Addons"</strong></li>
                         <li><strong>Clique em "Instalar pelo link"</strong></li>
-                        <li><strong>Cole este link:</strong> 
-                            <code class="url-code">${baseUrl}/manifest.json</code>
-                        </li>
-                        <li><strong>Complete a configuração dentro do Stremio</strong></li>
+                        <li><strong>Cole este link:</strong></li>
                     </ol>
                 </div>
                 
                 <div class="copy-section">
-                    <p><strong>Link para copiar:</strong></p>
                     <div class="url-container">
-                        <code class="url-code">${baseUrl}/manifest.json</code>
-                        <button class="copy-btn" onclick="navigator.clipboard.writeText('${baseUrl}/manifest.json').then(() => alert('Link copiado!'))">
+                        <code class="url-code">${this.addonUrl}</code>
+                        <button class="copy-btn" onclick="this.copyToClipboard()">
                             Copiar
                         </button>
                     </div>
@@ -181,13 +180,22 @@ class RealDebridConfig {
         statusDiv.style.display = 'block';
     }
 
+    copyToClipboard() {
+        navigator.clipboard.writeText(this.addonUrl).then(() => {
+            const copyBtn = event.target;
+            const originalText = copyBtn.textContent;
+            copyBtn.textContent = 'Copiado!';
+            setTimeout(() => {
+                copyBtn.textContent = originalText;
+            }, 2000);
+        });
+    }
+
     validateApiKeyBasic(apiKey) {
-        // Validação básica de formato
         if (!apiKey || apiKey.trim().length < 10) {
             return false;
         }
 
-        // Formato típico de chave Real-Debrid (40+ caracteres alfanuméricos)
         if (!/^[A-Z0-9]{40,}$/i.test(apiKey)) {
             return false;
         }
@@ -210,7 +218,7 @@ class RealDebridConfig {
             saveBtn.classList.add('loading');
         } else {
             saveBtn.disabled = false;
-            saveBtn.textContent = 'Instalar Addon no Stremio';
+            saveBtn.textContent = 'Instalar com SDK Oficial do Stremio';
             saveBtn.classList.remove('loading');
         }
     }
