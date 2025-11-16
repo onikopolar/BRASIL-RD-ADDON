@@ -39,6 +39,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
 const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
 const stremio_addon_sdk_1 = require("stremio-addon-sdk");
 const StreamHandler_1 = require("./services/StreamHandler");
@@ -49,6 +50,15 @@ const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
 const app = (0, express_1.default)();
 // Middlewares
+app.use((0, cors_1.default)({
+    origin: [
+        'https://app.strem.io',
+        'https://web.stremio.com',
+        'stremio://'
+    ],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
+}));
 app.use(express_1.default.json());
 app.use(express_1.default.static(path_1.default.join(process.cwd(), 'public')));
 // Rotas da API
@@ -61,6 +71,10 @@ app.get('/', (req, res) => {
 // Rota de saúde
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+// Rota do manifesto Stremio
+app.get('/manifest.json', (req, res) => {
+    res.sendFile(path_1.default.join(process.cwd(), 'public/manifest.json'));
 });
 // Builder do Addon Stremio
 const builder = new stremio_addon_sdk_1.addonBuilder({

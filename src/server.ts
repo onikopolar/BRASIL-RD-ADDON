@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv';
 dotenv.config();
 
 import express from 'express';
+import cors from 'cors';
 import path from 'path';
 import { addonBuilder, serveHTTP } from 'stremio-addon-sdk';
 import { StreamHandler } from './services/StreamHandler';
@@ -15,6 +16,15 @@ const streamHandler = new StreamHandler();
 const app = express();
 
 // Middlewares
+app.use(cors({
+    origin: [
+        'https://app.strem.io',
+        'https://web.stremio.com',
+        'stremio://'
+    ],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
+}));
 app.use(express.json());
 app.use(express.static(path.join(process.cwd(), 'public')));
 
@@ -30,6 +40,11 @@ app.get('/', (req, res) => {
 // Rota de saúde
 app.get('/health', (req, res) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Rota do manifesto Stremio
+app.get('/manifest.json', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public/manifest.json'));
 });
 
 // Builder do Addon Stremio
