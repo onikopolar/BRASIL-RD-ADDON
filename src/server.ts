@@ -75,17 +75,22 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 // Inicialização do servidor
 async function main(): Promise<void> {
     const addonInterface = builder.getInterface();
-    const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
+    
+    // Porta configurada para ambiente Railway
+    const port = process.env.PORT ? parseInt(process.env.PORT) : 8080;
 
     try {
         // Iniciar servidor Express
-        app.listen(port, '0.0.0.0', () => {
+        const expressServer = app.listen(port, '0.0.0.0', () => {
             logger.info('Brasil RD Addon started successfully', { 
                 port,
                 uiUrl: `http://localhost:${port}`,
                 manifestUrl: `http://localhost:${port}/manifest.json`
             });
         });
+
+        // Configurar timeout para evitar conflitos de porta
+        expressServer.setTimeout(30000);
 
         // Servir addon Stremio
         await serveHTTP(addonInterface, { 
@@ -94,28 +99,35 @@ async function main(): Promise<void> {
         });
 
     } catch (error) {
-        logger.error('Failed to start addon', {
-            error: error instanceof Error ? error.message : 'Unknown error'
-        });
+        if ((error as any).code === 'EADDRINUSE') {
+            logger.error('Porta ja esta em uso', {
+                port,
+                error: 'Tente usar uma porta diferente ou aguarde a liberacao da porta atual'
+            });
+        } else {
+            logger.error('Falha ao iniciar addon', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
+        }
         process.exit(1);
     }
 }
 
 // Graceful shutdown
 process.on('SIGINT', () => {
-    logger.info('Shutting down Brasil RD Addon');
+    logger.info('Encerrando Brasil RD Addon');
     process.exit(0);
 });
 
 process.on('SIGTERM', () => {
-    logger.info('Shutting down Brasil RD Addon');
+    logger.info('Encerrando Brasil RD Addon');
     process.exit(0);
 });
 
 // Iniciar aplicação
 if (require.main === module) {
     main().catch(error => {
-        logger.error('Fatal error during startup', error);
+        logger.error('Erro fatal durante a inicializacao', error);
         process.exit(1);
     });
 }
