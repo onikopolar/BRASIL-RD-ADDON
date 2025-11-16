@@ -155,30 +155,43 @@ class RealDebridConfig {
 
     redirectToStremio() {
         const manifestUrl = 'https://brasil-rd-addon.up.railway.app/manifest.json';
-        const stremioProtocolUrl = `stremio://${manifestUrl}`;
         
-        const originalHref = window.location.href;
+        // Detecta se é mobile ou desktop
+        const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+        const isStremioWeb = /Stremio|stremio/i.test(navigator.userAgent);
         
-        console.log('Iniciando redirecionamento para Stremio...');
-        
-        window.location.href = stremioProtocolUrl;
-        
-        setTimeout(() => {
-            if (window.location.href === originalHref || window.location.href.includes('brasil-rd-addon')) {
-                console.log('Redirecionamento automatico falhou, mostrando instrucoes manuais');
-                this.showStatus(`Configuracao salva com sucesso! Para adicionar ao Stremio:
+        console.log('Detectado:', {
+            userAgent: navigator.userAgent,
+            isMobile: isMobile,
+            isStremioWeb: isStremioWeb
+        });
 
-1. Abra o Stremio no seu computador
-2. Clique em "Addons" no menu lateral  
-3. Clique no botao "+" (Adicionon)
-4. Cole esta URL: ${manifestUrl}
-5. Clique em "Instalar"
+        if (isStremioWeb) {
+            // Já está no Stremio Web - redireciona para instalação interna
+            window.location.href = `stremio:///addon/${manifestUrl}`;
+        } else if (isMobile) {
+            // Mobile - usa intent do Android
+            window.location.href = `intent://${manifestUrl}#Intent;package=com.stremio.leanback;scheme=stremio;end;`;
+        } else {
+            // Desktop - tenta protocolo stremio://
+            const stremioProtocolUrl = `stremio://${manifestUrl}`;
+            const originalHref = window.location.href;
+            
+            window.location.href = stremioProtocolUrl;
+            
+            // Fallback após delay curto
+            setTimeout(() => {
+                // Se ainda está na mesma página, mostra instruções
+                if (window.location.href === originalHref || window.location.href.includes('brasil-rd-addon')) {
+                    console.log('Redirecionamento automático falhou, mostrando instruções manuais');
+                    this.showStatus(`Configuração salva com sucesso! Para adicionar ao Stremio:
 
-O addon Brasil RD sera instalado e estara pronto para uso!`, 'info');
-            } else {
-                console.log('Redirecionamento automatico bem-sucedido');
-            }
-        }, 100);
+1. TENHA o Stremio instalado no seu computador
+2. Clique neste link: <a href="stremio://${manifestUrl}" style="color: #fff; text-decoration: underline;">Abrir no Stremio</a>
+3. Ou cole manualmente no Stremio: ${manifestUrl}`, 'info');
+                }
+            }, 800);
+        }
     }
 
     async testConnection() {
