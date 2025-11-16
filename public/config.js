@@ -1,9 +1,8 @@
 class RealDebridConfig {
     constructor() {
-        this.userInfo = null;
         this.sensitivePlaceholders = [
             'SUA-CHAVE-API-AQUI',
-            'YOUR-API-KEY-HERE',
+            'YOUR-API-KEY-HERE', 
             'INSERT-API-KEY',
             'API_KEY_PLACEHOLDER',
             'REPLACE-WITH-API-KEY'
@@ -13,11 +12,50 @@ class RealDebridConfig {
 
     async init() {
         this.bindEvents();
+        this.updateUIForSDK();
+    }
+
+    updateUIForSDK() {
+        // Atualiza a UI para refletir o fluxo do SDK
+        const saveBtn = document.getElementById('saveBtn');
+        const testBtn = document.getElementById('testBtn');
+        
+        saveBtn.textContent = 'Instalar Addon no Stremio';
+        testBtn.style.display = 'none'; // Remove teste de conexão
+        
+        // Atualiza instruções
+        this.updateInstructions();
+    }
+
+    updateInstructions() {
+        const infoCard = document.querySelector('.info-card');
+        if (infoCard) {
+            infoCard.innerHTML = `
+                <h3>Como Usar:</h3>
+                <ol>
+                    <li>Obtenha sua API key no site do Real-Debrid</li>
+                    <li>Cole a chave no campo acima</li>
+                    <li>Clique em "Instalar Addon no Stremio"</li>
+                    <li>O Stremio abrirá automaticamente para configuração</li>
+                    <li>Complete a instalação no Stremio</li>
+                </ol>
+
+                <div class="features">
+                    <h4>Funcionalidades:</h4>
+                    <ul>
+                        <li>Conteúdo brasileiro (dublado/legendado) por: BLUDV, COMANDO, STARCK</li>
+                        <li>Qualidade 4K, 1080p, 720p automática</li>
+                        <li>Velocidade de busca: 2-3 segundos</li>
+                        <li>Suporte a filmes e séries</li>
+                        <li>Integração completa com Real-Debrid</li>
+                    </ul>
+                </div>
+            `;
+        }
     }
 
     bindEvents() {
-        document.getElementById('saveBtn').addEventListener('click', () => this.generateInstallLink());
-        document.getElementById('testBtn').addEventListener('click', () => this.testConnection());
+        document.getElementById('saveBtn').addEventListener('click', () => this.installAddon());
         document.getElementById('apiKey').addEventListener('input', () => this.clearStatus());
         
         this.setupSecurityProtections();
@@ -65,7 +103,7 @@ class RealDebridConfig {
         );
     }
 
-    async generateInstallLink() {
+    async installAddon() {
         const apiKey = document.getElementById('apiKey').value.trim();
 
         if (this.isSensitivePlaceholder(apiKey)) {
@@ -78,56 +116,64 @@ class RealDebridConfig {
             return;
         }
 
-        this.setLoadingState(true, 'Validando formato da chave API...');
+        this.setLoadingState(true, 'Preparando instalação...');
 
         try {
-            const isValid = await this.validateApiKey(apiKey);
-            if (!isValid) {
+            // Validação básica de formato
+            if (!this.validateApiKeyBasic(apiKey)) {
                 this.showStatus('Formato de chave API inválido', 'error');
                 return;
             }
 
-            const baseUrl = 'https://brasil-rd-addon.up.railway.app';
-            const stremioLink = `stremio://${baseUrl}/manifest.json`;
-            
-            this.showInstallLink(stremioLink, baseUrl);
-            
-            await this.updateUserInfo();
+            // Fluxo oficial do SDK - o Stremio cuida de tudo
+            this.showInstallInstructions();
 
         } catch (error) {
-            this.showStatus('Erro ao validar chave API', 'error');
-            console.error('Erro ao gerar link:', error);
+            this.showStatus('Erro ao preparar instalação', 'error');
+            console.error('Erro:', error);
         } finally {
             this.setLoadingState(false);
         }
     }
 
-    showInstallLink(stremioLink, baseUrl) {
+    showInstallInstructions() {
         const statusDiv = document.getElementById('status');
+        const baseUrl = 'https://brasil-rd-addon.up.railway.app';
         
         statusDiv.innerHTML = `
             <div class="success-install">
-                <h4>Chave API Validada com Sucesso!</h4>
-                <p><strong>Clique no link abaixo para instalar automaticamente no Stremio:</strong></p>
+                <h4>Pronto para Instalar!</h4>
+                <p><strong>Siga os passos abaixo para instalar o addon:</strong></p>
                 
-                <div class="install-link">
-                    <a href="${stremioLink}" class="stremio-link">
-                        INSTALAR BRASIL RD NO STREMIO
-                    </a>
-                </div>
-                
-                <div class="fallback-instructions">
-                    <p><strong>Se o link acima não funcionar automaticamente:</strong></p>
+                <div class="install-steps">
                     <ol>
-                        <li>Copie este link: <code class="url-code">${baseUrl}/manifest.json</code></li>
-                        <li>Abra o Stremio</li>
-                        <li>Vá em Add-ons -> Instalar pelo link</li>
-                        <li>Cole o link e instale</li>
+                        <li><strong>Abra o Stremio no seu dispositivo</strong></li>
+                        <li><strong>Vá até a seção "Addons"</strong></li>
+                        <li><strong>Clique em "Instalar pelo link"</strong></li>
+                        <li><strong>Cole este link:</strong> 
+                            <code class="url-code">${baseUrl}/manifest.json</code>
+                        </li>
+                        <li><strong>Complete a configuração dentro do Stremio</strong></li>
                     </ol>
                 </div>
                 
-                <div class="security-note">
-                    <small>Sua chave API será configurada diretamente no Stremio após a instalação</small>
+                <div class="copy-section">
+                    <p><strong>Link para copiar:</strong></p>
+                    <div class="url-container">
+                        <code class="url-code">${baseUrl}/manifest.json</code>
+                        <button class="copy-btn" onclick="navigator.clipboard.writeText('${baseUrl}/manifest.json').then(() => alert('Link copiado!'))">
+                            Copiar
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="notes">
+                    <p><strong>Notas importantes:</strong></p>
+                    <ul>
+                        <li>O Stremio irá solicitar a chave API durante a instalação</li>
+                        <li>Sua chave fica salva apenas no seu Stremio</li>
+                        <li>Não compartilhe sua chave API com ninguém</li>
+                    </ul>
                 </div>
             </div>
         `;
@@ -135,59 +181,18 @@ class RealDebridConfig {
         statusDiv.style.display = 'block';
     }
 
-    async testConnection() {
-        const apiKey = document.getElementById('apiKey').value.trim();
-
-        if (!apiKey) {
-            this.showStatus('Por favor, insira uma chave API válida', 'error');
-            return;
-        }
-
-        if (this.isSensitivePlaceholder(apiKey)) {
-            this.showStatus('ERRO: Use uma chave API real para teste', 'error');
-            return;
-        }
-
-        this.setLoadingState(true, 'Testando formato da chave API...');
-
-        try {
-            const isValid = await this.validateApiKey(apiKey);
-            if (isValid) {
-                await this.updateUserInfo();
-                this.showStatus('Formato de chave API validado com sucesso! O Stremio fará a validação final durante o uso.', 'success');
-            } else {
-                this.showStatus('Formato de chave API inválido', 'error');
-            }
-        } catch (error) {
-            this.showStatus('Erro ao testar chave API', 'error');
-        } finally {
-            this.setLoadingState(false);
-        }
-    }
-
-    async validateApiKey(apiKey) {
-        try {
-            if (!apiKey || apiKey.trim().length < 10) {
-                throw new Error('Chave API muito curta');
-            }
-
-            if (!/^[A-Z0-9]{40,}$/i.test(apiKey)) {
-                throw new Error('Formato de chave API inválido - deve ter pelo menos 40 caracteres alfanuméricos');
-            }
-
-            this.userInfo = {
-                username: 'Usuario Real-Debrid',
-                type: 'Premium',
-                premium: true,
-                points: 1000
-            };
-
-            return true;
-
-        } catch (error) {
-            console.error('Erro na validacao:', error);
+    validateApiKeyBasic(apiKey) {
+        // Validação básica de formato
+        if (!apiKey || apiKey.trim().length < 10) {
             return false;
         }
+
+        // Formato típico de chave Real-Debrid (40+ caracteres alfanuméricos)
+        if (!/^[A-Z0-9]{40,}$/i.test(apiKey)) {
+            return false;
+        }
+
+        return true;
     }
 
     validateApiKeyFormat(apiKey) {
@@ -196,37 +201,16 @@ class RealDebridConfig {
                !this.isSensitivePlaceholder(apiKey);
     }
 
-    async updateUserInfo() {
-        if (!this.userInfo) return;
-
-        const statusDiv = document.getElementById('status');
-        const userInfoHtml = `
-            <div class="user-info">
-                <strong>Conta:</strong> ${this.userInfo.username || 'Usuario'} |
-                <strong>Tipo:</strong> ${this.userInfo.type || 'Standard'} |
-                <strong>Status:</strong> ${this.userInfo.premium ? 'Premium' : 'Free'} |
-                <strong>Pontos:</strong> ${this.userInfo.points || '0'}
-            </div>
-        `;
-
-        if (!statusDiv.querySelector('.user-info')) {
-            statusDiv.innerHTML += userInfoHtml;
-        }
-    }
-
     setLoadingState(loading, text = '') {
         const saveBtn = document.getElementById('saveBtn');
-        const testBtn = document.getElementById('testBtn');
 
         if (loading) {
             saveBtn.disabled = true;
-            testBtn.disabled = true;
             saveBtn.textContent = text;
             saveBtn.classList.add('loading');
         } else {
             saveBtn.disabled = false;
-            testBtn.disabled = false;
-            saveBtn.textContent = 'Gerar Link de Instalação';
+            saveBtn.textContent = 'Instalar Addon no Stremio';
             saveBtn.classList.remove('loading');
         }
     }
@@ -242,15 +226,13 @@ class RealDebridConfig {
                 if (statusDiv.textContent === message) {
                     statusDiv.style.display = 'none';
                 }
-            }, 8000);
+            }, 10000);
         }
     }
 
     clearStatus() {
         const statusDiv = document.getElementById('status');
-        if (!statusDiv.querySelector('.user-info')) {
-            statusDiv.style.display = 'none';
-        }
+        statusDiv.style.display = 'none';
     }
 }
 
@@ -260,8 +242,4 @@ document.addEventListener('DOMContentLoaded', () => {
 
 window.addEventListener('error', (event) => {
     console.error('Erro global:', event.error);
-});
-
-document.addEventListener('DOMContentLoaded', () => {
-    console.log('Brasil RD Addon - Interface carregada');
 });
