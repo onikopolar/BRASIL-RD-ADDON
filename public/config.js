@@ -60,8 +60,6 @@ class RealDebridConfig {
             this.sensitivePlaceholders.forEach(placeholder => {
                 sanitized = sanitized.replace(new RegExp(placeholder, 'gi'), '[REDACTED]');
             });
-            // Remove chaves API reais (padrão: 40 caracteres alfanuméricos)
-            sanitized = sanitized.replace(/\b[a-zA-Z0-9]{40}\b/g, '[API_KEY_REDACTED]');
             return sanitized;
         }
         return data;
@@ -107,14 +105,14 @@ class RealDebridConfig {
         }
 
         if (!this.validateApiKeyFormat(apiKey)) {
-            this.showStatus('Formato de chave API inválido. A chave deve ter entre 30-50 caracteres alfanuméricos.', 'error');
+            this.showStatus('Por favor, insira uma chave API válida', 'error');
             return;
         }
 
         this.setLoadingState(true, 'Validando e salvando com segurança...');
 
         try {
-            // Validação via nosso backend seguro
+            // Validação via nosso backend seguro - ÚNICA validação real
             const isValid = await this.validateApiKey(apiKey);
             if (!isValid) {
                 this.showStatus('Chave API inválida, expirada ou sem permissões', 'error');
@@ -189,7 +187,7 @@ class RealDebridConfig {
                 this.showStatus('Falha na autenticação com Real-Debrid', 'error');
             }
         } catch (error) {
-            this.showStatus('Erro seguro ao testar conexão', 'error');
+            this.showStatus('🔒 Erro seguro ao testar conexão', 'error');
         } finally {
             this.setLoadingState(false);
         }
@@ -226,11 +224,10 @@ class RealDebridConfig {
     }
 
     validateApiKeyFormat(apiKey) {
-        // Validação RIGOROSA do formato
+        // VALIDAÇÃO OFICIAL: Apenas verifica se não está vazio e não é placeholder
+        // A validação real é feita exclusivamente pela API do Real-Debrid
         return apiKey && 
-               apiKey.length >= 30 && 
-               apiKey.length <= 50 &&
-               /^[a-zA-Z0-9]+$/.test(apiKey) &&
+               apiKey.trim().length > 0 &&
                !this.isSensitivePlaceholder(apiKey);
     }
 
