@@ -1,14 +1,51 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
 
+import express from 'express';
+import cors from 'cors';
 import path from 'path';
 import { addonBuilder, serveHTTP } from 'stremio-addon-sdk';
 import { StreamHandler } from './services/StreamHandler';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types/index';
+import configRouter from './routes/config';
+import realdebridRouter from './routes/realdebrid';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
+const app = express();
+
+// Middlewares
+app.use(cors({
+    origin: [
+        'https://app.strem.io',
+        'https://web.stremio.com',
+        'stremio://'
+    ],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
+}));
+app.use(express.json());
+app.use(express.static(path.join(process.cwd(), 'public')));
+
+// Rotas da API
+app.use('/api', configRouter);
+app.use('/api/realdebrid', realdebridRouter);
+
+// Rota principal para a UI
+app.get('/', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public/index.html'));
+});
+
+// Rota de saúde
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+
+// Rota do manifesto Stremio
+app.get('/manifest.json', (req, res) => {
+    res.sendFile(path.join(process.cwd(), 'public/manifest.json'));
+});
 
 // Builder do Addon Stremio
 const builder = new addonBuilder({
@@ -56,25 +93,22 @@ builder.defineStreamHandler(async (args: any): Promise<{ streams: any[] }> => {
 async function main(): Promise<void> {
     const addonInterface = builder.getInterface();
     
-    // NO Railway, use APENAS a PORT fornecida
+    // Porta única para tudo
     const port = parseInt(process.env.PORT || '8080');
 
     try {
-        logger.info('Iniciando servidor Stremio no Railway', {
+        logger.info('Iniciando servidor no Railway', {
             port: port
         });
 
-        // Servir addon Stremio com configuração para arquivos estáticos
+        // Servir APENAS o addon Stremio - sem servidor Express separado
         await serveHTTP(addonInterface, { 
             port: port,
-            cacheMaxAge: 0,
-            static: path.join(process.cwd(), 'public')  // Serve arquivos estáticos
+            cacheMaxAge: 0
         });
 
         logger.info('Addon Stremio iniciado com sucesso no Railway', {
-            port: port,
-            uiUrl: `https://brasil-rd-addon.up.railway.app`,
-            manifestUrl: `https://brasil-rd-addon.up.railway.app/manifest.json`
+            port: port
         });
 
     } catch (error: any) {

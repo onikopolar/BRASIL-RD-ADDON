@@ -38,12 +38,44 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
+const express_1 = __importDefault(require("express"));
+const cors_1 = __importDefault(require("cors"));
 const path_1 = __importDefault(require("path"));
 const stremio_addon_sdk_1 = require("stremio-addon-sdk");
 const StreamHandler_1 = require("./services/StreamHandler");
 const logger_1 = require("./utils/logger");
+const config_1 = __importDefault(require("./routes/config"));
+const realdebrid_1 = __importDefault(require("./routes/realdebrid"));
 const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
+const app = (0, express_1.default)();
+// Middlewares
+app.use((0, cors_1.default)({
+    origin: [
+        'https://app.strem.io',
+        'https://web.stremio.com',
+        'stremio://'
+    ],
+    methods: ['GET', 'POST', 'OPTIONS'],
+    credentials: true
+}));
+app.use(express_1.default.json());
+app.use(express_1.default.static(path_1.default.join(process.cwd(), 'public')));
+// Rotas da API
+app.use('/api', config_1.default);
+app.use('/api/realdebrid', realdebrid_1.default);
+// Rota principal para a UI
+app.get('/', (req, res) => {
+    res.sendFile(path_1.default.join(process.cwd(), 'public/index.html'));
+});
+// Rota de saúde
+app.get('/health', (req, res) => {
+    res.json({ status: 'ok', timestamp: new Date().toISOString() });
+});
+// Rota do manifesto Stremio
+app.get('/manifest.json', (req, res) => {
+    res.sendFile(path_1.default.join(process.cwd(), 'public/manifest.json'));
+});
 // Builder do Addon Stremio
 const builder = new stremio_addon_sdk_1.addonBuilder({
     id: 'com.brasil-rd',
@@ -86,22 +118,19 @@ builder.defineStreamHandler(async (args) => {
 // Inicialização do servidor
 async function main() {
     const addonInterface = builder.getInterface();
-    // NO Railway, use APENAS a PORT fornecida
+    // Porta única para tudo
     const port = parseInt(process.env.PORT || '8080');
     try {
-        logger.info('Iniciando servidor Stremio no Railway', {
+        logger.info('Iniciando servidor no Railway', {
             port: port
         });
-        // Servir addon Stremio com configuração para arquivos estáticos
+        // Servir APENAS o addon Stremio - sem servidor Express separado
         await (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
             port: port,
-            cacheMaxAge: 0,
-            static: path_1.default.join(process.cwd(), 'public') // Serve arquivos estáticos
+            cacheMaxAge: 0
         });
         logger.info('Addon Stremio iniciado com sucesso no Railway', {
-            port: port,
-            uiUrl: `https://brasil-rd-addon.up.railway.app`,
-            manifestUrl: `https://brasil-rd-addon.up.railway.app/manifest.json`
+            port: port
         });
     }
     catch (error) {
