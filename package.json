@@ -4,7 +4,7 @@
   "type": "commonjs",
   "main": "dist/server.js",
   "scripts": {
-    "build": "./node_modules/.bin/tsc",
+    "build": "node build.js",
     "start": "node dist/server.js",
     "dev": "ts-node src/server.ts",
     "test": "jest",
