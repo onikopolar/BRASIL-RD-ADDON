@@ -102,42 +102,56 @@ builder.defineStreamHandler(async (args) => {
 // Inicialização do servidor
 async function main() {
     const addonInterface = builder.getInterface();
-    const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
+    // Portas diferentes para Express e Stremio SDK
+    const webPort = process.env.PORT ? parseInt(process.env.PORT) : 8080;
+    const stremioPort = webPort + 1;
     try {
         // Iniciar servidor Express
-        app.listen(port, '0.0.0.0', () => {
-            logger.info('Brasil RD Addon started successfully', {
-                port,
-                uiUrl: `http://localhost:${port}`,
-                manifestUrl: `http://localhost:${port}/manifest.json`
+        app.listen(webPort, '0.0.0.0', () => {
+            logger.info('Servidor web iniciado com sucesso', {
+                port: webPort,
+                uiUrl: `http://localhost:${webPort}`,
+                manifestUrl: `http://localhost:${webPort}/manifest.json`
             });
         });
-        // Servir addon Stremio
+        // Servir addon Stremio em porta diferente
         await (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
-            port,
+            port: stremioPort,
             cacheMaxAge: 0
+        });
+        logger.info('Addon Stremio iniciado com sucesso', {
+            stremioPort: stremioPort,
+            webPort: webPort
         });
     }
     catch (error) {
-        logger.error('Failed to start addon', {
-            error: error instanceof Error ? error.message : 'Unknown error'
-        });
+        if (error.code === 'EADDRINUSE') {
+            logger.error('Porta ja esta em uso', {
+                port: error.port,
+                error: 'Tente usar uma porta diferente'
+            });
+        }
+        else {
+            logger.error('Falha ao iniciar addon', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
+        }
         process.exit(1);
     }
 }
 // Graceful shutdown
 process.on('SIGINT', () => {
-    logger.info('Shutting down Brasil RD Addon');
+    logger.info('Encerrando Brasil RD Addon');
     process.exit(0);
 });
 process.on('SIGTERM', () => {
-    logger.info('Shutting down Brasil RD Addon');
+    logger.info('Encerrando Brasil RD Addon');
     process.exit(0);
 });
 // Iniciar aplicação
 if (require.main === module) {
     main().catch(error => {
-        logger.error('Fatal error during startup', error);
+        logger.error('Erro fatal durante a inicializacao', error);
         process.exit(1);
     });
 }
