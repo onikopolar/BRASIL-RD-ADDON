@@ -44,7 +44,7 @@ body {
     padding: 30px;
 }
 
-.config-card, .info-card, .warning-card {
+.config-card, .info-card, .warning-card, .platforms-card, .security-card {
     background: #f8f9fa;
     border-radius: 8px;
     padding: 25px;
@@ -52,7 +52,7 @@ body {
     border: 1px solid #e9ecef;
 }
 
-.config-card h2, .info-card h3, .warning-card h3 {
+.config-card h2, .info-card h3, .warning-card h3, .platforms-card h3, .security-card h3 {
     color: #2c3e50;
     margin-bottom: 20px;
     font-size: 1.4rem;
@@ -73,6 +73,74 @@ body {
 .warning-card p {
     color: #856404;
     line-height: 1.5;
+}
+
+.security-card {
+    background: #fff3cd;
+    border: 1px solid #ffeaa7;
+}
+
+.security-card h3 {
+    color: #856404;
+    border-bottom: 1px solid #ffeaa7;
+}
+
+.security-card p {
+    color: #856404;
+    line-height: 1.5;
+}
+
+.security-highlight {
+    background: rgba(255, 235, 59, 0.2);
+    border-left: 4px solid #ffc107;
+    padding: 12px 15px;
+    border-radius: 4px;
+    margin-top: 15px;
+    font-weight: 600;
+    color: #856404;
+}
+
+.platforms-card {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    color: white;
+}
+
+.platforms-card h3 {
+    color: white;
+    border-bottom: 2px solid rgba(255, 255, 255, 0.3);
+}
+
+.platforms-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 25px;
+}
+
+.platform {
+    background: rgba(255, 255, 255, 0.95);
+    padding: 20px;
+    border-radius: 10px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+}
+
+.platform h4 {
+    color: #333;
+    margin-top: 0;
+    margin-bottom: 15px;
+    font-size: 1.2em;
+    border-bottom: 2px solid #4CAF50;
+    padding-bottom: 8px;
+}
+
+.platform ol {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.platform li {
+    margin-bottom: 10px;
+    line-height: 1.4;
+    color: #555;
 }
 
 .form-group {
@@ -119,13 +187,15 @@ label {
     color: #6c757d;
 }
 
-.help-text a {
+.help-link {
     color: #3498db;
     text-decoration: none;
+    font-weight: 600;
 }
 
-.help-text a:hover {
+.help-link:hover {
     text-decoration: underline;
+    color: #2980b9;
 }
 
 .actions {
@@ -159,16 +229,6 @@ label {
     opacity: 0.6;
     cursor: not-allowed;
     transform: none;
-}
-
-.btn-secondary {
-    background: #6c757d;
-    color: white;
-}
-
-.btn-secondary:hover:not(:disabled) {
-    background: #5a6268;
-    transform: translateY(-1px);
 }
 
 .btn.loading {
@@ -249,6 +309,12 @@ label {
     margin-bottom: 8px;
 }
 
+.steps-list li {
+    margin-bottom: 12px;
+    padding-left: 8px;
+    line-height: 1.5;
+}
+
 .features {
     margin-top: 20px;
 }
@@ -259,23 +325,105 @@ label {
     font-size: 1.1rem;
 }
 
-.features ul {
+.features-list {
     list-style: none;
     margin-left: 0;
 }
 
-.features li {
+.features-list li {
     position: relative;
     padding-left: 25px;
     margin-bottom: 6px;
 }
 
-.features li::before {
+.features-list li::before {
     content: '✓';
     position: absolute;
     left: 0;
     color: #27ae60;
     font-weight: bold;
+}
+
+/* Estilos para a seção de instalação */
+.success-install {
+    background: linear-gradient(135deg, #4CAF50, #45a049);
+    color: white;
+    padding: 25px;
+    border-radius: 12px;
+    margin-top: 20px;
+}
+
+.install-steps {
+    margin: 20px 0;
+}
+
+.install-steps ol {
+    margin: 15px 0;
+    padding-left: 20px;
+}
+
+.install-steps li {
+    margin-bottom: 12px;
+    line-height: 1.5;
+}
+
+.copy-section {
+    background: rgba(255, 255, 255, 0.1);
+    padding: 15px;
+    border-radius: 8px;
+    margin: 20px 0;
+}
+
+.url-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 10px 0;
+}
+
+.url-code {
+    flex: 1;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 12px;
+    border-radius: 6px;
+    font-family: 'Courier New', monospace;
+    word-break: break-all;
+    color: #fff;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.copy-btn {
+    background: #fff;
+    color: #4CAF50;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-weight: 600;
+    transition: all 0.3s ease;
+    white-space: nowrap;
+}
+
+.copy-btn:hover {
+    background: #f5f5f5;
+    transform: translateY(-2px);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.notes {
+    margin-top: 20px;
+    padding-top: 15px;
+    border-top: 1px solid rgba(255, 255, 255, 0.3);
+}
+
+.notes ul {
+    margin: 10px 0;
+    padding-left: 20px;
+}
+
+.notes li {
+    margin-bottom: 8px;
+    line-height: 1.4;
 }
 
 .footer {
@@ -315,14 +463,36 @@ label {
     .btn {
         flex: none;
     }
+    
+    .platforms-grid {
+        grid-template-columns: 1fr;
+        gap: 20px;
+    }
+    
+    .platforms-card {
+        padding: 20px;
+    }
+    
+    .platform {
+        padding: 15px;
+    }
 }
 
 @media (max-width: 480px) {
-    .config-card, .info-card, .warning-card {
+    .config-card, .info-card, .warning-card, .platforms-card, .security-card {
         padding: 15px;
     }
     
     .header h1 {
         font-size: 1.5rem;
+    }
+    
+    .url-container {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .copy-btn {
+        margin-top: 10px;
     }
 }
