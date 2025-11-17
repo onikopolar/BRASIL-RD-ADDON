@@ -1,10 +1,10 @@
 # Brasil RD Addon
 
-Addon profissional para Stremio com foco em conteúdo brasileiro via Real-Debrid.
+Addon para Stremio com foco em conteúdo brasileiro via Real-Debrid.
 
 ## O Problema que eu Percebi
 
-A comunidade brasileira enfrenta uma carência gritante de conteúdo dublado e legendado de qualidade. Enquanto isso, serviços de streaming tradicionais nos submetem a uma realidade absurda: múltiplas assinaturas caríssimas, catálogos fragmentados e a indignidade de ainda incluir anúncios em serviços pagos.
+A comunidade brasileira enfrenta uma carência gritante de conteúdo dublado e ficamos a mercê de addons gringos. Enquanto isso, serviços de streaming tradicionais nos submetem a uma realidade absurda: múltiplas assinaturas caríssimas, catálogos fragmentados e a indignidade de ainda incluir anúncios em serviços pagos.
 
 Esta situação é completamente inacreditável nos dias atuais e representa uma opressão financeira prejudicial ao povo brasileiro.
 
