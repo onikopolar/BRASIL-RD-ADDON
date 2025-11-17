@@ -3,9 +3,11 @@
   "version": "1.0.0",
   "type": "commonjs",
   "main": "dist/server.js",
-  "scripts": {
+    "scripts": {
     "build": "node build.js",
     "start": "node dist/server.js",
+    "start:launch": "node dist/server.js --launch",
+    "start:install": "node dist/server.js --install",
     "dev": "ts-node src/server.ts",
     "test": "jest",
     "add-magnet": "ts-node scripts/add-magnet.ts",

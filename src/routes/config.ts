@@ -121,6 +121,31 @@ router.post('/config', async (req: Request, res: Response) => {
     }
 });
 
+// Rota para gerar URL personalizada Torrentio-style
+router.get('/generate-url', (req: Request, res: Response) => {
+    const { apiKey } = req.query;
+    
+    if (!apiKey) {
+        return res.status(400).json({ error: 'API key é obrigatória' });
+    }
+
+    // Gerar URL personalizada como o Torrentio
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const personalizedUrl = `${baseUrl}/manifest.json?apiKey=${encodeURIComponent(apiKey as string)}`;
+    
+    logger.info('URL personalizada gerada', {
+        baseUrl,
+        hasApiKey: !!apiKey
+    });
+
+    res.json({
+        success: true,
+        url: personalizedUrl,
+        installUrl: personalizedUrl,
+        message: 'Use esta URL para instalar o addon já configurado'
+    });
+});
+
 // Rota de saúde para verificar se servidor está ativo
 router.get('/health', (req: Request, res: Response) => {
     res.json({ status: 'ok', timestamp: new Date().toISOString() });
