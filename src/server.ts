@@ -25,7 +25,7 @@ const manifest = {
         {
             key: 'apiKey',
             type: 'text',
-            title: 'Chave API Real-Debrid (Obtenha ela aqui: https://real-debrid.com/apitoken',
+            title: 'Chave API Real-Debrid, Obtenha ela aqui: https://real-debrid.com/apitoken',
             required: true,
             placeholder: 'Obtenha em: real-debrid.com/apitoken - Cole a chave aqui'
         }
