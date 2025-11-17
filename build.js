@@ -71,5 +71,5 @@ function buildTypeScript() {
     console.log('Build concluido com sucesso');
 }
 
-// Executa o build
+// Remove a função copyPublicFolder e chama apenas o build do TypeScript
 buildTypeScript();

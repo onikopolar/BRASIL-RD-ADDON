@@ -52,6 +52,12 @@ export interface StreamRequest {
   title?: string;
   imdbId?: string;
   apiKey?: string;
+  config?: {
+    quality?: string;
+    language?: string;
+    streamType?: string;
+    maxResults?: string;
+  };
 }
 
 export interface CacheData<T> {

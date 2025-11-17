@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Configuração - Brasil RD</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { 
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            padding: 40px;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            max-width: 500px;
+            width: 100%;
+        }
+        .logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .logo h1 {
+            color: #333;
+            font-size: 28px;
+            margin-bottom: 5px;
+        }
+        .logo p {
+            color: #666;
+            font-size: 16px;
+        }
+        .form-group {
+            margin-bottom: 25px;
+        }
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid #e1e5e9;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+        input[type="text"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        button {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s;
+        }
+        button:hover {
+            transform: translateY(-2px);
+        }
+        .instructions {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-top: 25px;
+            font-size: 14px;
+        }
+        .instructions h3 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        .instructions ol {
+            padding-left: 20px;
+        }
+        .instructions li {
+            margin-bottom: 8px;
+            color: #555;
+        }
+        .instructions a {
+            color: #667eea;
+            text-decoration: none;
+        }
+        .instructions a:hover {
+            text-decoration: underline;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <h1>🇧🇷 Brasil RD</h1>
+            <p>Configure seu addon do Real-Debrid</p>
+        </div>
+        
+        <form id="configForm">
+            <div class="form-group">
+                <label for="apiKey">Chave API do Real-Debrid:</label>
+                <input type="text" id="apiKey" 
+                       placeholder="Cole sua chave API aqui..."
+                       required>
+            </div>
+            
+            <button type="submit">🎬 Instalar no Stremio</button>
+        </form>
+        
+        <div class="instructions">
+            <h3>📋 Como obter sua chave API:</h3>
+            <ol>
+                <li>Acesse: <a href="https://real-debrid.com/apitoken" target="_blank">real-debrid.com/apitoken</a></li>
+                <li>Faça login na sua conta</li>
+                <li>Copie a chave API gerada</li>
+                <li>Cole no campo acima e clique em Instalar</li>
+            </ol>
+        </div>
+    </div>
+
+    <script>
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const apiKey = document.getElementById('apiKey').value.trim();
+            
+            if (!apiKey) {
+                alert('Por favor, insira sua chave API do Real-Debrid');
+                return;
+            }
+            
+            // Gera o link de instalação personalizado
+            const baseUrl = window.location.origin.replace('/configure', '');
+            const manifestUrl = `${baseUrl}/manifest.json?apiKey=${encodeURIComponent(apiKey)}`;
+            const stremioUrl = `stremio://${manifestUrl}`;
+            
+            console.log('Instalando addon com URL:', manifestUrl);
+            
+            // Tenta abrir no Stremio desktop
+            window.location.href = stremioUrl;
+            
+            // Fallback para instalação manual
+            setTimeout(() => {
+                const shouldShowManual = confirm(
+                    'Se o Stremio não abriu automaticamente:\n\n' +
+                    '1. Copie o link abaixo\n' +
+                    '2. Abra o Stremio\n' + 
+                    '3. Vá em Addons → Community Addons\n' +
+                    '4. Cole o link\n\n' +
+                    'Clique em OK para copiar o link.'
+                );
+                
+                if (shouldShowManual) {
+                    navigator.clipboard.writeText(manifestUrl).then(() => {
+                        alert('✅ Link copiado! Agora cole no Stremio.');
+                    }).catch(() => {
+                        // Fallback para navegadores antigos
+                        prompt('Copie o link abaixo:', manifestUrl);
+                    });
+                }
+            }, 2000);
+        });
+    </script>
+</body>
+</html>
