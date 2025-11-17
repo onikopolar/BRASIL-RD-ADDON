@@ -26,7 +26,7 @@ Diferente de outros addons como Torrentio e seus derivados, eu priorizo:
 - **Provedores nacionais**: BLUDV, COMANDO e STARCK FILMES
 - **Conteúdo dublado e legendado**: Prioridade absoluta no áudio em português
 - **Dual audio**: Opção de alternar para áudio original quando desejado
-- **Qualidade garantida**: Curadoria cuidadosa de cada magnet link
+- **Qualidade garantida**: Curadoria cuidadosa de cada magnet link, verificado e aprovado por mim.
 
 ## Características Técnicas
 
