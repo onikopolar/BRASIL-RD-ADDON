@@ -38,9 +38,6 @@ export declare class StreamHandler {
     private processSeriesTorrent;
     private processMovieTorrent;
     private createSeriesStream;
-    private createPendingSeriesStream;
-    private createPendingMovieStream;
-    private mapRealDebridStatus;
     private findEpisodeFilesByQuality;
     private extractQualityFromFilename;
     private extractQualityFromName;
