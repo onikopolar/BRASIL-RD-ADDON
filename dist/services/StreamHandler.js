@@ -7,12 +7,97 @@ const CacheService_1 = require("./CacheService");
 const TorrentScraperService_1 = require("./TorrentScraperService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
+// Centralizado: mesma lógica de qualidade do TorrentScraperService
+class QualityDetector {
+    qualityPatterns = [
+        { pattern: /\.2160p\./i, quality: '2160p', confidence: 100 },
+        { pattern: /\.4k\./i, quality: '2160p', confidence: 100 },
+        { pattern: /\b2160p\b/i, quality: '2160p', confidence: 98 },
+        { pattern: /\b4k\b/i, quality: '2160p', confidence: 98 },
+        { pattern: /2160p/i, quality: '2160p', confidence: 95 },
+        { pattern: /4k/i, quality: '2160p', confidence: 95 },
+        { pattern: /\buhd\b/i, quality: '2160p', confidence: 90 },
+        { pattern: /\bultra.hd\b/i, quality: '2160p', confidence: 90 },
+        { pattern: /\.1080p\./i, quality: '1080p', confidence: 100 },
+        { pattern: /\b1080p\b/i, quality: '1080p', confidence: 98 },
+        { pattern: /1080p/i, quality: '1080p', confidence: 95 },
+        { pattern: /\bfhd\b/i, quality: '1080p', confidence: 90 },
+        { pattern: /\bfull.hd\b/i, quality: '1080p', confidence: 90 },
+        { pattern: /\.720p\./i, quality: '720p', confidence: 100 },
+        { pattern: /\b720p\b/i, quality: '720p', confidence: 98 },
+        { pattern: /720p/i, quality: '720p', confidence: 95 },
+        { pattern: /\bhd.rip\b/i, quality: '720p', confidence: 85 },
+        { pattern: /\.hd\./i, quality: 'HD', confidence: 90 },
+        { pattern: /\bhd\b/i, quality: 'HD', confidence: 80 },
+        { pattern: /\bhigh.def\b/i, quality: 'HD', confidence: 80 },
+        { pattern: /\.web-dl\./i, quality: '1080p', confidence: 95 },
+        { pattern: /\.bluray\./i, quality: '1080p', confidence: 90 },
+        { pattern: /\.blu-ray\./i, quality: '1080p', confidence: 90 },
+        { pattern: /\.remux\./i, quality: '2160p', confidence: 95 },
+        { pattern: /\.webrip\./i, quality: '1080p', confidence: 85 },
+        { pattern: /\.hdtv\./i, quality: '720p', confidence: 80 },
+        { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
+        { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
+    ];
+    exactPatterns = [
+        { pattern: /\b2160p\b/i, quality: '2160p' },
+        { pattern: /\b4k\b/i, quality: '2160p' },
+        { pattern: /\b1080p\b/i, quality: '1080p' },
+        { pattern: /\b720p\b/i, quality: '720p' },
+        { pattern: /\bhd\b/i, quality: 'HD' }
+    ];
+    extractQuality(title) {
+        const cleanTitle = title.toLowerCase();
+        // Primeiro: padrões exatos de alta confiança
+        for (const { pattern, quality } of this.exactPatterns) {
+            if (pattern.test(cleanTitle)) {
+                return quality;
+            }
+        }
+        // Segundo: padrões de alta confiança
+        for (const { pattern, quality, confidence } of this.qualityPatterns) {
+            if (pattern.test(cleanTitle) && confidence >= 95) {
+                return quality;
+            }
+        }
+        // Terceiro: padrões de média confiança
+        for (const { pattern, quality, confidence } of this.qualityPatterns) {
+            if (pattern.test(cleanTitle) && confidence >= 80) {
+                return quality;
+            }
+        }
+        // Fallback: inferir do contexto
+        return this.inferQualityFromContext(cleanTitle);
+    }
+    inferQualityFromContext(titleLower) {
+        if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
+            return '1080p';
+        }
+        if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
+            return '1080p';
+        }
+        if (titleLower.includes('hdtv')) {
+            return '720p';
+        }
+        // CORREÇÃO MOBILE: Nunca retornar "unknown"
+        return '720p'; // Default seguro para mobile
+    }
+    extractQualityFromFilename(filename) {
+        return this.extractQuality(filename);
+    }
+    extractQualityFromStreamName(name) {
+        if (!name)
+            return '720p';
+        return this.extractQuality(name);
+    }
+}
 class StreamHandler {
     rdService;
     magnetService;
     cacheService;
     torrentScraper;
     imdbScraper;
+    qualityDetector;
     logger;
     processingConfig = {
         maxConcurrentTorrents: 2,
@@ -20,18 +105,17 @@ class StreamHandler {
         allowPendingStreams: false, // DESATIVADO para mobile
         maxPendingStreams: 8,
         cacheTTL: {
-            downloaded: 86400000,
-            downloading: 300000,
-            error: 120000
+            downloaded: 86400000, // 24 horas
+            downloading: 300000, // 5 minutos
+            error: 120000 // 2 minutos
         }
     };
     qualityPriority = {
-        '4K': 5,
         '2160p': 5,
         '1080p': 4,
         '720p': 3,
-        '480p': 2,
-        'SD': 1
+        'HD': 2,
+        '480p': 1
     };
     videoExtensions = [
         '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -60,9 +144,11 @@ class StreamHandler {
         this.cacheService = new CacheService_1.CacheService();
         this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
+        this.qualityDetector = new QualityDetector();
         this.logger = new logger_1.Logger('StreamHandler');
-        this.logger.info('StreamHandler initialized', {
-            processingConfig: this.processingConfig
+        this.logger.info('StreamHandler initialized with MOBILE COMPATIBILITY', {
+            processingConfig: this.processingConfig,
+            qualityDetection: 'Centralized robust detection'
         });
     }
     async handleStreamRequest(request) {
@@ -77,11 +163,12 @@ class StreamHandler {
             if (cachedStreams && cachedStreams.length > 0) {
                 const allDownloaded = cachedStreams.every(stream => stream.status === 'downloaded');
                 if (allDownloaded) {
+                    const qualities = cachedStreams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name));
                     this.logger.debug('Returning cached downloaded streams', {
                         requestId,
                         cacheKey,
                         streamCount: cachedStreams.length,
-                        qualities: cachedStreams.map(s => this.extractQualityFromName(s.name || 'unknown'))
+                        qualities
                     });
                     return { streams: cachedStreams };
                 }
@@ -95,23 +182,18 @@ class StreamHandler {
                 }
             }
             let streams = await this.processStreamRequest(request);
-            // CORREÇÃO MOBILE: Filtrar apenas streams com URL válida
-            streams = streams.filter(stream => stream.url && stream.url.trim() !== '' && stream.url.startsWith('http'));
-            // CORREÇÃO MOBILE: Remover notWebReady de todos os streams
-            streams.forEach(stream => {
-                if (stream.behaviorHints) {
-                    stream.behaviorHints.notWebReady = false;
-                }
-            });
+            // CORREÇÃO MOBILE: Filtro reforçado
+            streams = this.applyMobileCompatibilityFilter(streams);
             if (streams.length > 0) {
                 const cacheTTL = this.calculateDynamicCacheTTL(streams);
                 this.cacheService.set(cacheKey, streams, cacheTTL);
+                const qualities = streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name));
                 this.logger.info('Cached new mobile-compatible streams', {
                     requestId,
                     cacheKey,
                     streamCount: streams.length,
                     cacheTTL: `${cacheTTL / 60000}min`,
-                    qualities: streams.map(s => this.extractQualityFromName(s.name || 'unknown')),
+                    qualities,
                     statuses: streams.map(s => s.status)
                 });
             }
@@ -124,6 +206,46 @@ class StreamHandler {
             });
             return { streams: [] };
         }
+    }
+    applyMobileCompatibilityFilter(streams) {
+        return streams.filter(stream => {
+            // 1. URL válida e acessível
+            if (!stream.url || !stream.url.startsWith('http')) {
+                this.logger.debug('Filtered stream: invalid URL', { url: stream.url });
+                return false;
+            }
+            // 2. Status deve ser downloaded
+            if (stream.status !== 'downloaded') {
+                this.logger.debug('Filtered stream: not downloaded', { status: stream.status });
+                return false;
+            }
+            // 3. Qualidade deve ser válida (não unknown)
+            const quality = this.qualityDetector.extractQualityFromStreamName(stream.name);
+            if (quality === 'unknown') {
+                this.logger.debug('Filtered stream: unknown quality', { name: stream.name });
+                return false;
+            }
+            // 4. Nome não pode conter "unknown"
+            if (stream.name && stream.name.toLowerCase().includes('unknown')) {
+                this.logger.debug('Filtered stream: name contains unknown', { name: stream.name });
+                return false;
+            }
+            return true;
+        }).map(stream => {
+            // CORREÇÃO MOBILE: Garantir behaviorHints compatível
+            stream.behaviorHints = {
+                ...stream.behaviorHints,
+                notWebReady: false
+            };
+            // CORREÇÃO MOBILE: Garantir qualidade no nome
+            if (stream.name) {
+                const currentQuality = this.qualityDetector.extractQualityFromStreamName(stream.name);
+                if (!stream.name.match(/(2160p|1080p|720p|HD|480p)/i)) {
+                    stream.name = `Brasil RD • ${currentQuality.toUpperCase()} • ${stream.name}`;
+                }
+            }
+            return stream;
+        });
     }
     calculateDynamicCacheTTL(streams) {
         if (streams.length === 0) {
@@ -263,10 +385,11 @@ class StreamHandler {
             maxConcurrent: this.processingConfig.maxConcurrentTorrents
         });
         const streams = await this.processTorrentsWithRateLimit(resultsToProcess, request);
+        const streamQualities = streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name));
         this.logger.info('Completed torrent processing', {
             requestId: request.id,
             totalStreams: streams.length,
-            qualities: streams.map(s => this.extractQualityFromName(s.name || 'unknown')),
+            qualities: streamQualities,
             statuses: streams.map(s => s.status)
         });
         return this.sortStreamsByQuality(streams);
@@ -419,15 +542,17 @@ class StreamHandler {
                 this.logger.debug('No stream link available for episode file', { requestId, torrentId, fileId: targetFile.id });
                 return null;
             }
+            const fileQuality = this.qualityDetector.extractQualityFromFilename(targetFile.path);
+            const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
             const stream = {
-                title: `${title} S${season}E${episode}`,
+                title: `${title} ${episodeTag}`,
                 url: streamLink,
-                name: `Brasil RD - S${season}E${episode}`,
-                description: `Conteudo via temporada completa - S${season}E${episode}`,
+                name: `Brasil RD • ${fileQuality.toUpperCase()} • ${episodeTag}`,
+                description: `Conteúdo via temporada completa • ${episodeTag}`,
                 behaviorHints: {
-                    notWebReady: false, // CORREÇÃO MOBILE
+                    notWebReady: false,
                     bingeGroup: `br-season-${imdbId}-${season}`,
-                    filename: this.sanitizeFilename(`${title} S${season}E${episode}`)
+                    filename: this.sanitizeFilename(`${title} ${episodeTag}`)
                 },
                 torrentId: torrentId,
                 status: 'downloaded'
@@ -436,7 +561,8 @@ class StreamHandler {
                 requestId,
                 season,
                 episode,
-                torrentId
+                torrentId,
+                quality: fileQuality
             });
             return stream;
         }
@@ -528,7 +654,7 @@ class StreamHandler {
                 totalFiles: episodeFiles.length,
                 files: episodeFiles.map(f => ({
                     path: f.path,
-                    quality: this.extractQualityFromFilename(f.path),
+                    quality: this.qualityDetector.extractQualityFromFilename(f.path),
                     size: f.bytes
                 }))
             });
@@ -539,14 +665,14 @@ class StreamHandler {
                 processedFiles.add(file.id);
                 try {
                     const streamLink = await this.rdService.getStreamLinkForFile(torrentId, file.id, request.apiKey);
-                    const quality = this.extractQualityFromFilename(file.path);
+                    const fileQuality = this.qualityDetector.extractQualityFromFilename(file.path);
                     if (streamLink) {
-                        const stream = this.createSeriesStream(torrent, request, torrentId, streamLink, file.path, requestEpisode.season, requestEpisode.episode, quality, 'downloaded');
+                        const stream = this.createSeriesStream(torrent, request, torrentId, streamLink, file.path, requestEpisode.season, requestEpisode.episode, fileQuality, 'downloaded');
                         validStreams.push(stream);
                         this.logger.debug('Created mobile-compatible stream for episode file', {
                             requestId: request.id,
                             fileId: file.id,
-                            quality,
+                            quality: fileQuality,
                             hasUrl: !!stream.url
                         });
                     }
@@ -559,12 +685,13 @@ class StreamHandler {
                     });
                 }
             }
+            const streamQualities = validStreams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name));
             this.logger.info('Created mobile-compatible streams for series episode', {
                 requestId: request.id,
                 season: requestEpisode.season,
                 episode: requestEpisode.episode,
                 streamCount: validStreams.length,
-                qualities: validStreams.map(s => this.extractQualityFromName(s.name || 'unknown'))
+                qualities: streamQualities
             });
             return validStreams.length > 0 ? validStreams : null;
         }
@@ -580,7 +707,8 @@ class StreamHandler {
             try {
                 const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey);
                 if (streamLink) {
-                    const stream = this.createSeriesStream(torrent, request, torrentId, streamLink, mainFile.path, 1, 1, torrent.quality, 'downloaded');
+                    const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
+                    const stream = this.createSeriesStream(torrent, request, torrentId, streamLink, mainFile.path, 1, 1, fileQuality, 'downloaded');
                     streams.push(stream);
                 }
             }
@@ -603,13 +731,14 @@ class StreamHandler {
         try {
             const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey);
             if (streamLink) {
+                const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
                 const stream = {
                     title: `${torrent.title} [${torrent.provider}]`,
                     url: streamLink,
-                    name: `Brasil RD - ${torrent.quality}`,
-                    description: `Conteudo via scraping - ${torrent.language}`,
+                    name: `Brasil RD • ${fileQuality.toUpperCase()}`,
+                    description: `Conteúdo via scraping • ${torrent.language}`,
                     behaviorHints: {
-                        notWebReady: false, // CORREÇÃO MOBILE
+                        notWebReady: false,
                         bingeGroup: `br-scraped-${request.id}`,
                         filename: this.sanitizeFilename(torrent.title)
                     },
@@ -630,15 +759,16 @@ class StreamHandler {
         }
     }
     createSeriesStream(torrent, request, torrentId, streamLink, filePath, season, episode, quality, status) {
-        const detectedQuality = quality !== 'unknown' ? quality : torrent.quality;
-        const episodeTag = `S${season}E${episode}`;
+        // CORREÇÃO: Usar detector centralizado de qualidade
+        const detectedQuality = this.qualityDetector.extractQuality(filePath);
+        const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
         return {
             title: `${torrent.title} [${torrent.provider}] ${episodeTag}`,
             url: streamLink,
-            name: `Brasil RD - ${detectedQuality} - ${episodeTag}`,
-            description: `Conteudo via scraping - ${torrent.language} - ${episodeTag}`,
+            name: `Brasil RD • ${detectedQuality.toUpperCase()} • ${episodeTag}`,
+            description: `Conteúdo via scraping • ${torrent.language} • ${episodeTag}`,
             behaviorHints: {
-                notWebReady: false, // CORREÇÃO MOBILE
+                notWebReady: false,
                 bingeGroup: `br-scraped-${request.id}-${season}`,
                 filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
             },
@@ -655,45 +785,12 @@ class StreamHandler {
             }
         }
         return episodeFiles.sort((a, b) => {
-            const qualityA = this.extractQualityFromFilename(a.path);
-            const qualityB = this.extractQualityFromFilename(b.path);
+            const qualityA = this.qualityDetector.extractQualityFromFilename(a.path);
+            const qualityB = this.qualityDetector.extractQualityFromFilename(b.path);
             const qualityScoreA = this.qualityPriority[qualityA] || 0;
             const qualityScoreB = this.qualityPriority[qualityB] || 0;
             return qualityScoreB - qualityScoreA;
         });
-    }
-    extractQualityFromFilename(filename) {
-        const qualityPatterns = [
-            /2160p|4k/i,
-            /1080p/i,
-            /720p/i,
-            /480p/i
-        ];
-        for (const pattern of qualityPatterns) {
-            if (pattern.test(filename)) {
-                return pattern.source.includes('2160') ? '2160p' :
-                    pattern.source.includes('1080') ? '1080p' :
-                        pattern.source.includes('720') ? '720p' : '480p';
-            }
-        }
-        return 'unknown';
-    }
-    extractQualityFromName(name) {
-        const nameLower = (name || '').toLowerCase();
-        const qualityPatterns = [
-            /2160p|4k/i,
-            /1080p/i,
-            /720p/i,
-            /480p/i
-        ];
-        for (const pattern of qualityPatterns) {
-            if (pattern.test(nameLower)) {
-                return pattern.source.includes('2160') ? '2160p' :
-                    pattern.source.includes('1080') ? '1080p' :
-                        pattern.source.includes('720') ? '720p' : '480p';
-            }
-        }
-        return 'unknown';
     }
     async fetchTitleFromImdb(request) {
         const imdbId = this.extractImdbIdFromRequest(request);
@@ -851,15 +948,16 @@ class StreamHandler {
                 });
                 return null;
             }
+            const fileQuality = this.qualityDetector.extractQualityFromFilename(targetFile.path);
             const streamTitle = this.generateEpisodeStreamTitle(magnet, requestEpisode.season, requestEpisode.episode);
-            const streamName = `Brasil RD - ${magnet.quality} - S${requestEpisode.season}E${requestEpisode.episode}`;
+            const streamName = `Brasil RD • ${fileQuality.toUpperCase()} • S${requestEpisode.season}E${requestEpisode.episode}`;
             const stream = {
                 title: streamTitle,
                 url: streamLink,
                 name: streamName,
-                description: `Conteudo curado - ${magnet.language} - Episodio ${requestEpisode.episode}`,
+                description: `Conteúdo curado • ${magnet.language} • Episódio ${requestEpisode.episode}`,
                 behaviorHints: {
-                    notWebReady: false, // CORREÇÃO MOBILE
+                    notWebReady: false,
                     bingeGroup: `br-${request.id}`,
                     filename: this.sanitizeFilename(`${magnet.title} S${requestEpisode.season}E${requestEpisode.episode}`)
                 },
@@ -871,7 +969,8 @@ class StreamHandler {
                 season: requestEpisode.season,
                 episode: requestEpisode.episode,
                 torrentId,
-                status: stream.status
+                status: stream.status,
+                quality: fileQuality
             });
             return stream;
         }
@@ -896,15 +995,16 @@ class StreamHandler {
                 this.logger.debug('No stream link available for torrent', { requestId: request.id, torrentId });
                 return null;
             }
+            const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
             const streamTitle = this.generateStreamTitle(magnet);
-            const streamName = `Brasil RD - ${magnet.quality}`;
+            const streamName = `Brasil RD • ${fileQuality.toUpperCase()}`;
             const stream = {
                 title: streamTitle,
                 url: streamLink,
                 name: streamName,
-                description: `Conteudo curado - ${magnet.language} - Colecao Completa`,
+                description: `Conteúdo curado • ${magnet.language} • Coleção Completa`,
                 behaviorHints: {
-                    notWebReady: false, // CORREÇÃO MOBILE
+                    notWebReady: false,
                     bingeGroup: `br-${request.id}`,
                     filename: this.sanitizeFilename(magnet.title)
                 },
@@ -915,7 +1015,8 @@ class StreamHandler {
                 requestId: request.id,
                 magnetTitle: magnet.title,
                 torrentId,
-                status: stream.status
+                status: stream.status,
+                quality: fileQuality
             });
             return stream;
         }
@@ -1001,13 +1102,10 @@ class StreamHandler {
         });
     }
     calculateQualityScore(name) {
-        const nameLower = (name || '').toLowerCase();
-        for (const [quality, qualityScore] of Object.entries(this.qualityPriority)) {
-            if (nameLower.includes(quality.toLowerCase())) {
-                return qualityScore;
-            }
-        }
-        return 0;
+        if (!name)
+            return 0;
+        const quality = this.qualityDetector.extractQualityFromStreamName(name);
+        return this.qualityPriority[quality] || 0;
     }
     sanitizeFilename(filename) {
         return filename.replace(/[<>:"/\\|?*]/g, '_').substring(0, 255);

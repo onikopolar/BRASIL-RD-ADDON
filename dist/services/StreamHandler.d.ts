@@ -5,6 +5,7 @@ export declare class StreamHandler {
     private readonly cacheService;
     private readonly torrentScraper;
     private readonly imdbScraper;
+    private readonly qualityDetector;
     private readonly logger;
     private readonly processingConfig;
     private readonly qualityPriority;
@@ -20,6 +21,7 @@ export declare class StreamHandler {
     handleStreamRequest(request: StreamRequest): Promise<{
         streams: Stream[];
     }>;
+    private applyMobileCompatibilityFilter;
     private calculateDynamicCacheTTL;
     private processStreamRequest;
     private processSeriesRequest;
@@ -39,8 +41,6 @@ export declare class StreamHandler {
     private processMovieTorrent;
     private createSeriesStream;
     private findEpisodeFilesByQuality;
-    private extractQualityFromFilename;
-    private extractQualityFromName;
     private fetchTitleFromImdb;
     private sortFilesByEpisode;
     private extractEpisodeInfo;
