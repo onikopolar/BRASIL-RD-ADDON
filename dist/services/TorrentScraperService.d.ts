@@ -24,17 +24,8 @@ export declare class TorrentScraperService {
     private readonly qualityPatterns;
     constructor();
     searchTorrents(query: string, type?: 'movie' | 'series', targetSeason?: number): Promise<TorrentResult[]>;
-    /**
-     * DETECÇÃO DE QUALIDADE MUITO MELHORADA
-     */
     private extractQuality;
-    /**
-     * INFERÊNCIA INTELIGENTE PELO CONTEXTO
-     */
     private inferQualityFromContext;
-    /**
-     * DETECTAR QUALIDADE DE ARQUIVOS (quando disponível)
-     */
     private detectQualityFromFilename;
     private applyStrictFiltering;
     private isExactlyRelevant;

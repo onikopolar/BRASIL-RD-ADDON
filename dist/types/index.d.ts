@@ -53,6 +53,10 @@ export interface StreamRequest {
         language?: string;
         streamType?: string;
         maxResults?: string;
+        enableAggressiveSearch?: boolean;
+        minSeeders?: number;
+        requireExactMatch?: boolean;
+        maxConcurrentTorrents?: number;
     };
 }
 export interface CacheData<T> {

@@ -57,6 +57,11 @@ export interface StreamRequest {
     language?: string;
     streamType?: string;
     maxResults?: string;
+    // Novas propriedades para otimização
+    enableAggressiveSearch?: boolean;
+    minSeeders?: number;
+    requireExactMatch?: boolean;
+    maxConcurrentTorrents?: number;
   };
 }
 

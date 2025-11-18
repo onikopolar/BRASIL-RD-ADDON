@@ -104,25 +104,18 @@ class TorrentScraperService {
         'apostas', 'casino', 'bônus', 'aviator', 'blaze', 'bonus',
         'spam', 'advertisement', 'publicidade'
     ];
-    // PADRÕES DE DETECÇÃO DE QUALIDADE MELHORADOS
     qualityPatterns = [
-        // 4K/2160p - Alta prioridade (padrões específicos)
         { pattern: /\b(4k|2160p)\b/i, quality: '2160p', confidence: 100 },
         { pattern: /\b(uhd|ultra[\s\._-]?hd)\b/i, quality: '2160p', confidence: 90 },
         { pattern: /\b(3840x2160)\b/, quality: '2160p', confidence: 100 },
-        // 1080p - Padrões comuns
         { pattern: /\b(1080p|fhd|full[\s\._-]?hd)\b/i, quality: '1080p', confidence: 95 },
         { pattern: /\b(1920x1080)\b/, quality: '1080p', confidence: 100 },
-        // 720p
         { pattern: /\b(720p|hd[\s\._-]?rip)\b/i, quality: '720p', confidence: 90 },
         { pattern: /\b(1280x720)\b/, quality: '720p', confidence: 100 },
         { pattern: /\b(hdtv)\b/i, quality: '720p', confidence: 80 },
-        // 480p
         { pattern: /\b(480p|dvd[\s\._-]?rip)\b/i, quality: '480p', confidence: 85 },
         { pattern: /\b(852x480|720x480)\b/, quality: '480p', confidence: 100 },
-        // 360p
         { pattern: /\b(360p)\b/i, quality: '360p', confidence: 80 },
-        // INFERÊNCIA POR TAMANHO DE ARQUIVO
         { pattern: /\b(25gb|30gb|40gb|50gb|60gb|70gb|80gb)\b/i, quality: '2160p', confidence: 75 },
         { pattern: /\b(15gb|20gb|22gb|24gb)\b/i, quality: '2160p', confidence: 70 },
         { pattern: /\b(8gb|9gb|10gb|12gb|14gb)\b/i, quality: '1080p', confidence: 80 },
@@ -130,7 +123,6 @@ class TorrentScraperService {
         { pattern: /\b(2gb|3gb)\b/i, quality: '720p', confidence: 80 },
         { pattern: /\b(1gb|1\.5gb)\b/i, quality: '720p', confidence: 70 },
         { pattern: /\b(500mb|700mb|800mb)\b/i, quality: '480p', confidence: 75 },
-        // INFERÊNCIA POR FORMATO DE VÍDEO
         { pattern: /\b(bluray|blu[\s\._-]?ray|remux)\b/i, quality: '1080p', confidence: 85 },
         { pattern: /\b(web[\s\._-]?dl|webrip)\b/i, quality: '1080p', confidence: 80 },
         { pattern: /\b(brrip|bdrip)\b/i, quality: '1080p', confidence: 75 },
@@ -200,19 +192,14 @@ class TorrentScraperService {
             return [];
         }
     }
-    /**
-     * DETECÇÃO DE QUALIDADE MUITO MELHORADA
-     */
     extractQuality(title) {
         const titleLower = title.toLowerCase();
         let bestMatch = null;
-        // PRIMEIRO: Buscar por padrões específicos
         for (const { pattern, quality, confidence } of this.qualityPatterns) {
             if (pattern.test(titleLower)) {
                 if (!bestMatch || confidence > bestMatch.confidence) {
                     bestMatch = { quality, confidence };
                 }
-                // Se encontrou um padrão com confiança muito alta, retorna imediatamente
                 if (confidence >= 95) {
                     logger.debug('High confidence quality match', {
                         title,
@@ -224,7 +211,6 @@ class TorrentScraperService {
                 }
             }
         }
-        // SEGUNDO: Se encontrou algum padrão, retorna o melhor
         if (bestMatch) {
             logger.debug('Quality detected by pattern', {
                 title,
@@ -233,7 +219,6 @@ class TorrentScraperService {
             });
             return bestMatch.quality;
         }
-        // TERCEIRO: Inferir qualidade pelo contexto
         const inferredQuality = this.inferQualityFromContext(titleLower);
         logger.debug('Quality inferred from context', {
             title,
@@ -241,19 +226,13 @@ class TorrentScraperService {
         });
         return inferredQuality;
     }
-    /**
-     * INFERÊNCIA INTELIGENTE PELO CONTEXTO
-     */
     inferQualityFromContext(titleLower) {
-        // POR TIPO DE CONTEÚDO
         const currentYear = new Date().getFullYear();
         const yearMatch = titleLower.match(/(\d{4})/);
         const contentYear = yearMatch ? parseInt(yearMatch[1]) : 0;
-        // Conteúdo recente (últimos 3 anos) tende a ser maior qualidade
         if (contentYear >= currentYear - 3) {
             return '1080p';
         }
-        // POR TERMOS TÉCNICOS
         if (titleLower.includes('remux') || titleLower.includes('web-dl') ||
             titleLower.includes('bluray') || titleLower.includes('uhd')) {
             return '1080p';
@@ -266,18 +245,13 @@ class TorrentScraperService {
             titleLower.includes('scr') || titleLower.includes('r5')) {
             return 'SD';
         }
-        // POR PADRÕES DE SÉRIES (geralmente em boa qualidade)
         if (titleLower.match(/s\d{1,2}e\d{1,2}/i) ||
             titleLower.includes('season') ||
             titleLower.includes('temporada')) {
             return '1080p';
         }
-        // DEFAULT: HD (mais profissional que "unknown")
         return 'HD';
     }
-    /**
-     * DETECTAR QUALIDADE DE ARQUIVOS (quando disponível)
-     */
     detectQualityFromFilename(filename) {
         const filenameLower = filename.toLowerCase();
         for (const { pattern, quality, confidence } of this.qualityPatterns) {
@@ -441,7 +415,6 @@ class TorrentScraperService {
         }
         const queryWords = indexerResult.title.toLowerCase().split(' ').filter(word => word.length > 2);
         const seasonNumber = this.extractSeasonNumber(indexerResult.title);
-        // QUALIDADE DETECTADA INTELIGENTEMENTE
         const quality = this.extractQuality(indexerResult.title);
         return {
             title: this.cleanTitle(indexerResult.title),
@@ -449,7 +422,7 @@ class TorrentScraperService {
             seeders: indexerResult.seed_count || this.estimateSeeders('TorrentIndexer', quality),
             leechers: indexerResult.leech_count || 0,
             size: indexerResult.size || 'Size not specified',
-            quality: quality, // QUALIDADE MELHOR DETECTADA
+            quality: quality,
             provider: 'TorrentIndexer',
             language: this.extractLanguage(indexerResult.title),
             type,
@@ -561,7 +534,6 @@ class TorrentScraperService {
     }
     selectBestFromEachQuality(qualityGroups) {
         const bestResults = [];
-        // ORDEM DE QUALIDADE ATUALIZADA
         const qualityOrder = ['2160p', '1080p', '720p', 'HD', '480p', '360p', 'SD'];
         for (const quality of qualityOrder) {
             const group = qualityGroups.get(quality);
@@ -731,7 +703,6 @@ class TorrentScraperService {
     }
     createTorrentResultFromAPI(post, provider, type, query, magnet) {
         const title = post.title.rendered;
-        // QUALIDADE DETECTADA INTELIGENTEMENTE
         const quality = this.extractQuality(title);
         const size = this.extractSizeFromContent(post.content.rendered);
         const sizeInBytes = this.calculateSizeInBytes(size);
@@ -743,7 +714,7 @@ class TorrentScraperService {
             seeders: this.estimateSeeders(provider, quality),
             leechers: this.estimateLeechers(provider),
             size,
-            quality: quality, // QUALIDADE MELHOR DETECTADA
+            quality: quality,
             provider,
             language: this.extractLanguage(title),
             type,
@@ -754,7 +725,6 @@ class TorrentScraperService {
         };
     }
     createTorrentResult(title, provider, type, query) {
-        // QUALIDADE DETECTADA INTELIGENTEMENTE
         const quality = this.extractQuality(title);
         const size = this.extractSize(title);
         const sizeInBytes = this.calculateSizeInBytes(size);
@@ -766,7 +736,7 @@ class TorrentScraperService {
             seeders: this.estimateSeeders(provider, quality),
             leechers: this.estimateLeechers(provider),
             size,
-            quality: quality, // QUALIDADE MELHOR DETECTADA
+            quality: quality,
             provider,
             language: this.extractLanguage(title),
             type,
@@ -845,7 +815,6 @@ class TorrentScraperService {
                 score += phrase.split(' ').length * 15;
             }
         }
-        // SCORE DE QUALIDADE ATUALIZADO
         score += this.qualityPriority[quality] || 100;
         if (titleLower.includes('dual') || titleLower.includes('dublado') || titleLower.includes('portugues')) {
             score += 25;
@@ -997,7 +966,7 @@ class TorrentScraperService {
     }
     getRequestHeaders() {
         return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8',
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8,es;q=0.7',
             'Accept-Encoding': 'gzip, deflate, br',
@@ -1010,7 +979,7 @@ class TorrentScraperService {
     }
     getAPIHeaders() {
         return {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'User-Agent': 'BrasilRD-Addon/1.0 (+https://github.com/brasil-rd-addon)',
             'Accept': 'application/json',
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
             'Referer': 'https://bludv.net/',
