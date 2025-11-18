@@ -104,31 +104,6 @@ class TorrentScraperService {
         'apostas', 'casino', 'bônus', 'aviator', 'blaze', 'bonus',
         'spam', 'advertisement', 'publicidade'
     ];
-    qualityPatterns = [
-        { pattern: /\b(4k|2160p)\b/i, quality: '2160p', confidence: 100 },
-        { pattern: /\b(uhd|ultra[\s\._-]?hd)\b/i, quality: '2160p', confidence: 90 },
-        { pattern: /\b(3840x2160)\b/, quality: '2160p', confidence: 100 },
-        { pattern: /\b(1080p|fhd|full[\s\._-]?hd)\b/i, quality: '1080p', confidence: 95 },
-        { pattern: /\b(1920x1080)\b/, quality: '1080p', confidence: 100 },
-        { pattern: /\b(720p|hd[\s\._-]?rip)\b/i, quality: '720p', confidence: 90 },
-        { pattern: /\b(1280x720)\b/, quality: '720p', confidence: 100 },
-        { pattern: /\b(hdtv)\b/i, quality: '720p', confidence: 80 },
-        { pattern: /\b(480p|dvd[\s\._-]?rip)\b/i, quality: '480p', confidence: 85 },
-        { pattern: /\b(852x480|720x480)\b/, quality: '480p', confidence: 100 },
-        { pattern: /\b(360p)\b/i, quality: '360p', confidence: 80 },
-        { pattern: /\b(25gb|30gb|40gb|50gb|60gb|70gb|80gb)\b/i, quality: '2160p', confidence: 75 },
-        { pattern: /\b(15gb|20gb|22gb|24gb)\b/i, quality: '2160p', confidence: 70 },
-        { pattern: /\b(8gb|9gb|10gb|12gb|14gb)\b/i, quality: '1080p', confidence: 80 },
-        { pattern: /\b(4gb|5gb|6gb|7gb)\b/i, quality: '1080p', confidence: 75 },
-        { pattern: /\b(2gb|3gb)\b/i, quality: '720p', confidence: 80 },
-        { pattern: /\b(1gb|1\.5gb)\b/i, quality: '720p', confidence: 70 },
-        { pattern: /\b(500mb|700mb|800mb)\b/i, quality: '480p', confidence: 75 },
-        { pattern: /\b(bluray|blu[\s\._-]?ray|remux)\b/i, quality: '1080p', confidence: 85 },
-        { pattern: /\b(web[\s\._-]?dl|webrip)\b/i, quality: '1080p', confidence: 80 },
-        { pattern: /\b(brrip|bdrip)\b/i, quality: '1080p', confidence: 75 },
-        { pattern: /\b(dvdrip|dvdr)\b/i, quality: '480p', confidence: 80 },
-        { pattern: /\b(cam|ts|scr|tc|r5)\b/i, quality: 'SD', confidence: 90 }
-    ];
     constructor() {
         logger.info('TorrentScraperService initialized', {
             providers: this.providers.map(p => ({
@@ -151,11 +126,6 @@ class TorrentScraperService {
         });
         try {
             const seasonQueries = this.generateSeasonQueries(query, targetSeason);
-            logger.debug('Generated season queries', {
-                originalQuery: query,
-                targetSeason,
-                seasonQueries
-            });
             const torrentIndexerPromise = this.torrentIndexerConfig.enabled ?
                 Promise.all(seasonQueries.map(seasonQuery => this.searchTorrentIndexer(seasonQuery, type, targetSeason))).then(results => results.flat()) :
                 Promise.resolve([]);
@@ -163,10 +133,11 @@ class TorrentScraperService {
             const allPromises = [torrentIndexerPromise, ...traditionalSearchPromises];
             const settledResults = await Promise.allSettled(allPromises);
             const allResults = this.processSettledResults(settledResults);
-            const filteredResults = this.applyStrictFiltering(allResults, query, type, targetSeason);
+            // FILTRAGEM MENOS RESTRITIVA - 70% match em vez de 90%
+            const filteredResults = this.applyFlexibleFiltering(allResults, query, type, targetSeason);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             if (uniqueResults.length === 0) {
-                logger.info('No relevant results found after strict filtering', {
+                logger.info('No relevant results found after filtering', {
                     query,
                     type,
                     targetSeason,
@@ -178,7 +149,7 @@ class TorrentScraperService {
             const qualityGroups = this.groupByQuality(uniqueResults);
             const bestResults = this.selectBestFromEachQuality(qualityGroups);
             const duration = Date.now() - startTime;
-            this.logSearchResults(query, type, uniqueResults.length, bestResults, duration, qualityGroups, targetSeason, seasonQueries);
+            this.logSearchResults(query, type, uniqueResults.length, bestResults, duration, qualityGroups, targetSeason);
             return bestResults;
         }
         catch (error) {
@@ -186,147 +157,76 @@ class TorrentScraperService {
                 query,
                 type,
                 targetSeason,
-                error: error instanceof Error ? error.message : 'Unknown error',
-                stack: error instanceof Error ? error.stack : undefined
+                error: error instanceof Error ? error.message : 'Unknown error'
             });
             return [];
         }
     }
     extractQuality(title) {
         const titleLower = title.toLowerCase();
-        let bestMatch = null;
-        for (const { pattern, quality, confidence } of this.qualityPatterns) {
+        // DETECÇÃO PRECISA - APENAS PADRÕES EXPLÍCITOS
+        const qualityPatterns = [
+            { pattern: /\b(4k|2160p|uhd|ultra[\s\._-]?hd)\b/i, quality: '2160p' },
+            { pattern: /\b(1080p|fhd|full[\s\._-]?hd)\b/i, quality: '1080p' },
+            { pattern: /\b(720p|hd[\s\._-]?rip)\b/i, quality: '720p' },
+            { pattern: /\b(480p|dvd[\s\._-]?rip)\b/i, quality: '480p' },
+            { pattern: /\b(360p)\b/i, quality: '360p' },
+            { pattern: /\b(3840x2160)\b/, quality: '2160p' },
+            { pattern: /\b(1920x1080)\b/, quality: '1080p' },
+            { pattern: /\b(1280x720)\b/, quality: '720p' },
+            { pattern: /\b(852x480|720x480)\b/, quality: '480p' }
+        ];
+        for (const { pattern, quality } of qualityPatterns) {
             if (pattern.test(titleLower)) {
-                if (!bestMatch || confidence > bestMatch.confidence) {
-                    bestMatch = { quality, confidence };
-                }
-                if (confidence >= 95) {
-                    logger.debug('High confidence quality match', {
-                        title,
-                        quality,
-                        confidence,
-                        pattern: pattern.source
-                    });
-                    return quality;
-                }
-            }
-        }
-        if (bestMatch) {
-            logger.debug('Quality detected by pattern', {
-                title,
-                quality: bestMatch.quality,
-                confidence: bestMatch.confidence
-            });
-            return bestMatch.quality;
-        }
-        const inferredQuality = this.inferQualityFromContext(titleLower);
-        logger.debug('Quality inferred from context', {
-            title,
-            inferredQuality
-        });
-        return inferredQuality;
-    }
-    inferQualityFromContext(titleLower) {
-        const currentYear = new Date().getFullYear();
-        const yearMatch = titleLower.match(/(\d{4})/);
-        const contentYear = yearMatch ? parseInt(yearMatch[1]) : 0;
-        if (contentYear >= currentYear - 3) {
-            return '1080p';
-        }
-        if (titleLower.includes('remux') || titleLower.includes('web-dl') ||
-            titleLower.includes('bluray') || titleLower.includes('uhd')) {
-            return '1080p';
-        }
-        if (titleLower.includes('dvdrip') || titleLower.includes('dvdr') ||
-            titleLower.includes('hdtv')) {
-            return '720p';
-        }
-        if (titleLower.includes('cam') || titleLower.includes('ts') ||
-            titleLower.includes('scr') || titleLower.includes('r5')) {
-            return 'SD';
-        }
-        if (titleLower.match(/s\d{1,2}e\d{1,2}/i) ||
-            titleLower.includes('season') ||
-            titleLower.includes('temporada')) {
-            return '1080p';
-        }
-        return 'HD';
-    }
-    detectQualityFromFilename(filename) {
-        const filenameLower = filename.toLowerCase();
-        for (const { pattern, quality, confidence } of this.qualityPatterns) {
-            if (pattern.test(filenameLower)) {
-                logger.debug('Quality detected from filename', {
-                    filename,
+                logger.debug('Quality detected by explicit pattern', {
+                    title,
                     quality,
-                    confidence
+                    pattern: pattern.source
                 });
                 return quality;
             }
         }
-        return this.inferQualityFromContext(filenameLower);
+        // SE NÃO ENCONTROU PADRÃO EXPLÍCITO, RETORNAR "unknown"
+        // EVITAR INFERÊNCIA QUE CAUSA ERROS
+        logger.debug('No explicit quality found, returning unknown', {
+            title,
+            detectedAs: 'unknown'
+        });
+        return 'unknown';
     }
-    applyStrictFiltering(results, originalQuery, type, targetSeason) {
+    applyFlexibleFiltering(results, originalQuery, type, targetSeason) {
         const filteredResults = [];
         const mainTitle = this.extractMainTitle(originalQuery);
         const essentialKeywords = this.extractEssentialKeywords(mainTitle);
-        logger.debug('Applying strict filtering', {
-            originalQuery,
-            mainTitle,
-            essentialKeywords,
-            totalResults: results.length
-        });
         for (const result of results) {
-            if (this.isExactlyRelevant(result.title, mainTitle, essentialKeywords, type, targetSeason)) {
+            if (this.isRelevant(result.title, mainTitle, essentialKeywords, type, targetSeason)) {
                 filteredResults.push(result);
             }
         }
-        logger.info('Strict filtering completed', {
+        logger.info('Flexible filtering completed', {
             originalCount: results.length,
             filteredCount: filteredResults.length,
-            removedCount: results.length - filteredResults.length,
-            essentialKeywords
+            removedCount: results.length - filteredResults.length
         });
         return filteredResults;
     }
-    isExactlyRelevant(title, mainTitle, essentialKeywords, type, targetSeason) {
+    isRelevant(title, mainTitle, essentialKeywords, type, targetSeason) {
         const titleLower = title.toLowerCase();
         const mainTitleLower = mainTitle.toLowerCase();
+        // Filtrar conteúdo promocional
         if (this.isPromotionalContent(titleLower)) {
-            logger.debug('Filtered promotional content', { title });
             return false;
         }
+        // Para séries, verificar temporada
         if (type === 'series' && targetSeason) {
-            if (!this.isCorrectSeason(titleLower, targetSeason)) {
-                logger.debug('Filtered due to season mismatch', {
-                    title,
-                    expectedSeason: targetSeason,
-                    foundSeason: this.extractSeasonNumber(titleLower)
-                });
+            const titleSeason = this.extractSeasonNumber(titleLower);
+            if (titleSeason !== null && titleSeason !== targetSeason) {
                 return false;
             }
         }
-        if (this.containsMainTitle(titleLower, mainTitleLower)) {
-            logger.debug('Approved - contains main title', { title, mainTitle });
-            return true;
-        }
+        // Match mais flexível - 70% em vez de 90%
         const matchScore = this.calculateKeywordMatch(titleLower, essentialKeywords);
-        const isRelevant = matchScore >= 0.9;
-        if (!isRelevant) {
-            logger.debug('Filtered - insufficient keyword match', {
-                title,
-                essentialKeywords,
-                matchScore: `${(matchScore * 100).toFixed(1)}%`,
-                required: '90%'
-            });
-        }
-        else {
-            logger.debug('Approved - high keyword match', {
-                title,
-                matchScore: `${(matchScore * 100).toFixed(1)}%`
-            });
-        }
-        return isRelevant;
+        return matchScore >= 0.7; // REDUZIDO de 0.9 para 0.7
     }
     extractMainTitle(query) {
         return query
@@ -343,10 +243,7 @@ class TorrentScraperService {
             .split(' ')
             .filter(word => word.length > 2 &&
             !this.ignoredWords.has(word))
-            .slice(0, 6);
-    }
-    containsMainTitle(title, mainTitle) {
-        return title.includes(mainTitle);
+            .slice(0, 4); // Reduzido de 6 para 4 keywords
     }
     calculateKeywordMatch(title, essentialKeywords) {
         if (essentialKeywords.length === 0)
@@ -357,9 +254,24 @@ class TorrentScraperService {
     isPromotionalContent(title) {
         return this.promotionalKeywords.some(keyword => title.includes(keyword));
     }
-    isCorrectSeason(title, targetSeason) {
-        const titleSeason = this.extractSeasonNumber(title);
-        return titleSeason === null || titleSeason === targetSeason;
+    extractSeasonNumber(text) {
+        const patterns = [
+            /temporada\s*(\d+)/i,
+            /(\d+)\s*temporada/i,
+            /season\s*(\d+)/i,
+            /s(\d+)/i,
+            /(\d+)\s*ª?\s*temp/i
+        ];
+        for (const pattern of patterns) {
+            const match = text.match(pattern);
+            if (match) {
+                const season = parseInt(match[1]);
+                if (!isNaN(season) && season > 0) {
+                    return season;
+                }
+            }
+        }
+        return null;
     }
     async searchTorrentIndexer(query, type, targetSeason) {
         if (!this.torrentIndexerConfig.enabled) {
@@ -376,7 +288,6 @@ class TorrentScraperService {
                 params.season = targetSeason.toString();
             }
             const searchUrl = `${this.torrentIndexerConfig.baseUrl}/search`;
-            logger.debug('Searching Torrent Indexer', { searchUrl, params });
             const response = await axios_1.default.get(searchUrl, {
                 timeout: this.torrentIndexerConfig.timeout,
                 headers: this.getTorrentIndexerHeaders(),
@@ -384,19 +295,10 @@ class TorrentScraperService {
             });
             const data = response.data;
             if (!data.results || !Array.isArray(data.results)) {
-                logger.debug('Torrent Indexer returned no results or invalid format', {
-                    resultsCount: data.results?.length || 0
-                });
                 return [];
             }
-            const results = data.results.slice(0, 20);
+            const results = data.results.slice(0, 25); // Aumentado de 20 para 25
             const mappedResults = results.map((indexerResult) => this.mapTorrentIndexerResult(indexerResult, type)).filter(Boolean);
-            logger.debug('Torrent Indexer search completed', {
-                query,
-                type,
-                targetSeason,
-                resultsFound: mappedResults.length
-            });
             return mappedResults;
         }
         catch (error) {
@@ -450,17 +352,11 @@ class TorrentScraperService {
             .replace(/\s+/g, ' ')
             .trim();
         if (cleanQuery.length < 2) {
-            queries.push(`Temporada ${targetSeason}`, `Season ${targetSeason}`, `${targetSeason}ª Temporada`);
+            queries.push(`Temporada ${targetSeason}`, `Season ${targetSeason}`);
         }
         else {
-            queries.push(`${cleanQuery} Temporada ${targetSeason}`, `${cleanQuery} ${targetSeason}ª Temporada`, `${cleanQuery} Season ${targetSeason}`, `${cleanQuery} S${targetSeason}`, `${cleanQuery} T${targetSeason}`, `${cleanQuery} ${targetSeason}º Temporada`, `${cleanQuery} ${targetSeason}ª Temp`, `"${cleanQuery}" "${targetSeason}ª Temporada"`, `"${cleanQuery}" "Temporada ${targetSeason}"`);
+            queries.push(`${cleanQuery} Temporada ${targetSeason}`, `${cleanQuery} Season ${targetSeason}`, `${cleanQuery} S${targetSeason}`);
         }
-        logger.debug('Generated season queries', {
-            baseQuery,
-            cleanQuery,
-            targetSeason,
-            queries
-        });
         return [...new Set(queries)];
     }
     processSettledResults(settledResults) {
@@ -468,38 +364,12 @@ class TorrentScraperService {
         settledResults.forEach((result, index) => {
             if (index === 0 && this.torrentIndexerConfig.enabled) {
                 if (result.status === 'fulfilled') {
-                    if (result.value.length > 0) {
-                        allResults.push(...result.value);
-                        logger.debug('Torrent Indexer returned results', {
-                            results: result.value.length
-                        });
-                    }
-                }
-                else {
-                    logger.debug('Torrent Indexer failed', {
-                        error: result.reason instanceof Error ? result.reason.message : 'Unknown error'
-                    });
+                    allResults.push(...result.value);
                 }
             }
             else {
-                const providerIndex = (index - (this.torrentIndexerConfig.enabled ? 1 : 0)) % this.providers.length;
-                const provider = this.providers[providerIndex];
                 if (result.status === 'fulfilled') {
-                    if (result.value.length > 0) {
-                        allResults.push(...result.value);
-                        logger.debug('Provider returned results', {
-                            provider: provider.name,
-                            results: result.value.length,
-                            usesAPI: provider.usesAPI || false
-                        });
-                    }
-                }
-                else {
-                    logger.debug('Provider failed', {
-                        provider: provider.name,
-                        error: result.reason instanceof Error ? result.reason.message : 'Unknown error',
-                        usesAPI: provider.usesAPI || false
-                    });
+                    allResults.push(...result.value);
                 }
             }
         });
@@ -516,8 +386,7 @@ class TorrentScraperService {
         }
         logger.debug('Removed duplicate results', {
             originalCount: results.length,
-            uniqueCount: uniqueResults.length,
-            duplicatesRemoved: results.length - uniqueResults.length
+            uniqueCount: uniqueResults.length
         });
         return uniqueResults;
     }
@@ -534,7 +403,7 @@ class TorrentScraperService {
     }
     selectBestFromEachQuality(qualityGroups) {
         const bestResults = [];
-        const qualityOrder = ['2160p', '1080p', '720p', 'HD', '480p', '360p', 'SD'];
+        const qualityOrder = ['2160p', '1080p', '720p', '480p', '360p', 'HD', 'SD', 'unknown'];
         for (const quality of qualityOrder) {
             const group = qualityGroups.get(quality);
             if (group && group.length > 0) {
@@ -545,20 +414,12 @@ class TorrentScraperService {
                     if (b.seeders !== a.seeders) {
                         return b.seeders - a.seeders;
                     }
-                    const providerPriorityA = this.getProviderPriority(a.provider);
-                    const providerPriorityB = this.getProviderPriority(b.provider);
-                    if (providerPriorityB !== providerPriorityA) {
-                        return providerPriorityB - providerPriorityA;
-                    }
-                    if (b.sizeInBytes !== a.sizeInBytes) {
-                        return b.sizeInBytes - a.sizeInBytes;
-                    }
                     return 0;
-                }).slice(0, 2);
+                }).slice(0, 3); // Aumentado de 2 para 3 por qualidade
                 bestResults.push(...bestInQuality);
             }
         }
-        return bestResults.slice(0, 8);
+        return bestResults.slice(0, 15); // Aumentado para 15 streams
     }
     getProviderPriority(providerName) {
         if (providerName === 'TorrentIndexer') {
@@ -567,16 +428,10 @@ class TorrentScraperService {
         const provider = this.providers.find(p => p.name === providerName);
         return provider?.priority || 1;
     }
-    logSearchResults(query, type, totalResults, bestResults, duration, qualityGroups, targetSeason, seasonQueries) {
+    logSearchResults(query, type, totalResults, bestResults, duration, qualityGroups, targetSeason) {
         const qualityDistribution = {};
         qualityGroups.forEach((results, quality) => {
             qualityDistribution[quality] = results.length;
-        });
-        const providerDistribution = {};
-        qualityGroups.forEach((results) => {
-            results.forEach(result => {
-                providerDistribution[result.provider] = (providerDistribution[result.provider] || 0) + 1;
-            });
         });
         logger.info('Search completed successfully', {
             query,
@@ -586,15 +441,10 @@ class TorrentScraperService {
             bestResults: bestResults.length,
             duration: `${duration}ms`,
             qualityDistribution,
-            providerDistribution,
-            selectedQualities: bestResults.map(r => r.quality),
-            selectedProviders: bestResults.map(r => r.provider),
-            queriesUsed: seasonQueries?.length || 1,
-            torrentIndexerUsed: this.torrentIndexerConfig.enabled
+            selectedQualities: bestResults.map(r => r.quality)
         });
     }
     async searchProvider(provider, query, type, targetSeason) {
-        const startTime = Date.now();
         try {
             if (provider.usesAPI && provider.apiEndpoint) {
                 return await this.searchViaAPI(provider, query, type, targetSeason);
@@ -604,14 +454,6 @@ class TorrentScraperService {
             }
         }
         catch (error) {
-            const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-            logger.debug('Error searching provider', {
-                provider: provider.name,
-                query,
-                targetSeason,
-                usesAPI: provider.usesAPI || false,
-                error: errorMessage
-            });
             return [];
         }
     }
@@ -624,19 +466,10 @@ class TorrentScraperService {
         return this.parseAPIResults(response.data, provider, query, type, targetSeason);
     }
     async searchViaHTML(provider, query, type, targetSeason) {
-        const startTime = Date.now();
         const searchUrl = `${provider.baseUrl}${provider.searchPath}${encodeURIComponent(query)}`;
         const html = await this.fetchWithRetry(searchUrl, provider.timeout);
         const rawResults = this.parseHtmlResults(html, provider, query, type, targetSeason);
         const resultsWithMagnets = await this.enrichWithMagnets(rawResults, provider, html);
-        const duration = Date.now() - startTime;
-        logger.debug('Provider processed successfully', {
-            provider: provider.name,
-            query,
-            results: resultsWithMagnets.length,
-            duration: `${duration}ms`,
-            usesAPI: provider.usesAPI || false
-        });
         return resultsWithMagnets;
     }
     parseAPIResults(posts, provider, query, type, targetSeason) {
@@ -644,24 +477,18 @@ class TorrentScraperService {
         for (const post of posts) {
             try {
                 const title = post.title.rendered;
-                if (!title || title.length < 5) {
+                if (!title || title.length < 5)
                     continue;
-                }
-                if (!this.isRelevantResult(title, query, type, targetSeason)) {
+                if (!this.isRelevant(title, this.extractMainTitle(query), this.extractEssentialKeywords(query), type, targetSeason))
                     continue;
-                }
                 const magnet = this.extractMagnetFromContent(post.content.rendered);
-                if (!magnet) {
+                if (!magnet)
                     continue;
-                }
                 const result = this.createTorrentResultFromAPI(post, provider.name, type, query, magnet);
                 results.push(result);
             }
             catch (error) {
-                logger.warn('Error parsing API item', {
-                    provider: provider.name,
-                    error: error instanceof Error ? error.message : 'Unknown error'
-                });
+                // Ignore parsing errors
             }
         }
         return results;
@@ -674,28 +501,18 @@ class TorrentScraperService {
                 const $element = $(element);
                 const titleElement = $element.find(provider.titleSelector).first();
                 const title = titleElement.text().trim();
-                if (!title || title.length < 5) {
+                if (!title || title.length < 5)
                     return;
-                }
-                if (!this.isRelevantResult(title, query, type, targetSeason)) {
+                if (!this.isRelevant(title, this.extractMainTitle(query), this.extractEssentialKeywords(query), type, targetSeason))
                     return;
-                }
                 const result = this.createTorrentResult(title, provider.name, type, query);
                 results.push(result);
             }
             catch (error) {
-                logger.warn('Error parsing HTML item', {
-                    provider: provider.name,
-                    error: error instanceof Error ? error.message : 'Unknown error'
-                });
+                // Ignore parsing errors
             }
         });
         return results;
-    }
-    isRelevantResult(title, query, type, targetSeason) {
-        const mainTitle = this.extractMainTitle(query);
-        const essentialKeywords = this.extractEssentialKeywords(mainTitle);
-        return this.isExactlyRelevant(title, mainTitle, essentialKeywords, type, targetSeason);
     }
     extractMagnetFromContent(content) {
         const magnetMatch = content.match(/magnet:\?[^"'\s<>]+/);
@@ -797,11 +614,6 @@ class TorrentScraperService {
             return { magnet: magnetLink || '' };
         }
         catch (error) {
-            logger.warn('Error fetching magnet for result', {
-                title: result.title,
-                provider: provider.name,
-                error: error instanceof Error ? error.message : 'Unknown error'
-            });
             return { magnet: '' };
         }
     }
@@ -809,36 +621,20 @@ class TorrentScraperService {
         let score = 0;
         const titleLower = title.toLowerCase();
         const queryLower = query.toLowerCase();
-        const mainPhrases = this.extractMainPhrases(queryLower);
-        for (const phrase of mainPhrases) {
-            if (titleLower.includes(phrase)) {
-                score += phrase.split(' ').length * 15;
+        // Score base por palavras-chave
+        const words = queryLower.split(' ').filter(word => word.length > 2);
+        for (const word of words) {
+            if (titleLower.includes(word)) {
+                score += 10;
             }
         }
-        score += this.qualityPriority[quality] || 100;
-        if (titleLower.includes('dual') || titleLower.includes('dublado') || titleLower.includes('portugues')) {
-            score += 25;
-        }
-        if (titleLower.includes('bluray') || titleLower.includes('web-dl') || titleLower.includes('remux')) {
+        // Score por qualidade
+        score += this.qualityPriority[quality] || 50;
+        // Bonus por conteúdo em português
+        if (titleLower.includes('dublado') || titleLower.includes('portugues')) {
             score += 20;
         }
-        if (titleLower.includes('cam') || titleLower.includes('ts') || titleLower.includes('scr')) {
-            score -= 50;
-        }
         return Math.max(0, score);
-    }
-    extractMainPhrases(query) {
-        const phrases = [];
-        const words = query.split(' ').filter(word => word.length > 2);
-        for (let i = 0; i < words.length - 1; i++) {
-            for (let j = i + 2; j <= Math.min(i + 4, words.length); j++) {
-                const phrase = words.slice(i, j).join(' ');
-                if (phrase.length > 5) {
-                    phrases.push(phrase);
-                }
-            }
-        }
-        return phrases.sort((a, b) => b.length - a.length);
     }
     cleanTitle(title) {
         return title
@@ -846,26 +642,6 @@ class TorrentScraperService {
             .replace(/\[.*?\]/g, '')
             .replace(/\(.*?\)/g, '')
             .trim();
-    }
-    extractSeasonNumber(text) {
-        const patterns = [
-            /temporada\s*(\d+)/i,
-            /(\d+)\s*temporada/i,
-            /season\s*(\d+)/i,
-            /s(\d+)/i,
-            /(\d+)\s*ª?\s*temp/i,
-            /t(\d+)/i
-        ];
-        for (const pattern of patterns) {
-            const match = text.match(pattern);
-            if (match) {
-                const season = parseInt(match[1]);
-                if (!isNaN(season) && season > 0) {
-                    return season;
-                }
-            }
-        }
-        return null;
     }
     extractSize(title) {
         const sizeMatch = title.match(/(\d+\.?\d*)\s*(GB|MB|GiB|MiB|G|M)/i);
@@ -908,7 +684,6 @@ class TorrentScraperService {
             '2160p': 1.5,
             '1080p': 1.3,
             '720p': 1.0,
-            'HD': 1.1,
             '480p': 0.8,
             '360p': 0.6,
             'SD': 0.5
@@ -938,20 +713,8 @@ class TorrentScraperService {
                 if (response.status === 200) {
                     return response.data;
                 }
-                logger.warn('Search attempt failed', {
-                    url,
-                    attempt,
-                    status: response.status,
-                    provider: this.getProviderFromUrl(url)
-                });
             }
             catch (error) {
-                logger.warn('Search attempt error', {
-                    url,
-                    attempt,
-                    provider: this.getProviderFromUrl(url),
-                    error: error instanceof Error ? error.message : 'Unknown error'
-                });
                 if (attempt === this.maxRetries + 1) {
                     throw error;
                 }

@@ -37,13 +37,12 @@ const manifest = {
             required: true,
             placeholder: 'Site: real-debrid.com/apitoken - Cole a chave aqui'
         }
-        // REMOVIDA a opção de qualidade - AGORA É FIXO
     ]
 };
 
 const builder = new addonBuilder(manifest as any);
 
-// Handler principal de streams OTIMIZADO - QUALIDADE FIXA
+// Handler principal de streams OTIMIZADO
 builder.defineStreamHandler(async (args: any) => {
     const requestStartTime = Date.now();
     
@@ -57,17 +56,16 @@ builder.defineStreamHandler(async (args: any) => {
         return { streams: [] };
     }
 
-    // CONFIGURAÇÃO OTIMIZADA - QUALIDADE FIXA "Todas as Qualidades"
+    // CONFIGURAÇÃO OTIMIZADA
     const streamRequest: StreamRequest = {
         type: args.type as 'movie' | 'series',
         id: args.id,
         title: '',
         apiKey: config.apiKey,
         config: {
-            quality: 'Todas as Qualidades', // FIXO - SEMPRE TODAS AS QUALIDADES
-            maxResults: '15 streams', // FIXO 15 STREAMS
+            quality: 'Todas as Qualidades',
+            maxResults: '15 streams',
             language: 'pt-BR',
-            // Configurações de otimização
             enableAggressiveSearch: true,
             minSeeders: 2,
             requireExactMatch: false,
@@ -75,12 +73,10 @@ builder.defineStreamHandler(async (args: any) => {
         }
     };
 
-    logger.info('Processando requisição de stream - TODAS QUALIDADES', {
+    logger.info('Processando requisição de stream', {
         type: args.type,
         id: args.id,
-        quality: 'Todas as Qualidades (FIXO)',
-        apiKey: config.apiKey.substring(0, 8) + '...',
-        maxStreams: 15
+        apiKey: config.apiKey.substring(0, 8) + '...'
     });
 
     try {
@@ -88,37 +84,28 @@ builder.defineStreamHandler(async (args: any) => {
         
         const processingTime = Date.now() - requestStartTime;
 
-        // Log detalhado dos resultados por qualidade
-        const qualityBreakdown = result.streams.reduce((acc: any, stream) => {
-            let quality = 'Unknown';
-            if (stream.name?.includes('4K')) quality = '4K';
-            else if (stream.name?.includes('1080')) quality = '1080p';
-            else if (stream.name?.includes('720')) quality = '720p';
-            else if (stream.name?.includes('480')) quality = '480p';
-            else quality = 'SD';
-            
-            acc[quality] = (acc[quality] || 0) + 1;
-            return acc;
-        }, {});
-
-        logger.info('Streams processados com sucesso - TODAS QUALIDADES', {
+        // Log SIMPLES sem detecção de qualidade (para evitar confusão)
+        logger.info('Streams processados com sucesso', {
             requestId: args.id,
             streamsCount: result.streams.length,
-            targetStreams: 15,
             processingTime: processingTime + 'ms',
-            qualityDistribution: qualityBreakdown,
-            qualitySummary: `4K: ${qualityBreakdown['4K'] || 0}, 1080p: ${qualityBreakdown['1080p'] || 0}, 720p: ${qualityBreakdown['720p'] || 0}, 480p: ${qualityBreakdown['480p'] || 0}, SD: ${qualityBreakdown['SD'] || 0}`
+            // REMOVIDA a detecção de qualidade dos logs para evitar confusão
         });
+
+        // Log dos nomes reais dos streams para debug
+        if (result.streams.length > 0) {
+            logger.debug('Nomes dos streams encontrados', {
+                streamNames: result.streams.map(s => s.name)
+            });
+        }
 
         // Se encontrou poucos streams, adicionar log de warning
         if (result.streams.length < 5) {
             logger.warn('Poucos streams encontrados', {
                 requestId: args.id,
                 streamsFound: result.streams.length,
-                targetStreams: 15,
                 type: args.type,
-                id: args.id,
-                qualityDistribution: qualityBreakdown
+                id: args.id
             });
         }
 
@@ -146,34 +133,20 @@ serveHTTP(addonInterface, {
     cacheMaxAge: 600
 });
 
-logger.info('Brasil RD Addon - CONFIGURAÇÃO FIXA', {
+logger.info('Brasil RD Addon iniciado', {
     port: port,
     configurable: true,
-    environment: process.env.NODE_ENV || 'development',
-    fixedSettings: {
-        quality: 'Todas as Qualidades',
-        maxStreams: 15,
-        language: 'pt-BR',
-        minSeeders: 2
-    }
+    environment: process.env.NODE_ENV || 'development'
 });
 
-console.log('=== BRASIL RD ADDON - CONFIGURAÇÃO FIXA ===');
+console.log('=== BRASIL RD ADDON ===');
 console.log(`Addon rodando: http://localhost:${port}/manifest.json`);
 console.log(`Interface de config: http://localhost:${port}/configure`);
 console.log('');
-console.log('CONFIGURAÇÃO FIXA OTIMIZADA:');
-console.log(' Todas as Qualidades (automático)');
-console.log(' 15 streams por requisição');
-console.log(' Busca agressiva por 4K, 1080p, 720p, 480p, SD');
-console.log(' Mínimo de 2 seeders para mais opções');
-console.log(' Processamento concorrente otimizado');
-console.log('');
-console.log('VANTAGENS:');
-console.log('- Usuário sempre tem todas as opções de qualidade');
-console.log('- StreamHandler organiza automaticamente por qualidade');
-console.log('- Melhor experiência sem necessidade de configuração');
-console.log('- Cobertura máxima de conteúdos disponíveis');
+console.log('CONFIGURAÇÃO:');
+console.log('- 15 streams por requisição');
+console.log('- Todas as qualidades automaticamente');
+console.log('- Busca otimizada por conteúdo');
 console.log('');
 console.log('PLATAFORMAS SUPORTADAS:');
 console.log('- Desktop (Windows, macOS, Linux)');

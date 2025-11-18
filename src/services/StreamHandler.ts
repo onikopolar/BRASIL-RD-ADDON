@@ -68,12 +68,12 @@ export class StreamHandler {
   private readonly processingConfig: StreamProcessingConfig = {
     maxConcurrentTorrents: 2,
     delayBetweenTorrents: 1000,
-    allowPendingStreams: true,
+    allowPendingStreams: false, // DESATIVADO para mobile
     maxPendingStreams: 8,
     cacheTTL: {
-      downloaded: 86400000, // 24 horas
-      downloading: 300000,  // 5 minutos
-      error: 120000         // 2 minutos
+      downloaded: 86400000,
+      downloading: 300000,
+      error: 120000
     }
   };
 
@@ -128,14 +128,12 @@ export class StreamHandler {
     const requestId = request.id;
     const cacheKey = this.generateCacheKey(request);
     
-    // Verificar se temos API key válida
     if (!request.apiKey) {
       this.logger.warn('Stream request sem API key', { requestId });
       return { streams: [] };
     }
     
     try {
-      // Verificar cache apenas para conteúdo baixado
       const cachedStreams = this.cacheService.get<Stream[]>(cacheKey);
       if (cachedStreams && cachedStreams.length > 0) {
         const allDownloaded = cachedStreams.every(stream => stream.status === 'downloaded');
@@ -157,12 +155,24 @@ export class StreamHandler {
         }
       }
 
-      const streams = await this.processStreamRequest(request);
+      let streams = await this.processStreamRequest(request);
+      
+      // CORREÇÃO MOBILE: Filtrar apenas streams com URL válida
+      streams = streams.filter(stream => 
+        stream.url && stream.url.trim() !== '' && stream.url.startsWith('http')
+      );
+      
+      // CORREÇÃO MOBILE: Remover notWebReady de todos os streams
+      streams.forEach(stream => {
+        if (stream.behaviorHints) {
+          stream.behaviorHints.notWebReady = false;
+        }
+      });
       
       if (streams.length > 0) {
         const cacheTTL = this.calculateDynamicCacheTTL(streams);
         this.cacheService.set(cacheKey, streams, cacheTTL);
-        this.logger.info('Cached new streams', { 
+        this.logger.info('Cached new mobile-compatible streams', { 
           requestId, 
           cacheKey, 
           streamCount: streams.length,
@@ -188,12 +198,10 @@ export class StreamHandler {
       return this.processingConfig.cacheTTL.error;
     }
 
-    // Se todos estão baixados, cache longo
     if (streams.every(stream => stream.status === 'downloaded')) {
       return this.processingConfig.cacheTTL.downloaded;
     }
 
-    // Se algum está baixando, cache curto
     if (streams.some(stream => stream.status === 'downloading')) {
       return this.processingConfig.cacheTTL.downloading;
     }
@@ -362,7 +370,6 @@ export class StreamHandler {
       maxConcurrent: this.processingConfig.maxConcurrentTorrents
     });
 
-    // Processar com rate limiting para evitar API blocking
     const streams = await this.processTorrentsWithRateLimit(resultsToProcess, request);
     
     this.logger.info('Completed torrent processing', {
@@ -415,7 +422,6 @@ export class StreamHandler {
 
       const batchResults = await Promise.allSettled(batchPromises);
       
-      // Coletar resultados válidos
       batchResults.forEach((result) => {
         if (result.status === 'fulfilled' && result.value !== null) {
           const streams = Array.isArray(result.value) ? result.value : [result.value];
@@ -423,7 +429,6 @@ export class StreamHandler {
         }
       });
 
-      // Rate limiting entre batches
       if (i + this.processingConfig.maxConcurrentTorrents < torrents.length) {
         await this.delay(this.processingConfig.delayBetweenTorrents);
       }
@@ -574,7 +579,7 @@ export class StreamHandler {
         name: `Brasil RD - S${season}E${episode}`,
         description: `Conteudo via temporada completa - S${season}E${episode}`,
         behaviorHints: {
-          notWebReady: false,
+          notWebReady: false, // CORREÇÃO MOBILE
           bingeGroup: `br-season-${imdbId}-${season}`,
           filename: this.sanitizeFilename(`${title} S${season}E${episode}`)
         },
@@ -678,6 +683,8 @@ export class StreamHandler {
 
     if (requestEpisode.isValid) {
       const episodeFiles = this.findEpisodeFilesByQuality(cleanVideoFiles, requestEpisode.season, requestEpisode.episode);
+      const validStreams: Stream[] = [];
+      const processedFiles: Set<number> = new Set();
       
       if (episodeFiles.length === 0) {
         this.logger.debug('No files found for specific episode', {
@@ -701,17 +708,18 @@ export class StreamHandler {
         }))
       });
 
-      // Processar CADA arquivo para criar múltiplas streams
       for (const file of episodeFiles) {
+        if (processedFiles.has(file.id)) {
+          continue;
+        }
+        processedFiles.add(file.id);
+
         try {
           const streamLink = await this.rdService.getStreamLinkForFile(torrentId, file.id, request.apiKey!);
           const quality = this.extractQualityFromFilename(file.path);
           
-          let stream: Stream;
-          
           if (streamLink) {
-            // Stream disponível - criar stream normal
-            stream = this.createSeriesStream(
+            const stream = this.createSeriesStream(
               torrent, 
               request, 
               torrentId, 
@@ -722,31 +730,16 @@ export class StreamHandler {
               quality,
               'downloaded'
             );
-          } else if (this.processingConfig.allowPendingStreams) {
-            // Stream não disponível ainda - criar stream pendente
-            stream = this.createPendingSeriesStream(
-              torrent,
-              request,
-              torrentId,
-              file.path,
-              requestEpisode.season,
-              requestEpisode.episode,
+            
+            validStreams.push(stream);
+            
+            this.logger.debug('Created mobile-compatible stream for episode file', {
+              requestId: request.id,
+              fileId: file.id,
               quality,
-              torrentInfo.status
-            );
-          } else {
-            continue;
+              hasUrl: !!stream.url
+            });
           }
-          
-          streams.push(stream);
-          
-          this.logger.debug('Created stream for episode file', {
-            requestId: request.id,
-            fileId: file.id,
-            quality,
-            status: stream.status,
-            hasUrl: !!stream.url
-          });
           
         } catch (error) {
           this.logger.debug('Failed to process episode file', {
@@ -757,19 +750,17 @@ export class StreamHandler {
         }
       }
 
-      this.logger.info('Created multiple streams for series episode', {
+      this.logger.info('Created mobile-compatible streams for series episode', {
         requestId: request.id,
         season: requestEpisode.season,
         episode: requestEpisode.episode,
-        streamCount: streams.length,
-        qualities: streams.map(s => this.extractQualityFromName(s.name || 'unknown')),
-        statuses: streams.map(s => s.status),
-        downloadedCount: streams.filter(s => s.status === 'downloaded').length,
-        pendingCount: streams.filter(s => s.status === 'downloading').length
+        streamCount: validStreams.length,
+        qualities: validStreams.map(s => this.extractQualityFromName(s.name || 'unknown'))
       });
 
+      return validStreams.length > 0 ? validStreams : null;
+
     } else {
-      // Para requests sem episódio específico
       const mainFile = this.identifyMainFile(cleanVideoFiles);
       if (!mainFile) {
         this.logger.debug('No main file found for series torrent', { 
@@ -781,15 +772,12 @@ export class StreamHandler {
 
       try {
         const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
-        const stream = streamLink 
-          ? this.createSeriesStream(
-              torrent, request, torrentId, streamLink, mainFile.path, 1, 1, torrent.quality, 'downloaded'
-            )
-          : this.createPendingSeriesStream(
-              torrent, request, torrentId, mainFile.path, 1, 1, torrent.quality, torrentInfo.status
-            );
-
-        streams.push(stream);
+        if (streamLink) {
+          const stream = this.createSeriesStream(
+            torrent, request, torrentId, streamLink, mainFile.path, 1, 1, torrent.quality, 'downloaded'
+          );
+          streams.push(stream);
+        }
       } catch (error) {
         this.logger.debug('Failed to get stream link for main file', {
           requestId: request.id,
@@ -825,7 +813,7 @@ export class StreamHandler {
           name: `Brasil RD - ${torrent.quality}`,
           description: `Conteudo via scraping - ${torrent.language}`,
           behaviorHints: {
-            notWebReady: false,
+            notWebReady: false, // CORREÇÃO MOBILE
             bingeGroup: `br-scraped-${request.id}`,
             filename: this.sanitizeFilename(torrent.title)
           },
@@ -833,8 +821,6 @@ export class StreamHandler {
           status: 'downloaded'
         };
         return stream;
-      } else if (this.processingConfig.allowPendingStreams) {
-        return this.createPendingMovieStream(torrent, request, torrentId, torrentInfo.status);
       }
       
       return null;
@@ -869,82 +855,13 @@ export class StreamHandler {
       name: `Brasil RD - ${detectedQuality} - ${episodeTag}`,
       description: `Conteudo via scraping - ${torrent.language} - ${episodeTag}`,
       behaviorHints: {
-        notWebReady: false,
+        notWebReady: false, // CORREÇÃO MOBILE
         bingeGroup: `br-scraped-${request.id}-${season}`,
         filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
       },
       torrentId: torrentId,
       status: status
     };
-  }
-
-  private createPendingSeriesStream(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    torrentId: string,
-    filePath: string,
-    season: number,
-    episode: number,
-    quality: string,
-    rdStatus: string
-  ): Stream {
-    const detectedQuality = quality !== 'unknown' ? quality : torrent.quality;
-    const episodeTag = `S${season}E${episode}`;
-    const progressStatus = this.mapRealDebridStatus(rdStatus);
-
-    return {
-      title: `${torrent.title} [${torrent.provider}] ${episodeTag} [${progressStatus.toUpperCase()}]`,
-      url: '', // URL vazia para streams pendentes
-      name: `Brasil RD - ${detectedQuality} - ${episodeTag} [${progressStatus}]`,
-      description: `Conteudo sendo processado - ${torrent.language} - ${episodeTag} - Status: ${progressStatus}`,
-      behaviorHints: {
-        notWebReady: true, // Indicar que não está pronto para reprodução
-        bingeGroup: `br-pending-${request.id}-${season}`,
-        filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
-      },
-      torrentId: torrentId,
-      status: progressStatus
-    };
-  }
-
-  private createPendingMovieStream(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    torrentId: string,
-    rdStatus: string
-  ): Stream {
-    const progressStatus = this.mapRealDebridStatus(rdStatus);
-
-    return {
-      title: `${torrent.title} [${torrent.provider}] [${progressStatus.toUpperCase()}]`,
-      url: '', // URL vazia para streams pendentes
-      name: `Brasil RD - ${torrent.quality} [${progressStatus}]`,
-      description: `Conteudo sendo processado - ${torrent.language} - Status: ${progressStatus}`,
-      behaviorHints: {
-        notWebReady: true,
-        bingeGroup: `br-pending-${request.id}`,
-        filename: this.sanitizeFilename(torrent.title)
-      },
-      torrentId: torrentId,
-      status: progressStatus
-    };
-  }
-
-  private mapRealDebridStatus(rdStatus: string): string {
-    switch (rdStatus?.toLowerCase()) {
-      case 'downloaded':
-        return 'downloaded';
-      case 'downloading':
-      case 'processing':
-        return 'downloading';
-      case 'waiting_files_selection':
-        return 'processing';
-      case 'magnet_error':
-      case 'error':
-        return 'error';
-      default:
-        return 'processing';
-    }
   }
 
   private findEpisodeFilesByQuality(files: RDFile[], targetSeason: number, targetEpisode: number): RDFile[] {
@@ -1188,7 +1105,7 @@ export class StreamHandler {
     try {
       const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id, request.apiKey!);
       
-      if (!streamLink && !this.processingConfig.allowPendingStreams) {
+      if (!streamLink) {
         this.logger.debug('No stream link for target episode file', { 
           requestId: request.id, 
           torrentId, 
@@ -1201,19 +1118,17 @@ export class StreamHandler {
       const streamName = `Brasil RD - ${magnet.quality} - S${requestEpisode.season}E${requestEpisode.episode}`;
       
       const stream: Stream = {
-        title: streamLink ? streamTitle : `${streamTitle} [${this.mapRealDebridStatus(torrentInfo.status).toUpperCase()}]`,
-        url: streamLink || '',
-        name: streamLink ? streamName : `${streamName} [${this.mapRealDebridStatus(torrentInfo.status)}]`,
-        description: streamLink 
-          ? `Conteudo curado - ${magnet.language} - Episodio ${requestEpisode.episode}`
-          : `Conteudo sendo processado - ${magnet.language} - Episodio ${requestEpisode.episode} - Status: ${this.mapRealDebridStatus(torrentInfo.status)}`,
+        title: streamTitle,
+        url: streamLink,
+        name: streamName,
+        description: `Conteudo curado - ${magnet.language} - Episodio ${requestEpisode.episode}`,
         behaviorHints: {
-          notWebReady: !streamLink,
+          notWebReady: false, // CORREÇÃO MOBILE
           bingeGroup: `br-${request.id}`,
           filename: this.sanitizeFilename(`${magnet.title} S${requestEpisode.season}E${requestEpisode.episode}`)
         },
         torrentId: torrentId,
-        status: streamLink ? 'downloaded' : this.mapRealDebridStatus(torrentInfo.status)
+        status: 'downloaded'
       };
 
       this.logger.debug('Successfully created stream from curated magnet for specific episode', {
@@ -1253,7 +1168,7 @@ export class StreamHandler {
 
       const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
       
-      if (!streamLink && !this.processingConfig.allowPendingStreams) {
+      if (!streamLink) {
         this.logger.debug('No stream link available for torrent', { requestId: request.id, torrentId });
         return null;
       }
@@ -1262,19 +1177,17 @@ export class StreamHandler {
       const streamName = `Brasil RD - ${magnet.quality}`;
       
       const stream: Stream = {
-        title: streamLink ? streamTitle : `${streamTitle} [${this.mapRealDebridStatus(torrentInfo.status).toUpperCase()}]`,
-        url: streamLink || '',
-        name: streamLink ? streamName : `${streamName} [${this.mapRealDebridStatus(torrentInfo.status)}]`,
-        description: streamLink 
-          ? `Conteudo curado - ${magnet.language} - Colecao Completa`
-          : `Conteudo sendo processado - ${magnet.language} - Status: ${this.mapRealDebridStatus(torrentInfo.status)}`,
+        title: streamTitle,
+        url: streamLink,
+        name: streamName,
+        description: `Conteudo curado - ${magnet.language} - Colecao Completa`,
         behaviorHints: {
-          notWebReady: !streamLink,
+          notWebReady: false, // CORREÇÃO MOBILE
           bingeGroup: `br-${request.id}`,
           filename: this.sanitizeFilename(magnet.title)
         },
         torrentId: torrentId,
-        status: streamLink ? 'downloaded' : this.mapRealDebridStatus(torrentInfo.status)
+        status: 'downloaded'
       };
 
       this.logger.debug('Successfully created stream from curated magnet for all episodes', {
@@ -1378,7 +1291,6 @@ export class StreamHandler {
         return scoreB - scoreA;
       }
       
-      // Priorizar streams baixadas sobre pendentes
       if (a.status === 'downloaded' && b.status !== 'downloaded') {
         return -1;
       }
