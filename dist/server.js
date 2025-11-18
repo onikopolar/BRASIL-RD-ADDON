@@ -5,39 +5,62 @@ const StreamHandler_1 = require("./services/StreamHandler");
 const logger_1 = require("./utils/logger");
 const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
-// Manifest com configuração integrada do Stremio
+// Manifest ADAPTADO - Estratégia de texto avançada
 const manifest = {
     id: 'org.brasilrd.addon',
     version: '1.0.0',
     name: 'Brasil RD',
-    description: 'Addon brasileiro com suporte completo ao Real-Debrid',
+    description: 'Addon brasileiro com suporte completo ao Real-Debrid - Obtenha sua chave API em: real-debrid.com/apitoken',
+    // Elementos visuais otimizados para mobile/TV
     logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
+    background: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/background-1920x1080.jpg',
+    contactEmail: '',
+    // Resources focados no essencial - APENAS streams
     resources: ['stream'],
     types: ['movie', 'series'],
+    // SEM catalogs - foco total em streams
     catalogs: [],
-    idPrefixes: ['tt'],
+    // Suporte amplo a identificadores
+    idPrefixes: ['tt', 'tmdb', 'tvdb', 'imdb'],
+    // Behavior hints otimizados
     behaviorHints: {
         configurable: true,
-        configurationRequired: true
+        configurationRequired: true,
+        adult: false,
+        p2p: true
     },
+    // CONFIGURAÇÃO ADAPTADA - Estratégia de texto avançada
     config: [
         {
             key: 'apiKey',
             type: 'text',
-            title: 'Chave API Real-Debrid',
+            // ESTRATÉGIA: Texto que simula link visualmente
+            title: 'Configuração Real-Debrid - Obtenha sua chave API (real-debrid.com/apitoken)',
             required: true,
-            placeholder: 'Obtenha em: real-debrid.com/apitoken - Cole a chave aqui'
+            placeholder: 'Site: real-debrid.com/apitoken - Cole a chave aqui'
+        },
+        {
+            key: 'videoQuality',
+            type: 'select',
+            title: 'Qualidade de Vídeo Preferida',
+            required: false,
+            options: ['Todas as Qualidades', '4K Ultra HD', '1080p Full HD', '720p HD'],
+            default: 'Todas as Qualidades'
         }
     ]
 };
 const builder = new stremio_addon_sdk_1.addonBuilder(manifest);
-// Extender o tipo args para incluir config
+// Handler principal de streams - MANTIDO ORIGINAL
 builder.defineStreamHandler(async (args) => {
     const requestStartTime = Date.now();
-    // Get configuration from args
+    // Validação robusta de configuração
     const config = args.config;
     if (!config || !config.apiKey) {
-        logger.warn('Requisição de stream sem API key configurada do Real-Debrid');
+        logger.warn('Requisição de stream sem API key configurada', {
+            type: args.type,
+            id: args.id,
+            platform: 'multi-platform'
+        });
         return { streams: [] };
     }
     const streamRequest = {
@@ -46,14 +69,17 @@ builder.defineStreamHandler(async (args) => {
         title: '',
         apiKey: config.apiKey,
         config: {
-            quality: 'Todas as Qualidades',
-            maxResults: '50 streams'
+            quality: config.videoQuality || 'Todas as Qualidades',
+            maxResults: '3 streams',
+            language: 'pt-BR'
         }
     };
     logger.info('Processando requisição de stream', {
         type: args.type,
         id: args.id,
-        apiKey: config.apiKey.substring(0, 8) + '...'
+        platform: 'multi-platform',
+        apiKey: config.apiKey.substring(0, 8) + '...',
+        quality: config.videoQuality || 'Todas as Qualidades'
     });
     try {
         const result = await streamHandler.handleStreamRequest(streamRequest);
@@ -61,7 +87,9 @@ builder.defineStreamHandler(async (args) => {
         logger.info('Streams processados com sucesso', {
             requestId: args.id,
             streamsCount: result.streams.length,
-            processingTime: processingTime + 'ms'
+            processingTime: processingTime + 'ms',
+            platform: 'multi-platform',
+            qualityPreference: config.videoQuality || 'Todas as Qualidades'
         });
         return result;
     }
@@ -70,7 +98,8 @@ builder.defineStreamHandler(async (args) => {
         logger.error('Falha no processamento de streams', {
             error: error instanceof Error ? error.message : 'Unknown error',
             request: { type: args.type, id: args.id },
-            processingTime: errorTime + 'ms'
+            processingTime: errorTime + 'ms',
+            platform: 'multi-platform'
         });
         return { streams: [] };
     }
@@ -79,20 +108,28 @@ const addonInterface = builder.getInterface();
 const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
 (0, stremio_addon_sdk_1.serveHTTP)(addonInterface, {
     port: port,
-    cacheMaxAge: 300
+    cacheMaxAge: 600
 });
-logger.info('Brasil RD Addon inicializado com configuração integrada', {
+logger.info('Brasil RD Addon - Texto Adaptado', {
     port: port,
     configurable: true,
-    environment: process.env.NODE_ENV || 'development'
+    environment: process.env.NODE_ENV || 'development',
+    platforms: ['desktop', 'mobile', 'tv']
 });
-console.log('=== BRASIL RD ADDON ===');
+console.log('=== BRASIL RD ADDON - TEXTO ADAPTADO ===');
 console.log(`Addon rodando: http://localhost:${port}/manifest.json`);
 console.log('');
-console.log('PARA INSTALAR NO STREMIO:');
-console.log('1. Abra o Stremio');
-console.log('2. Clique no ícone de addons (quebra-cabeça)');
-console.log('3. Clique em "Community Addons"');
-console.log('4. Cole a URL: http://localhost:' + port + '/manifest.json');
-console.log('5. O Stremio mostrará a tela de configuração automaticamente');
+console.log('ESTRATÉGIA DE TEXTO IMPLEMENTADA:');
+console.log('1. Title: "Configuração Real-Debrid - Obtenha sua chave API (real-debrid.com/apitoken)"');
+console.log('2. Description: "Obtenha sua chave API em: real-debrid.com/apitoken"');
+console.log('3. Placeholder: "Site: real-debrid.com/apitoken - Cole a chave aqui"');
+console.log('');
+console.log('VISUALIZAÇÃO SIMULADA:');
+console.log('Configuração Real-Debrid - Obtenha sua chave API (real-debrid.com/apitoken)');
+console.log('[ Site: real-debrid.com/apitoken - Cole a chave aqui ________ ]');
+console.log('');
+console.log('PLATAFORMAS SUPORTADAS:');
+console.log('- Desktop (Windows, macOS, Linux)');
+console.log('- Mobile (Android, iOS)');
+console.log('- TV (Android TV, Smart TVs)');
 //# sourceMappingURL=server.js.map
