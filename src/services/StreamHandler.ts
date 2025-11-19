@@ -326,7 +326,7 @@ export class StreamHandler {
       if (stream.name) {
         const currentQuality = this.qualityDetector.extractQualityFromStreamName(stream.name);
         if (!stream.name.match(/(2160p|1080p|720p|HD)/i)) {
-          stream.name = `Brasil RD • ${currentQuality.toUpperCase()}`;
+          stream.name = `Brasil RD | ${currentQuality.toUpperCase()}`;
         }
       }
       
@@ -678,8 +678,8 @@ export class StreamHandler {
       const stream: Stream = {
         title: `${title} ${episodeTag}`,
         url: streamLink,
-        name: `Brasil RD • ${fileQuality.toUpperCase()} • ${episodeTag}`,
-        description: `Conteúdo via temporada completa • ${episodeTag}`,
+        name: `Brasil RD | ${fileQuality.toUpperCase()} | ${episodeTag}`,
+        description: `Conteúdo via temporada completa | ${episodeTag}`,
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `br-season-${imdbId}-${season}`,
@@ -867,8 +867,8 @@ export class StreamHandler {
         const stream: Stream = {
           title: `${torrent.title} [${torrent.provider}]`,
           url: streamLink,
-          name: `Brasil RD • ${fileQuality.toUpperCase()}`,
-          description: `Conteúdo via scraping • ${torrent.language}`,
+          name: `Brasil RD | ${fileQuality.toUpperCase()}`,
+          description: `Conteúdo via scraping | ${torrent.language}`,
           behaviorHints: {
             notWebReady: false,
             bingeGroup: `br-scraped-${request.id}`,
@@ -907,8 +907,8 @@ export class StreamHandler {
     return {
       title: `${torrent.title} [${torrent.provider}] ${episodeTag}`,
       url: streamLink,
-      name: `Brasil RD • ${detectedQuality.toUpperCase()} • ${episodeTag}`,
-      description: `Conteúdo via scraping • ${torrent.language} • ${episodeTag}`,
+      name: `Brasil RD | ${detectedQuality.toUpperCase()} | ${episodeTag}`,
+      description: `Conteúdo via scraping | ${torrent.language} | ${episodeTag}`,
       behaviorHints: {
         notWebReady: false,
         bingeGroup: `br-scraped-${request.id}-${season}`,
@@ -1120,13 +1120,13 @@ export class StreamHandler {
 
       const fileQuality = this.qualityDetector.extractQualityFromFilename(targetFile.path);
       const streamTitle = this.generateEpisodeStreamTitle(magnet, requestEpisode.season, requestEpisode.episode);
-      const streamName = `Brasil RD • ${fileQuality.toUpperCase()} • S${requestEpisode.season}E${requestEpisode.episode}`;
+      const streamName = `Brasil RD | ${fileQuality.toUpperCase()} | S${requestEpisode.season}E${requestEpisode.episode}`;
       
       const stream: Stream = {
         title: streamTitle,
         url: streamLink,
         name: streamName,
-        description: `Conteúdo curado • ${magnet.language} • Episódio ${requestEpisode.episode}`,
+        description: `Conteúdo curado | ${magnet.language} | Episódio ${requestEpisode.episode}`,
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `br-${request.id}`,
@@ -1171,13 +1171,13 @@ export class StreamHandler {
 
       const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
       const streamTitle = this.generateStreamTitle(magnet);
-      const streamName = `Brasil RD • ${fileQuality.toUpperCase()}`;
+      const streamName = `Brasil RD | ${fileQuality.toUpperCase()}`;
       
       const stream: Stream = {
         title: streamTitle,
         url: streamLink,
         name: streamName,
-        description: `Conteúdo curado • ${magnet.language} • Coleção Completa`,
+        description: `Conteúdo curado | ${magnet.language} | Coleção Completa`,
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `br-${request.id}`,
