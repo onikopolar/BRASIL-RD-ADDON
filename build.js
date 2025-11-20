@@ -5,7 +5,7 @@ const path = require('path');
 function buildTypeScript() {
     console.log('Iniciando build do TypeScript...');
     
-    // Verifica se o TypeScript está instalado
+    // Verifica se o TypeScript esta instalado
     try {
         require.resolve('typescript');
         console.log('TypeScript encontrado');
@@ -68,8 +68,31 @@ function buildTypeScript() {
         process.exit(1);
     }
 
+    // Verificar se os arquivos principais foram compilados
+    console.log('Verificando arquivos compilados...');
+    const requiredFiles = [
+        'dist/server.js',
+        'dist/services/StreamHandler.js',
+        'dist/utils/logger.js',
+        'dist/types/index.js'
+    ];
+
+    let missingFiles = [];
+    for (const file of requiredFiles) {
+        if (!fs.existsSync(file)) {
+            missingFiles.push(file);
+        }
+    }
+
+    if (missingFiles.length > 0) {
+        console.error('Arquivos compilados faltando:');
+        missingFiles.forEach(file => console.error(`- ${file}`));
+        console.error('Build incompleto - alguns arquivos nao foram gerados');
+        process.exit(1);
+    }
+
     console.log('Build concluido com sucesso');
+    console.log('Arquivos compilados disponiveis em: dist/');
 }
 
-// Remove a função copyPublicFolder e chama apenas o build do TypeScript
 buildTypeScript();

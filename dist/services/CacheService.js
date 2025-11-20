@@ -3,9 +3,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheService = void 0;
 const logger_1 = require("../utils/logger");
 class CacheService {
-    cache = new Map();
-    logger;
     constructor() {
+        this.cache = new Map();
         this.logger = new logger_1.Logger('CacheService');
         this.startCleanupInterval();
     }
@@ -44,7 +43,6 @@ class CacheService {
         this.logger.info('Cache cleared');
     }
     startCleanupInterval() {
-        // Limpa cache expirado a cada 5 minutos
         setInterval(() => {
             const now = Date.now();
             let cleanedCount = 0;
@@ -57,7 +55,7 @@ class CacheService {
             if (cleanedCount > 0) {
                 this.logger.debug(`Cache cleanup completed`, { cleanedCount });
             }
-        }, 300000); // 5 minutos
+        }, 300000);
     }
     getStats() {
         return {
@@ -67,4 +65,3 @@ class CacheService {
     }
 }
 exports.CacheService = CacheService;
-//# sourceMappingURL=CacheService.js.map

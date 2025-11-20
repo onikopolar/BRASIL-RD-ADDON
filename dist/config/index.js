@@ -8,12 +8,11 @@ exports.config = {
         timeout: 10000
     },
     stremio: {
-        cacheMaxAge: 24 * 60 * 60, // 24 horas
+        cacheMaxAge: 24 * 60 * 60,
         streamTimeout: 30000
     },
     curatedMagnets: {
-        updateInterval: 6 * 60 * 60 * 1000, // 6 horas
+        updateInterval: 6 * 60 * 60 * 1000,
         maxRetries: 3
     }
 };
-//# sourceMappingURL=index.js.map

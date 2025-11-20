@@ -8,10 +8,9 @@ const axios_1 = __importDefault(require("axios"));
 const index_1 = require("../config/index");
 const logger_1 = require("../utils/logger");
 class RealDebridService {
-    logger;
-    maxRetries = 3;
-    baseDelay = 1000;
     constructor() {
+        this.maxRetries = 3;
+        this.baseDelay = 1000;
         this.logger = new logger_1.Logger('RealDebridService');
     }
     createHttpClient(apiKey) {
@@ -423,4 +422,3 @@ class RealDebridService {
     }
 }
 exports.RealDebridService = RealDebridService;
-//# sourceMappingURL=RealDebridService.js.map

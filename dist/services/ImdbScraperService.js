@@ -42,20 +42,18 @@ const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 const logger = new logger_1.Logger('ImdbScraper');
 class ImdbScraperService {
-    imdbBaseUrl = 'https://www.imdb.com/title';
     constructor() {
+        this.imdbBaseUrl = 'https://www.imdb.com/title';
         logger.info('Servico de scraping do IMDB inicializado');
     }
     async getTitleFromImdbId(imdbId) {
         try {
             logger.info(`Buscando titulo no IMDB: ${imdbId}`);
-            // Primeiro tenta buscar em português
             const portugueseTitle = await this.getPortugueseTitle(imdbId);
             if (portugueseTitle) {
                 logger.info(`Titulo em portugues encontrado no IMDB: ${portugueseTitle}`, { imdbId });
                 return portugueseTitle;
             }
-            // Fallback para inglês
             const englishTitle = await this.getEnglishTitle(imdbId);
             if (englishTitle) {
                 logger.info(`Titulo em ingles encontrado no IMDB: ${englishTitle}`, { imdbId });
@@ -118,22 +116,18 @@ class ImdbScraperService {
     parseTitleFromHtml(html, imdbId) {
         try {
             const $ = cheerio.load(html);
-            // Método 1: Tag h1 principal
             const h1Title = $('h1[data-testid="hero__pageTitle"]').text().trim();
             if (h1Title) {
                 return this.cleanTitle(h1Title);
             }
-            // Método 2: Primeiro h1
             const firstH1 = $('h1').first().text().trim();
             if (firstH1) {
                 return this.cleanTitle(firstH1);
             }
-            // Método 3: Meta tag og:title
             const metaTitle = $('meta[property="og:title"]').attr('content');
             if (metaTitle) {
                 return this.cleanTitle(metaTitle);
             }
-            // Método 4: JSON-LD structured data
             const jsonLd = $('script[type="application/ld+json"]').first().html();
             if (jsonLd) {
                 try {
@@ -143,7 +137,6 @@ class ImdbScraperService {
                     }
                 }
                 catch (e) {
-                    // Ignora erro de parse JSON
                 }
             }
             return null;
@@ -165,19 +158,15 @@ class ImdbScraperService {
             .trim();
     }
     isValidPortugueseTitle(title) {
-        // Verifica se o título contém palavras comuns em português
         const portugueseIndicators = [
             ' o ', ' a ', ' os ', ' as ', ' do ', ' da ', ' dos ', ' das ',
             ' no ', ' na ', ' nos ', ' nas ', ' pelo ', ' pela ', ' pelos ', ' pelas ',
             ' um ', ' uma ', ' uns ', ' umas ', ' é ', ' são ', ' foi ', ' foram '
         ];
         const titleLower = title.toLowerCase();
-        // Verifica se tem caracteres acentuados comuns em português
         const hasPortugueseChars = /[áàâãéèêíïóôõöúüçñ]/i.test(title);
-        // Verifica se tem palavras comuns em português
         const hasPortugueseWords = portugueseIndicators.some(word => titleLower.includes(word));
         return hasPortugueseChars || hasPortugueseWords || titleLower.length > 3;
     }
 }
 exports.ImdbScraperService = ImdbScraperService;
-//# sourceMappingURL=ImdbScraperService.js.map

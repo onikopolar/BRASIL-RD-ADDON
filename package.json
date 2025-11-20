@@ -1,13 +1,18 @@
 {
   "name": "brasil-rd-addon",
   "version": "1.0.0",
+  "description": "Addon brasileiro para Stremio com suporte completo ao Real-Debrid",
   "type": "commonjs",
   "main": "dist/server.js",
   "scripts": {
     "build": "node build.js",
-    "start": "node dist/server.js",
-    "dev": "ts-node src/server.ts",
-    "test": "jest"
+    "start": "npm run start:stremio",
+    "start:stremio": "node dist/server.js",
+    "dev": "npm run dev:stremio",
+    "dev:stremio": "ts-node src/server.ts",
+    "test": "jest",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",
@@ -20,7 +25,8 @@
     "puppeteer": "^24.30.0",
     "stremio-addon-sdk": "^1.6.10",
     "ts-node": "^10.9.0",
-    "typescript": "^5.0.0"
+    "typescript": "^5.0.0",
+    "concurrently": "^7.6.0"
   },
   "devDependencies": {
     "@types/cheerio": "^0.22.35",
@@ -32,6 +38,24 @@
     "@types/stremio-addon-sdk": "^1.6.12",
     "jest": "^29.0.0"
   },
+  "keywords": [
+    "stremio",
+    "addon",
+    "real-debrid",
+    "brasil",
+    "streaming",
+    "torrent"
+  ],
+  "author": "Brasil RD Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brasil-rd/brasil-rd-addon"
+  },
+  "bugs": {
+    "url": "https://github.com/brasil-rd/brasil-rd-addon/issues"
+  },
+  "homepage": "https://github.com/brasil-rd/brasil-rd-addon#readme",
   "engines": {
     "node": ">=18.0.0"
   }

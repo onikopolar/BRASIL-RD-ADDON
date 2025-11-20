@@ -7,49 +7,49 @@ const CacheService_1 = require("./CacheService");
 const TorrentScraperService_1 = require("./TorrentScraperService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
-// ESPELHO EXATO do TorrentScraperService - mesma lógica de qualidade
 class QualityDetector {
-    qualityPatterns = [
-        { pattern: /\.2160p\./i, quality: '2160p', confidence: 100 },
-        { pattern: /\.4k\./i, quality: '2160p', confidence: 100 },
-        { pattern: /\b2160p\b/i, quality: '2160p', confidence: 98 },
-        { pattern: /\b4k\b/i, quality: '2160p', confidence: 98 },
-        { pattern: /2160p/i, quality: '2160p', confidence: 95 },
-        { pattern: /4k/i, quality: '2160p', confidence: 95 },
-        { pattern: /\buhd\b/i, quality: '2160p', confidence: 90 },
-        { pattern: /\bultra.hd\b/i, quality: '2160p', confidence: 90 },
-        { pattern: /\.1080p\./i, quality: '1080p', confidence: 100 },
-        { pattern: /\b1080p\b/i, quality: '1080p', confidence: 98 },
-        { pattern: /1080p/i, quality: '1080p', confidence: 95 },
-        { pattern: /\bfhd\b/i, quality: '1080p', confidence: 90 },
-        { pattern: /\bfull.hd\b/i, quality: '1080p', confidence: 90 },
-        { pattern: /\.720p\./i, quality: '720p', confidence: 100 },
-        { pattern: /\b720p\b/i, quality: '720p', confidence: 98 },
-        { pattern: /720p/i, quality: '720p', confidence: 95 },
-        { pattern: /\bhd.rip\b/i, quality: '720p', confidence: 85 },
-        { pattern: /\.hd\./i, quality: 'HD', confidence: 90 },
-        { pattern: /\bhd\b/i, quality: 'HD', confidence: 80 },
-        { pattern: /\bhigh.def\b/i, quality: 'HD', confidence: 80 },
-        { pattern: /\.web-dl\./i, quality: '1080p', confidence: 95 },
-        { pattern: /\.bluray\./i, quality: '1080p', confidence: 90 },
-        { pattern: /\.blu-ray\./i, quality: '1080p', confidence: 90 },
-        { pattern: /\.remux\./i, quality: '2160p', confidence: 95 },
-        { pattern: /\.webrip\./i, quality: '1080p', confidence: 85 },
-        { pattern: /\.hdtv\./i, quality: '720p', confidence: 80 },
-        { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
-        { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
-    ];
-    exactPatterns = [
-        { pattern: /\b2160p\b/i, quality: '2160p' },
-        { pattern: /\b4k\b/i, quality: '2160p' },
-        { pattern: /\b1080p\b/i, quality: '1080p' },
-        { pattern: /\b720p\b/i, quality: '720p' },
-        { pattern: /\bhd\b/i, quality: 'HD' }
-    ];
-    allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
+    constructor() {
+        this.qualityPatterns = [
+            { pattern: /\.2160p\./i, quality: '2160p', confidence: 100 },
+            { pattern: /\.4k\./i, quality: '2160p', confidence: 100 },
+            { pattern: /\b2160p\b/i, quality: '2160p', confidence: 98 },
+            { pattern: /\b4k\b/i, quality: '2160p', confidence: 98 },
+            { pattern: /2160p/i, quality: '2160p', confidence: 95 },
+            { pattern: /4k/i, quality: '2160p', confidence: 95 },
+            { pattern: /\buhd\b/i, quality: '2160p', confidence: 90 },
+            { pattern: /\bultra.hd\b/i, quality: '2160p', confidence: 90 },
+            { pattern: /\.1080p\./i, quality: '1080p', confidence: 100 },
+            { pattern: /\b1080p\b/i, quality: '1080p', confidence: 98 },
+            { pattern: /1080p/i, quality: '1080p', confidence: 95 },
+            { pattern: /\bfhd\b/i, quality: '1080p', confidence: 90 },
+            { pattern: /\bfull.hd\b/i, quality: '1080p', confidence: 90 },
+            { pattern: /\.720p\./i, quality: '720p', confidence: 100 },
+            { pattern: /\b720p\b/i, quality: '720p', confidence: 98 },
+            { pattern: /720p/i, quality: '720p', confidence: 95 },
+            { pattern: /\bhd.rip\b/i, quality: '720p', confidence: 85 },
+            { pattern: /\.hd\./i, quality: 'HD', confidence: 90 },
+            { pattern: /\bhd\b/i, quality: 'HD', confidence: 80 },
+            { pattern: /\bhigh.def\b/i, quality: 'HD', confidence: 80 },
+            { pattern: /\.web-dl\./i, quality: '1080p', confidence: 95 },
+            { pattern: /\.bluray\./i, quality: '1080p', confidence: 90 },
+            { pattern: /\.blu-ray\./i, quality: '1080p', confidence: 90 },
+            { pattern: /\.remux\./i, quality: '2160p', confidence: 95 },
+            { pattern: /\.webrip\./i, quality: '1080p', confidence: 85 },
+            { pattern: /\.hdtv\./i, quality: '720p', confidence: 80 },
+            { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
+            { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
+        ];
+        this.exactPatterns = [
+            { pattern: /\b2160p\b/i, quality: '2160p' },
+            { pattern: /\b4k\b/i, quality: '2160p' },
+            { pattern: /\b1080p\b/i, quality: '1080p' },
+            { pattern: /\b720p\b/i, quality: '720p' },
+            { pattern: /\bhd\b/i, quality: 'HD' }
+        ];
+        this.allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
+    }
     extractQuality(title) {
         const cleanTitle = title.toLowerCase();
-        // EXATAMENTE igual ao TorrentScraperService
         for (const { pattern, quality, confidence } of this.qualityPatterns) {
             if (pattern.test(cleanTitle) && confidence >= 95) {
                 return quality;
@@ -68,7 +68,6 @@ class QualityDetector {
         return this.inferQualityFromContext(cleanTitle);
     }
     inferQualityFromContext(titleLower) {
-        // EXATAMENTE igual ao TorrentScraperService
         if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
             return '1080p';
         }
@@ -93,52 +92,45 @@ class QualityDetector {
     }
 }
 class StreamHandler {
-    rdService;
-    magnetService;
-    cacheService;
-    torrentScraper;
-    imdbScraper;
-    qualityDetector;
-    logger;
-    processingConfig = {
-        maxConcurrentTorrents: 2,
-        delayBetweenTorrents: 1000,
-        allowPendingStreams: false,
-        maxPendingStreams: 8,
-        cacheTTL: {
-            downloaded: 86400000,
-            downloading: 300000,
-            error: 120000
-        }
-    };
-    qualityPriority = {
-        '2160p': 5,
-        '1080p': 4,
-        '720p': 3,
-        'HD': 2
-    };
-    videoExtensions = [
-        '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
-        '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
-    ];
-    episodePatterns = [
-        /(\d+)x(\d+)/i,
-        /s(\d+)e(\d+)/i,
-        /season[\s\._-]?(\d+)[\s\._-]?episode[\s\._-]?(\d+)/i,
-        /ep[\s\._-]?(\d+)/i,
-        /(\d+)(?:\s*-\s*|\s*)(\d+)/,
-        /^(\d+)$/
-    ];
-    promotionalKeywords = [
-        'promo', '1xbet', 'bet', 'propaganda', 'publicidade', 'advertisement',
-        'sample', 'trailer', 'teaser', 'preview', 'torrentdosfilmes'
-    ];
-    torrentCache = new Map();
-    seasonCache = new Map();
-    torrentCacheTTL = 60 * 60 * 1000;
-    downloadTimeout = 30 * 60 * 1000;
-    downloadPollInterval = 5000;
     constructor() {
+        this.processingConfig = {
+            maxConcurrentTorrents: 2,
+            delayBetweenTorrents: 1000,
+            allowPendingStreams: false,
+            maxPendingStreams: 8,
+            cacheTTL: {
+                downloaded: 86400000,
+                downloading: 300000,
+                error: 120000
+            }
+        };
+        this.qualityPriority = {
+            '2160p': 5,
+            '1080p': 4,
+            '720p': 3,
+            'HD': 2
+        };
+        this.videoExtensions = [
+            '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
+            '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
+        ];
+        this.episodePatterns = [
+            /(\d+)x(\d+)/i,
+            /s(\d+)e(\d+)/i,
+            /season[\s\._-]?(\d+)[\s\._-]?episode[\s\._-]?(\d+)/i,
+            /ep[\s\._-]?(\d+)/i,
+            /(\d+)(?:\s*-\s*|\s*)(\d+)/,
+            /^(\d+)$/
+        ];
+        this.promotionalKeywords = [
+            'promo', '1xbet', 'bet', 'propaganda', 'publicidade', 'advertisement',
+            'sample', 'trailer', 'teaser', 'preview', 'torrentdosfilmes'
+        ];
+        this.torrentCache = new Map();
+        this.seasonCache = new Map();
+        this.torrentCacheTTL = 60 * 60 * 1000;
+        this.downloadTimeout = 30 * 60 * 1000;
+        this.downloadPollInterval = 5000;
         this.rdService = new RealDebridService_1.RealDebridService();
         this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
         this.cacheService = new CacheService_1.CacheService();
@@ -182,7 +174,6 @@ class StreamHandler {
                 }
             }
             let streams = await this.processStreamRequest(request);
-            // FILTRO MOBILE REFORÇADO
             streams = this.applyMobileCompatibilityFilter(streams);
             if (streams.length > 0) {
                 const cacheTTL = this.calculateDynamicCacheTTL(streams);
@@ -209,31 +200,26 @@ class StreamHandler {
     }
     applyMobileCompatibilityFilter(streams) {
         return streams.filter(stream => {
-            // 1. URL válida
             if (!stream.url || !stream.url.startsWith('http')) {
                 return false;
             }
-            // 2. Status downloaded
             if (stream.status !== 'downloaded') {
                 return false;
             }
-            // 3. Qualidade válida (igual ao scraper)
             const quality = this.qualityDetector.extractQualityFromStreamName(stream.name);
             if (!this.qualityDetector.isValidQuality(quality)) {
                 return false;
             }
             return true;
         }).map(stream => {
-            // Garantir behaviorHints mobile-compatible
             stream.behaviorHints = {
                 ...stream.behaviorHints,
                 notWebReady: false
             };
-            // Garantir nome formatado corretamente
             if (stream.name) {
                 const currentQuality = this.qualityDetector.extractQualityFromStreamName(stream.name);
                 if (!stream.name.match(/(2160p|1080p|720p|HD)/i)) {
-                    stream.name = `Brasil RD • ${currentQuality.toUpperCase()}`;
+                    stream.name = `Brasil RD | ${currentQuality.toUpperCase()}`;
                 }
             }
             return stream;
@@ -499,8 +485,8 @@ class StreamHandler {
             const stream = {
                 title: `${title} ${episodeTag}`,
                 url: streamLink,
-                name: `Brasil RD • ${fileQuality.toUpperCase()} • ${episodeTag}`,
-                description: `Conteúdo via temporada completa • ${episodeTag}`,
+                name: `Brasil RD | ${fileQuality.toUpperCase()} | ${episodeTag}`,
+                description: `Conteúdo via temporada completa | ${episodeTag}`,
                 behaviorHints: {
                     notWebReady: false,
                     bingeGroup: `br-season-${imdbId}-${season}`,
@@ -643,8 +629,8 @@ class StreamHandler {
                 const stream = {
                     title: `${torrent.title} [${torrent.provider}]`,
                     url: streamLink,
-                    name: `Brasil RD • ${fileQuality.toUpperCase()}`,
-                    description: `Conteúdo via scraping • ${torrent.language}`,
+                    name: `Brasil RD | ${fileQuality.toUpperCase()}`,
+                    description: `Conteúdo via scraping | ${torrent.language}`,
                     behaviorHints: {
                         notWebReady: false,
                         bingeGroup: `br-scraped-${request.id}`,
@@ -671,8 +657,8 @@ class StreamHandler {
         return {
             title: `${torrent.title} [${torrent.provider}] ${episodeTag}`,
             url: streamLink,
-            name: `Brasil RD • ${detectedQuality.toUpperCase()} • ${episodeTag}`,
-            description: `Conteúdo via scraping • ${torrent.language} • ${episodeTag}`,
+            name: `Brasil RD | ${detectedQuality.toUpperCase()} | ${episodeTag}`,
+            description: `Conteúdo via scraping | ${torrent.language} | ${episodeTag}`,
             behaviorHints: {
                 notWebReady: false,
                 bingeGroup: `br-scraped-${request.id}-${season}`,
@@ -847,12 +833,12 @@ class StreamHandler {
             }
             const fileQuality = this.qualityDetector.extractQualityFromFilename(targetFile.path);
             const streamTitle = this.generateEpisodeStreamTitle(magnet, requestEpisode.season, requestEpisode.episode);
-            const streamName = `Brasil RD • ${fileQuality.toUpperCase()} • S${requestEpisode.season}E${requestEpisode.episode}`;
+            const streamName = `Brasil RD | ${fileQuality.toUpperCase()} | S${requestEpisode.season}E${requestEpisode.episode}`;
             const stream = {
                 title: streamTitle,
                 url: streamLink,
                 name: streamName,
-                description: `Conteúdo curado • ${magnet.language} • Episódio ${requestEpisode.episode}`,
+                description: `Conteúdo curado | ${magnet.language} | Episódio ${requestEpisode.episode}`,
                 behaviorHints: {
                     notWebReady: false,
                     bingeGroup: `br-${request.id}`,
@@ -885,12 +871,12 @@ class StreamHandler {
             }
             const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
             const streamTitle = this.generateStreamTitle(magnet);
-            const streamName = `Brasil RD • ${fileQuality.toUpperCase()}`;
+            const streamName = `Brasil RD | ${fileQuality.toUpperCase()}`;
             const stream = {
                 title: streamTitle,
                 url: streamLink,
                 name: streamName,
-                description: `Conteúdo curado • ${magnet.language} • Coleção Completa`,
+                description: `Conteúdo curado | ${magnet.language} | Coleção Completa`,
                 behaviorHints: {
                     notWebReady: false,
                     bingeGroup: `br-${request.id}`,
@@ -1047,4 +1033,3 @@ class StreamHandler {
     }
 }
 exports.StreamHandler = StreamHandler;
-//# sourceMappingURL=StreamHandler.js.map

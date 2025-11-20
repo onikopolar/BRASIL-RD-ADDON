@@ -17,4 +17,3 @@ const getRandomProxy = () => {
     return exports.proxyConfig[randomIndex];
 };
 exports.getRandomProxy = getRandomProxy;
-//# sourceMappingURL=proxies.js.map

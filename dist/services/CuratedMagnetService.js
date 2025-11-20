@@ -36,9 +36,8 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CuratedMagnetService = void 0;
 const logger_1 = require("../utils/logger");
 class CuratedMagnetService {
-    magnets = new Map();
-    logger;
     constructor() {
+        this.magnets = new Map();
         this.logger = new logger_1.Logger('CuratedMagnetService');
         this.initializeDefaultMagnets().catch(error => this.logger.error('Error initializing default magnets', { error: error.message }));
     }
@@ -82,27 +81,16 @@ class CuratedMagnetService {
             });
         }
     }
-    /**
-     * Extracts base IMDb ID from Stremio format
-     * Examples:
-     * - "tt1942683:1:1" -> "tt1942683" (series episode)
-     * - "tt0317219" -> "tt0317219" (movie)
-     */
     extractBaseImdbId(fullId) {
         if (!fullId || typeof fullId !== 'string') {
             return fullId;
         }
-        // Extract base ID (part before first colon)
         const baseId = fullId.split(':')[0];
-        // Validate IMDb ID format (starts with 'tt' followed by digits)
         if (/^tt\d+$/.test(baseId)) {
             return baseId;
         }
         return fullId;
     }
-    /**
-     * Validates magnet data structure
-     */
     validateMagnet(magnet) {
         const requiredFields = ['imdbId', 'title', 'magnet', 'quality', 'seeds'];
         const missingFields = requiredFields.filter(field => !magnet[field]);
@@ -135,7 +123,7 @@ class CuratedMagnetService {
             if (existingIndex === -1) {
                 existingMagnets.push({
                     ...magnet,
-                    imdbId: baseImdbId // Normalize IMDb ID
+                    imdbId: baseImdbId
                 });
                 this.logger.info('Magnet added successfully', {
                     title: magnet.title,
@@ -146,7 +134,7 @@ class CuratedMagnetService {
             else {
                 existingMagnets[existingIndex] = {
                     ...magnet,
-                    imdbId: baseImdbId // Normalize IMDb ID
+                    imdbId: baseImdbId
                 };
                 this.logger.info('Magnet updated successfully', {
                     title: magnet.title,
@@ -192,7 +180,6 @@ class CuratedMagnetService {
     searchMagnets(request) {
         const { id, title, imdbId } = request;
         let results = [];
-        // Try to find magnets by IMDb ID (with base extraction)
         const searchId = imdbId || id;
         if (searchId) {
             const baseImdbId = this.extractBaseImdbId(searchId);
@@ -205,7 +192,6 @@ class CuratedMagnetService {
                 });
             }
         }
-        // Fallback to title search if no results by IMDb ID
         if (results.length === 0 && title) {
             this.logger.debug('Falling back to title search', { title });
             for (const magnets of this.magnets.values()) {
@@ -235,17 +221,14 @@ class CuratedMagnetService {
             'SD': 1
         };
         return magnets.sort((a, b) => {
-            // Sort by quality (descending)
             const qualityA = qualityScore[a.quality] || 0;
             const qualityB = qualityScore[b.quality] || 0;
             if (qualityB !== qualityA) {
                 return qualityB - qualityA;
             }
-            // Then by seeds (descending)
             if (b.seeds !== a.seeds) {
                 return b.seeds - a.seeds;
             }
-            // Finally by title (ascending)
             return a.title.localeCompare(b.title);
         });
     }
@@ -280,4 +263,3 @@ class CuratedMagnetService {
     }
 }
 exports.CuratedMagnetService = CuratedMagnetService;
-//# sourceMappingURL=CuratedMagnetService.js.map

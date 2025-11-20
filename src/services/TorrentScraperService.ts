@@ -58,6 +58,7 @@ interface TitleMatchResult {
     confidence: number;
     matchedKeywords: string[];
     exactMatch: boolean;
+    titleContainsExactMatch: boolean;
 }
 
 export class TorrentScraperService {
@@ -165,7 +166,7 @@ export class TorrentScraperService {
     ];
 
     constructor() {
-        logger.info('TorrentScraperService initialized - ADVANCED CONFIDENCE DETECTION', {
+        logger.info('TorrentScraperService initialized - TITLE + QUALITY MATCH DETECTION', {
             providers: this.providers.map(p => ({
                 name: p.name,
                 priority: p.priority,
@@ -173,7 +174,7 @@ export class TorrentScraperService {
             })),
             torrentIndexer: this.torrentIndexerConfig.enabled,
             allowedQualities: Array.from(this.allowedQualities),
-            confidenceDetection: '97% based on title + quality'
+            matchDetection: 'Title + Quality exact match in magnet names'
         });
     }
 
@@ -183,12 +184,12 @@ export class TorrentScraperService {
         targetSeason?: number
     ): Promise<TorrentResult[]> {
         const startTime = Date.now();
-        logger.info('Starting ADVANCED CONFIDENCE torrent search', {
+        logger.info('Starting TITLE + QUALITY torrent search', {
             query,
             type,
             targetSeason,
             providersCount: this.providers.length,
-            allowedQualities: Array.from(this.allowedQualities)
+            targetQualities: Array.from(this.allowedQualities)
         });
 
         try {
@@ -211,34 +212,20 @@ export class TorrentScraperService {
             
             const allResults = this.processSettledResults(settledResults);
             
-            const filteredResults = this.applyAdvancedConfidenceFiltering(allResults, query, type, targetSeason);
+            const titleQualityMatchedResults = this.applyTitleQualityMatchFiltering(allResults, query, type, targetSeason);
             
-            const highQualityResults = this.filterHighQualityOnly(filteredResults);
+            const qualityGroupedResults = this.groupResultsByQuality(titleQualityMatchedResults);
             
-            const uniqueResults = this.removeDuplicateResults(highQualityResults);
-            
-            if (uniqueResults.length === 0) {
-                logger.info('No HIGH CONFIDENCE results found', { 
-                    query, 
-                    type, 
-                    targetSeason,
-                    originalResults: allResults.length,
-                    highQualityResults: highQualityResults.length
-                });
-                return [];
-            }
-
-            const qualityGroups = this.groupByQuality(uniqueResults);
-            const bestResults = this.selectBestFromEachQuality(qualityGroups);
+            const bestResults = this.selectBestFromEachQualityGroup(qualityGroupedResults);
 
             const duration = Date.now() - startTime;
             this.logSearchResults(
                 query, 
                 type, 
-                uniqueResults.length, 
+                allResults.length, 
                 bestResults, 
                 duration, 
-                qualityGroups,
+                qualityGroupedResults,
                 targetSeason
             );
 
@@ -255,218 +242,164 @@ export class TorrentScraperService {
         }
     }
 
-    private applyAdvancedConfidenceFiltering(
+    private applyTitleQualityMatchFiltering(
         results: TorrentResult[], 
         originalQuery: string, 
         type: 'movie' | 'series',
         targetSeason?: number
     ): TorrentResult[] {
         const filteredResults: TorrentResult[] = [];
-        const mainTitle = this.extractMainTitle(originalQuery);
-        const exactTitle = this.normalizeTitle(mainTitle);
-        const essentialKeywords = this.extractEssentialKeywords(mainTitle);
+        const normalizedQuery = this.normalizeTitleForMatching(originalQuery);
+        const searchTitlePatterns = this.generateTitleMatchPatterns(normalizedQuery);
 
-        logger.debug('Applying ADVANCED CONFIDENCE filtering', {
+        logger.debug('Applying TITLE + QUALITY match filtering', {
             originalQuery,
-            mainTitle,
-            exactTitle,
-            essentialKeywords,
+            normalizedQuery,
+            searchTitlePatterns,
             totalResults: results.length
         });
 
         for (const result of results) {
-            const titleMatch = this.analyzeTitleMatch(result.title, mainTitle, exactTitle, essentialKeywords, type, targetSeason);
-            const qualityMatch = this.analyzeQualityMatch(result.title, result.quality);
+            const normalizedResultTitle = this.normalizeTitleForMatching(result.title);
+            const titleMatch = this.doesTitleMatchSearch(normalizedResultTitle, searchTitlePatterns, normalizedQuery);
+            const qualityMatch = this.allowedQualities.has(result.quality);
             
-            const overallConfidence = this.calculateOverallConfidence(titleMatch, qualityMatch);
-            
-            if (overallConfidence >= 0.85 && this.isValidContent(result.title)) {
-                result.confidence = overallConfidence;
-                result.relevanceScore = this.calculateAdvancedRelevanceScore(result.title, result.quality, overallConfidence);
+            if (titleMatch.matches && qualityMatch && this.isValidContent(result.title)) {
+                result.confidence = titleMatch.confidence;
+                result.relevanceScore = this.calculateTitleQualityRelevanceScore(result, titleMatch.confidence);
                 filteredResults.push(result);
                 
-                logger.debug('Torrent passed confidence filter', {
-                    title: result.title,
+                logger.debug('Torrent passed TITLE + QUALITY filter', {
+                    originalTitle: result.title,
+                    normalizedTitle: normalizedResultTitle,
                     quality: result.quality,
-                    confidence: `${(overallConfidence * 100).toFixed(1)}%`,
-                    titleConfidence: `${(titleMatch.confidence * 100).toFixed(1)}%`,
-                    qualityConfidence: `${(qualityMatch.confidence * 100).toFixed(1)}%`
+                    confidence: `${(titleMatch.confidence * 100).toFixed(1)}%`,
+                    matchType: titleMatch.matchType
                 });
             } else {
-                logger.debug('Torrent filtered by confidence', {
+                logger.debug('Torrent filtered by TITLE + QUALITY', {
                     title: result.title,
                     quality: result.quality,
-                    confidence: `${(overallConfidence * 100).toFixed(1)}%`,
-                    required: '85%'
+                    titleMatch: titleMatch.matches,
+                    qualityMatch: qualityMatch,
+                    matchType: titleMatch.matchType
                 });
             }
         }
 
-        logger.info('Advanced confidence filtering completed', {
+        logger.info('Title + Quality filtering completed', {
             originalCount: results.length,
             filteredCount: filteredResults.length,
             removedCount: results.length - filteredResults.length,
-            averageConfidence: filteredResults.length > 0 ? 
-                (filteredResults.reduce((sum, r) => sum + r.confidence, 0) / filteredResults.length).toFixed(3) : 0
+            matchSuccessRate: results.length > 0 ? 
+                `${((filteredResults.length / results.length) * 100).toFixed(1)}%` : '0%'
         });
 
         return filteredResults;
     }
 
-    private analyzeTitleMatch(
-        torrentTitle: string,
-        mainTitle: string,
-        exactTitle: string,
-        essentialKeywords: string[],
-        type: 'movie' | 'series',
-        targetSeason?: number
-    ): TitleMatchResult {
-        const titleLower = torrentTitle.toLowerCase();
-        const exactTitleLower = exactTitle.toLowerCase();
-        const mainTitleLower = mainTitle.toLowerCase();
-
-        let confidence = 0;
-        const matchedKeywords: string[] = [];
-        let exactMatch = false;
-
-        if (this.isPromotionalContent(titleLower)) {
-            return { confidence: 0, matchedKeywords: [], exactMatch: false };
-        }
-
-        if (type === 'series' && targetSeason) {
-            if (!this.isCorrectSeason(titleLower, targetSeason)) {
-                return { confidence: 0, matchedKeywords: [], exactMatch: false };
-            }
-        }
-
-        if (titleLower.includes(exactTitleLower)) {
-            confidence += 0.6;
-            exactMatch = true;
-            matchedKeywords.push(...exactTitleLower.split(' ').filter(w => w.length > 2));
-        }
-
-        if (titleLower.includes(mainTitleLower)) {
-            confidence += 0.3;
-            matchedKeywords.push(...mainTitleLower.split(' ').filter(w => w.length > 2));
-        }
-
-        const keywordMatches = essentialKeywords.filter(keyword => 
-            titleLower.includes(keyword)
-        );
-        
-        if (keywordMatches.length > 0) {
-            confidence += (keywordMatches.length / essentialKeywords.length) * 0.4;
-            matchedKeywords.push(...keywordMatches);
-        }
-
-        if (type === 'movie') {
-            if (this.hasExactMovieMatch(titleLower, exactTitleLower)) {
-                confidence += 0.2;
-            }
-        }
-
-        const uniqueKeywords = [...new Set(matchedKeywords)];
-        return {
-            confidence: Math.min(confidence, 1.0),
-            matchedKeywords: uniqueKeywords,
-            exactMatch
-        };
+    private normalizeTitleForMatching(title: string): string {
+        return title
+            .toLowerCase()
+            .normalize('NFD')
+            .replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\w\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .replace(/\b(o|a|os|as|the|and|de|da|do|das|dos)\b/gi, '')
+            .trim();
     }
 
-    private analyzeQualityMatch(torrentTitle: string, detectedQuality: string): { confidence: number; reliable: boolean } {
-        const titleLower = torrentTitle.toLowerCase();
-        let confidence = 0.5;
-        let reliable = false;
+    private generateTitleMatchPatterns(normalizedTitle: string): RegExp[] {
+        const words = normalizedTitle.split(' ').filter(word => word.length > 2);
+        const patterns: RegExp[] = [];
 
-        for (const { pattern, quality, confidence: patternConfidence } of this.qualityPatterns) {
-            if (pattern.test(titleLower)) {
-                if (quality === detectedQuality) {
-                    if (patternConfidence >= 95) {
-                        confidence = 0.95;
-                        reliable = true;
-                        break;
-                    } else if (patternConfidence >= 90) {
-                        confidence = Math.max(confidence, 0.9);
-                        reliable = true;
-                    } else if (patternConfidence >= 80) {
-                        confidence = Math.max(confidence, 0.8);
-                    }
+        if (words.length === 0) return patterns;
+
+        patterns.push(new RegExp(`\\b${normalizedTitle.replace(/\s+/g, '\\s+')}\\b`, 'i'));
+
+        if (words.length > 1) {
+            const mainPattern = words.slice(0, Math.min(4, words.length)).join('\\s+');
+            patterns.push(new RegExp(`\\b${mainPattern}\\b`, 'i'));
+        }
+
+        if (words.length >= 3) {
+            const essentialPattern = words.filter((_, index) => index % 2 === 0).join('\\s+');
+            patterns.push(new RegExp(`\\b${essentialPattern}\\b`, 'i'));
+        }
+
+        const individualWordPatterns = words
+            .filter(word => word.length > 3)
+            .map(word => new RegExp(`\\b${word}\\b`, 'i'));
+
+        patterns.push(...individualWordPatterns);
+
+        return patterns;
+    }
+
+    private doesTitleMatchSearch(
+        resultTitle: string, 
+        searchPatterns: RegExp[], 
+        normalizedQuery: string
+    ): { matches: boolean; confidence: number; matchType: string } {
+        if (this.isPromotionalContent(resultTitle)) {
+            return { matches: false, confidence: 0, matchType: 'promotional' };
+        }
+
+        for (const pattern of searchPatterns) {
+            if (pattern.test(resultTitle)) {
+                const matchLength = pattern.source.replace(/\\s\+/g, ' ').length - 4;
+                const confidence = Math.min(matchLength / normalizedQuery.length, 1.0);
+                
+                if (matchLength > normalizedQuery.length * 0.7) {
+                    return { 
+                        matches: true, 
+                        confidence: Math.max(confidence, 0.9), 
+                        matchType: 'exact' 
+                    };
+                } else {
+                    return { 
+                        matches: true, 
+                        confidence: Math.max(confidence, 0.7), 
+                        matchType: 'partial' 
+                    };
                 }
             }
         }
 
-        const exactQualityPatterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' }
-        ];
-
-        for (const { pattern, quality } of exactQualityPatterns) {
-            if (pattern.test(titleLower) && quality === detectedQuality) {
-                confidence = Math.max(confidence, 0.97);
-                reliable = true;
-                break;
-            }
-        }
-
-        return { confidence, reliable };
-    }
-
-    private calculateOverallConfidence(
-        titleMatch: TitleMatchResult, 
-        qualityMatch: { confidence: number; reliable: boolean }
-    ): number {
-        const titleWeight = 0.7;
-        const qualityWeight = 0.3;
-
-        let overallConfidence = (titleMatch.confidence * titleWeight) + (qualityMatch.confidence * qualityWeight);
-
-        if (titleMatch.exactMatch) {
-            overallConfidence += 0.15;
-        }
-
-        if (qualityMatch.reliable) {
-            overallConfidence += 0.1;
-        }
-
-        return Math.min(overallConfidence, 1.0);
-    }
-
-    private hasExactMovieMatch(title: string, exactTitle: string): boolean {
-        const cleanTitle = title
-            .replace(/\s+(?:i{1,3}|iv|v|vi{0,3}|[1-9])(?:\s|$)/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+        const queryWords = normalizedQuery.split(' ').filter(word => word.length > 3);
+        const titleWords = resultTitle.split(' ');
         
-        if (cleanTitle.includes(exactTitle)) {
-            return true;
-        }
-
-        const titleWords = cleanTitle.split(/\s+/).filter(word => word.length > 2);
-        const exactWords = exactTitle.split(/\s+/).filter(word => word.length > 2);
-        
-        if (exactWords.length === 0) return false;
-        
-        const matchingWords = exactWords.filter(word => 
-            titleWords.some(titleWord => titleWord.includes(word))
+        const matchingWords = queryWords.filter(queryWord =>
+            titleWords.some(titleWord => titleWord.includes(queryWord))
         );
-        
-        return matchingWords.length >= Math.max(2, exactWords.length * 0.9);
+
+        if (matchingWords.length >= Math.max(2, queryWords.length * 0.6)) {
+            const confidence = matchingWords.length / queryWords.length;
+            return { 
+                matches: true, 
+                confidence: Math.max(confidence, 0.6), 
+                matchType: 'keyword' 
+            };
+        }
+
+        return { matches: false, confidence: 0, matchType: 'no-match' };
     }
 
-    private calculateAdvancedRelevanceScore(title: string, quality: string, confidence: number): number {
-        let score = this.qualityPriority[quality] || 100;
+    private calculateTitleQualityRelevanceScore(result: TorrentResult, confidence: number): number {
+        let score = this.qualityPriority[result.quality] || 100;
         
         score += confidence * 200;
         
-        const titleLower = title.toLowerCase();
+        const titleLower = result.title.toLowerCase();
         if (titleLower.includes('dual') || titleLower.includes('dublado')) {
             score += 25;
         }
         if (titleLower.includes('bluray') || titleLower.includes('web-dl')) {
             score += 20;
+        }
+        
+        if (result.seeders > 0) {
+            score += Math.min(result.seeders * 0.5, 50);
         }
         
         if (titleLower.match(/s\d+e\d+/i)) {
@@ -476,9 +409,58 @@ export class TorrentScraperService {
         return Math.round(score);
     }
 
+    private groupResultsByQuality(results: TorrentResult[]): Map<string, TorrentResult[]> {
+        const groups = new Map<string, TorrentResult[]>();
+        
+        for (const quality of this.allowedQualities) {
+            groups.set(quality, []);
+        }
+        
+        for (const result of results) {
+            if (this.allowedQualities.has(result.quality)) {
+                groups.get(result.quality)!.push(result);
+            }
+        }
+        
+        return groups;
+    }
+
+    private selectBestFromEachQualityGroup(qualityGroups: Map<string, TorrentResult[]>): TorrentResult[] {
+        const bestResults: TorrentResult[] = [];
+        const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
+        
+        for (const quality of qualityOrder) {
+            const group = qualityGroups.get(quality);
+            if (group && group.length > 0) {
+                const bestInQuality = group.sort((a, b) => {
+                    if (b.confidence !== a.confidence) {
+                        return b.confidence - a.confidence;
+                    }
+                    if (b.relevanceScore !== a.relevanceScore) {
+                        return b.relevanceScore - a.relevanceScore;
+                    }
+                    if (b.seeders !== a.seeders) {
+                        return b.seeders - a.seeders;
+                    }
+                    return b.sizeInBytes - a.sizeInBytes;
+                }).slice(0, 3);
+                
+                bestResults.push(...bestInQuality);
+            }
+        }
+        
+        return bestResults.slice(0, 12);
+    }
+
     private isValidContent(title: string): boolean {
         const titleLower = title.toLowerCase();
         return !this.promotionalKeywords.some(keyword => titleLower.includes(keyword));
+    }
+
+    private isPromotionalContent(title: string): boolean {
+        return this.promotionalKeywords.some(keyword => 
+            title.includes(keyword)
+        );
     }
 
     private extractQuality(title: string): string {
@@ -529,28 +511,6 @@ export class TorrentScraperService {
         return 'HD';
     }
 
-    private filterHighQualityOnly(results: TorrentResult[]): TorrentResult[] {
-        const highQualityResults = results.filter(result => 
-            this.allowedQualities.has(result.quality)
-        );
-
-        const removedCount = results.length - highQualityResults.length;
-        if (removedCount > 0) {
-            const removedQualities = [...new Set(results
-                .filter(r => !this.allowedQualities.has(r.quality))
-                .map(r => r.quality))];
-                
-            logger.info('Removed low quality torrents', {
-                removedCount,
-                remainingCount: highQualityResults.length,
-                removedQualities,
-                allowedQualities: Array.from(this.allowedQualities)
-            });
-        }
-
-        return highQualityResults;
-    }
-
     private extractMainTitle(query: string): string {
         return query
             .replace(/temporada\s*\d+/gi, '')
@@ -559,37 +519,6 @@ export class TorrentScraperService {
             .replace(/s\d+/gi, '')
             .replace(/\s+/g, ' ')
             .trim();
-    }
-
-    private normalizeTitle(title: string): string {
-        return title
-            .toLowerCase()
-            .replace(/[^\w\s]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .replace(/\b(o|a|os|as|the|and|de|da|do|das|dos)\b/gi, '')
-            .trim();
-    }
-
-    private extractEssentialKeywords(mainTitle: string): string[] {
-        const normalized = this.normalizeTitle(mainTitle);
-        return normalized
-            .split(' ')
-            .filter(word => 
-                word.length > 2 && 
-                !this.ignoredWords.has(word)
-            )
-            .slice(0, 6);
-    }
-
-    private isPromotionalContent(title: string): boolean {
-        return this.promotionalKeywords.some(keyword => 
-            title.includes(keyword)
-        );
-    }
-
-    private isCorrectSeason(title: string, targetSeason: number): boolean {
-        const titleSeason = this.extractSeasonNumber(title);
-        return titleSeason === null || titleSeason === targetSeason;
     }
 
     private extractSeasonNumber(text: string): number | null {
@@ -739,61 +668,6 @@ export class TorrentScraperService {
         });
 
         return allResults;
-    }
-
-    private removeDuplicateResults(results: TorrentResult[]): TorrentResult[] {
-        const seenMagnets = new Set<string>();
-        const uniqueResults: TorrentResult[] = [];
-
-        for (const result of results) {
-            if (result.magnet && !seenMagnets.has(result.magnet)) {
-                seenMagnets.add(result.magnet);
-                uniqueResults.push(result);
-            }
-        }
-
-        return uniqueResults;
-    }
-
-    private groupByQuality(results: TorrentResult[]): Map<string, TorrentResult[]> {
-        const groups = new Map<string, TorrentResult[]>();
-        
-        for (const result of results) {
-            const quality = result.quality;
-            if (!groups.has(quality)) {
-                groups.set(quality, []);
-            }
-            groups.get(quality)!.push(result);
-        }
-        
-        return groups;
-    }
-
-    private selectBestFromEachQuality(qualityGroups: Map<string, TorrentResult[]>): TorrentResult[] {
-        const bestResults: TorrentResult[] = [];
-        const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
-        
-        for (const quality of qualityOrder) {
-            const group = qualityGroups.get(quality);
-            if (group && group.length > 0) {
-                const bestInQuality = group.sort((a, b) => {
-                    if (b.confidence !== a.confidence) {
-                        return b.confidence - a.confidence;
-                    }
-                    if (b.relevanceScore !== a.relevanceScore) {
-                        return b.relevanceScore - a.relevanceScore;
-                    }
-                    if (b.seeders !== a.seeders) {
-                        return b.seeders - a.seeders;
-                    }
-                    return b.sizeInBytes - a.sizeInBytes;
-                }).slice(0, 2);
-                
-                bestResults.push(...bestInQuality);
-            }
-        }
-        
-        return bestResults.slice(0, 8);
     }
 
     private cleanTitle(title: string): string {
@@ -1078,14 +952,15 @@ export class TorrentScraperService {
             let magnetLink = $('a[href^="magnet:"]').first().attr('href');
 
             if (!magnetLink) {
-                $('a').each((index, element) => {
-                    const href = $(element).attr('href');
-                    if (href && href.startsWith('magnet:')) {
-                        magnetLink = href;
-                        return false;
-                    }
-                });
-            }
+    const links = $('a');
+    for (let i = 0; i < links.length; i++) {
+        const href = $(links[i]).attr('href');
+        if (href && href.startsWith('magnet:')) {
+            magnetLink = href;
+            break;
+        }
+    }
+}
 
             return { magnet: magnetLink || '' };
 
@@ -1159,10 +1034,10 @@ export class TorrentScraperService {
             qualityDistribution[quality] = results.length;
         });
 
-        const avgConfidence = bestResults.length > 0 ? 
-            (bestResults.reduce((sum, r) => sum + r.confidence, 0) / bestResults.length).toFixed(3) : 0;
+        const availableQualities = bestResults.map(r => r.quality);
+        const uniqueQualities = [...new Set(availableQualities)];
 
-        logger.info('ADVANCED CONFIDENCE search completed', {
+        logger.info('TITLE + QUALITY search completed', {
             query,
             type,
             targetSeason,
@@ -1170,11 +1045,12 @@ export class TorrentScraperService {
             bestResults: bestResults.length,
             duration: `${duration}ms`,
             qualityDistribution,
-            selectedQualities: bestResults.map(r => r.quality),
-            averageConfidence: avgConfidence,
-            confidenceRange: bestResults.length > 0 ? 
-                `${(Math.min(...bestResults.map(r => r.confidence)) * 100).toFixed(1)}% - ${(Math.max(...bestResults.map(r => r.confidence)) * 100).toFixed(1)}%` : 'N/A',
-            confidenceDetection: '97% based on title + quality analysis'
+            availableStreamQualities: uniqueQualities,
+            matchDetection: 'Title + Quality exact match in magnet names',
+            streamsPerQuality: availableQualities.reduce((acc, quality) => {
+                acc[quality] = (acc[quality] || 0) + 1;
+                return acc;
+            }, {} as Record<string, number>)
         });
     }
 }

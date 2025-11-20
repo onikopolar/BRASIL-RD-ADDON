@@ -5,7 +5,6 @@ const StreamHandler_1 = require("./services/StreamHandler");
 const logger_1 = require("./utils/logger");
 const logger = new logger_1.Logger('Main');
 const streamHandler = new StreamHandler_1.StreamHandler();
-// Manifest simplificado - QUALIDADE FIXA
 const manifest = {
     id: 'org.brasilrd.addon',
     version: '1.0.0',
@@ -35,7 +34,6 @@ const manifest = {
     ]
 };
 const builder = new stremio_addon_sdk_1.addonBuilder(manifest);
-// Handler principal de streams OTIMIZADO
 builder.defineStreamHandler(async (args) => {
     const requestStartTime = Date.now();
     const config = args.config;
@@ -46,7 +44,6 @@ builder.defineStreamHandler(async (args) => {
         });
         return { streams: [] };
     }
-    // CONFIGURAÇÃO OTIMIZADA
     const streamRequest = {
         type: args.type,
         id: args.id,
@@ -70,20 +67,16 @@ builder.defineStreamHandler(async (args) => {
     try {
         const result = await streamHandler.handleStreamRequest(streamRequest);
         const processingTime = Date.now() - requestStartTime;
-        // Log SIMPLES sem detecção de qualidade (para evitar confusão)
         logger.info('Streams processados com sucesso', {
             requestId: args.id,
             streamsCount: result.streams.length,
             processingTime: processingTime + 'ms',
-            // REMOVIDA a detecção de qualidade dos logs para evitar confusão
         });
-        // Log dos nomes reais dos streams para debug
         if (result.streams.length > 0) {
             logger.debug('Nomes dos streams encontrados', {
                 streamNames: result.streams.map(s => s.name)
             });
         }
-        // Se encontrou poucos streams, adicionar log de warning
         if (result.streams.length < 5) {
             logger.warn('Poucos streams encontrados', {
                 requestId: args.id,
@@ -128,4 +121,3 @@ console.log('PLATAFORMAS SUPORTADAS:');
 console.log('- Desktop (Windows, macOS, Linux)');
 console.log('- Mobile (Android, iOS)');
 console.log('- TV (Android TV, Smart TVs)');
-//# sourceMappingURL=server.js.map

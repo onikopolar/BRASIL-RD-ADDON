@@ -2,8 +2,6 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.Logger = void 0;
 class Logger {
-    context;
-    logLevel;
     constructor(context) {
         this.context = context;
         this.logLevel = process.env.LOG_LEVEL || 'info';
@@ -36,4 +34,3 @@ class Logger {
     }
 }
 exports.Logger = Logger;
-//# sourceMappingURL=logger.js.map

@@ -1,3 +1,4 @@
+import { TorrentResult } from './TorrentScraperService';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index';
 export declare class StreamHandler {
     private readonly rdService;
@@ -17,38 +18,36 @@ export declare class StreamHandler {
     private readonly torrentCacheTTL;
     private readonly downloadTimeout;
     private readonly downloadPollInterval;
+    private readonly scrapedMagnetsCache;
+    private readonly lazyLoadingStreams;
     constructor();
     handleStreamRequest(request: StreamRequest): Promise<{
         streams: Stream[];
     }>;
+    private createLazyLoadingUrl;
+    handleLazyLoadingClick(requestId: string, magnetHash: string, apiKey: string): Promise<{
+        streamUrl: string;
+        filename: string;
+    } | null>;
+    processUserSelectedMagnet(magnet: string, title: string, quality: string, request: StreamRequest): Promise<Stream | null>;
+    private updateCacheWithDownloadedStream;
+    private waitForTorrentDownload;
+    getAvailableMagnets(request: StreamRequest): Promise<TorrentResult[]>;
     private applyMobileCompatibilityFilter;
     private calculateDynamicCacheTTL;
     private processStreamRequest;
     private processSeriesRequest;
     private processMovieRequest;
-    private processSeriesScraping;
-    private processMovieScraping;
-    private fallbackToRegularScraping;
-    private processTorrentsWithRateLimit;
+    private createStremioCompatibleLazyStreams;
+    private createLazyLoadingStreams;
+    private processCuratedMagnets;
+    private processMagnetSafely;
+    private processMagnet;
     private extractSeasonFromTitle;
     private extractImdbIdFromRequest;
     private getSeasonCacheKey;
     private getOrAddSeasonTorrent;
     private processEpisodeFromSeason;
-    private processCuratedMagnets;
-    private processScrapedTorrent;
-    private processSeriesTorrent;
-    private processMovieTorrent;
-    private createSeriesStream;
-    private findEpisodeFilesByQuality;
-    private fetchTitleFromImdb;
-    private sortFilesByEpisode;
-    private extractEpisodeInfo;
-    private compareEpisodeInfo;
-    private filterPromotionalFiles;
-    private identifyMainFile;
-    private processMagnetSafely;
-    private processMagnet;
     private processSpecificEpisode;
     private processAllEpisodes;
     private extractEpisodeFromRequest;
@@ -81,8 +80,22 @@ export declare class StreamHandler {
             size: number;
             entries: string[];
         };
+        scrapedMagnetsCache: {
+            size: number;
+            entries: string[];
+        };
+        lazyLoadingStreams: {
+            size: number;
+            entries: string[];
+        };
     };
     clearCache(): void;
     validateMagnet(magnet: string): boolean;
+    private fetchTitleFromImdb;
+    private sortFilesByEpisode;
+    private extractEpisodeInfo;
+    private compareEpisodeInfo;
+    private filterPromotionalFiles;
+    private identifyMainFile;
     private delay;
 }

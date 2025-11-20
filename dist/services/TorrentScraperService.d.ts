@@ -13,6 +13,8 @@ export interface TorrentResult {
     season?: number;
     lastUpdated: Date;
     confidence: number;
+    realDebridAdded: boolean;
+    realDebridId?: string;
 }
 export declare class TorrentScraperService {
     private readonly providers;
@@ -26,30 +28,50 @@ export declare class TorrentScraperService {
     private readonly qualityPatterns;
     constructor();
     searchTorrents(query: string, type?: 'movie' | 'series', targetSeason?: number): Promise<TorrentResult[]>;
-    private applyAdvancedConfidenceFiltering;
-    private analyzeTitleMatch;
-    private analyzeQualityMatch;
-    private calculateOverallConfidence;
-    private hasExactMovieMatch;
-    private calculateAdvancedRelevanceScore;
+    /**
+     * NOVA FUNÇÃO: Adiciona um magnet específico ao Real-Debrid quando o usuário clica na stream
+     * Esta função será chamada pelo StreamHandler quando o usuário selecionar uma stream
+     */
+    addMagnetToRealDebrid(magnet: string, title: string, quality: string): Promise<{
+        success: boolean;
+        realDebridId?: string;
+        error?: string;
+    }>;
+    /**
+     * NOVA FUNÇÃO: Verifica o status de um torrent no Real-Debrid
+     * Será usada para verificar se o torrent já foi baixado após o usuário clicar
+     */
+    checkRealDebridStatus(realDebridId: string): Promise<{
+        status: 'downloaded' | 'downloading' | 'error';
+        progress: number;
+    }>;
+    /**
+     * NOVA FUNÇÃO: Obtém a URL de stream de um torrent já baixado no Real-Debrid
+     */
+    getRealDebridStreamUrl(realDebridId: string): Promise<{
+        streamUrl: string;
+        filename: string;
+    } | null>;
+    private extractMagnetHash;
+    private generateRealDebridId;
+    private applyTitleQualityMatchFiltering;
+    private normalizeTitleForMatching;
+    private generateTitleMatchPatterns;
+    private doesTitleMatchSearch;
+    private calculateTitleQualityRelevanceScore;
+    private groupResultsByQuality;
+    private selectBestFromEachQualityGroup;
     private isValidContent;
+    private isPromotionalContent;
     private extractQuality;
     private inferQualityFromContext;
-    private filterHighQualityOnly;
     private extractMainTitle;
-    private normalizeTitle;
-    private extractEssentialKeywords;
-    private isPromotionalContent;
-    private isCorrectSeason;
     private extractSeasonNumber;
     private searchTorrentIndexer;
     private mapTorrentIndexerResult;
     private getTorrentIndexerHeaders;
     private generateSeasonQueries;
     private processSettledResults;
-    private removeDuplicateResults;
-    private groupByQuality;
-    private selectBestFromEachQuality;
     private cleanTitle;
     private extractLanguage;
     private calculateSizeInBytes;
