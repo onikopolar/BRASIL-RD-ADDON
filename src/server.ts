@@ -384,7 +384,7 @@ app.get('/configure', (req: any, res: any) => {
 
                 <div class="separator"></div>
 
-                <h3 class="gives">This addon has more :</h3>
+                <h3 class="gives">Este addon oferece: :</h3>
                 <ul>
                     <li>Movies</li>
                     <li>Series</li>
@@ -402,7 +402,7 @@ app.get('/configure', (req: any, res: any) => {
                         </div>
 
                         <div class="warning-text">
-                            <strong>Aviso de Segurança:</strong> Este é o repositório oficial mantido por ONIKO. Não nos responsabilizamos pela segurança de sua chave API em forks ou versões não oficiais deste projeto.
+                            <strong>Aviso de Segurança:</strong> Este é o repositório oficial mantido por ONIKO. Não me responsabilizo pela segurança de sua chave API em forks ou versões não oficiais deste projeto.
                         </div>
                     </div>
                 </form>
