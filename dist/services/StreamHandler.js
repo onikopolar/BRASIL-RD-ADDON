@@ -203,7 +203,7 @@ class StreamHandler {
             if (!stream.url || !stream.url.startsWith('http')) {
                 return false;
             }
-            if (stream.status !== 'downloaded') {
+            if (stream.status !== 'downloaded' && stream.status !== 'ready') {
                 return false;
             }
             const quality = this.qualityDetector.extractQualityFromStreamName(stream.name);
@@ -515,19 +515,61 @@ class StreamHandler {
         }
     }
     async processCuratedMagnets(magnets, request) {
+        const qualityGroups = this.groupMagnetsByQuality(magnets);
+        const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
         const streams = [];
-        for (const magnet of magnets) {
-            const stream = await this.processMagnetSafely(magnet, request);
+        for (const magnet of bestMagnets) {
+            const stream = this.processMagnetLazy(magnet, request);
             if (stream) {
                 streams.push(stream);
-                this.logger.debug('Successfully processed curated magnet', {
+                this.logger.debug('Created lazy stream for quality', {
                     requestId: request.id,
-                    magnetTitle: magnet.title
+                    magnetTitle: magnet.title,
+                    quality: magnet.quality
                 });
-                break;
             }
         }
+        this.logger.info('Processed multiple quality streams', {
+            requestId: request.id,
+            totalQualities: streams.length,
+            qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
+        });
         return this.sortStreamsByQuality(streams);
+    }
+    groupMagnetsByQuality(magnets) {
+        const groups = new Map();
+        const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
+        for (const quality of allowedQualities) {
+            groups.set(quality, []);
+        }
+        for (const magnet of magnets) {
+            const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+            if (allowedQualities.has(quality)) {
+                groups.get(quality).push(magnet);
+            }
+        }
+        return groups;
+    }
+    selectBestFromEachQualityGroup(qualityGroups) {
+        const bestMagnets = [];
+        const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
+        for (const quality of qualityOrder) {
+            const group = qualityGroups.get(quality);
+            if (group && group.length > 0) {
+                const bestInQuality = group.sort((a, b) => {
+                    const aScore = a.title.length;
+                    const bScore = b.title.length;
+                    return bScore - aScore;
+                })[0];
+                bestMagnets.push(bestInQuality);
+                this.logger.debug('Selected best magnet for quality', {
+                    quality,
+                    magnetTitle: bestInQuality.title,
+                    alternatives: group.length
+                });
+            }
+        }
+        return bestMagnets;
     }
     async processScrapedTorrent(torrent, request) {
         const requestId = request.id;
@@ -766,12 +808,59 @@ class StreamHandler {
         });
     }
     identifyMainFile(files) {
+        return this.selectBestVideoFile(files);
+    }
+    selectBestVideoFile(files) {
         const filteredFiles = this.filterPromotionalFiles(files);
-        if (filteredFiles.length === 0) {
+        if (filteredFiles.length === 0)
             return null;
+        const qualityGroups = new Map();
+        for (const file of filteredFiles) {
+            const quality = this.detectFileQuality(file.path);
+            if (!qualityGroups.has(quality)) {
+                qualityGroups.set(quality, []);
+            }
+            qualityGroups.get(quality).push(file);
         }
-        const sortedFiles = filteredFiles.sort((a, b) => b.bytes - a.bytes);
-        return sortedFiles[0];
+        const qualityOrder = ["2160p", "1080p", "720p", "HD", "SD", "unknown"];
+        for (const quality of qualityOrder) {
+            const group = qualityGroups.get(quality);
+            if (group && group.length > 0) {
+                const bestFile = group.sort((a, b) => {
+                    if (b.bytes !== a.bytes) {
+                        return b.bytes - a.bytes;
+                    }
+                    const aHasSample = a.path.toLowerCase().includes("sample");
+                    const bHasSample = b.path.toLowerCase().includes("sample");
+                    if (aHasSample !== bHasSample) {
+                        return aHasSample ? 1 : -1;
+                    }
+                    return 0;
+                })[0];
+                this.logger.debug("Melhor arquivo selecionado", {
+                    filename: bestFile.path,
+                    quality: quality,
+                    size: bestFile.bytes,
+                    totalFilesInGroup: group.length
+                });
+                return bestFile;
+            }
+        }
+        return null;
+    }
+    detectFileQuality(filename) {
+        const lowerFilename = filename.toLowerCase();
+        if (/(2160p|4k|uhd|ultra.hd)/i.test(lowerFilename))
+            return "2160p";
+        if (/(1080p|fhd|full.hd)/i.test(lowerFilename))
+            return "1080p";
+        if (/(720p|hd.ready)/i.test(lowerFilename))
+            return "720p";
+        if (/(hd|high.definition)/i.test(lowerFilename))
+            return "HD";
+        if (/(480p|sd|standard.definition)/i.test(lowerFilename))
+            return "SD";
+        return "unknown";
     }
     async processMagnetSafely(magnet, request) {
         try {
@@ -894,6 +983,33 @@ class StreamHandler {
             });
             return null;
         }
+    }
+    createLazyStream(title, name, description, magnet, apiKey, quality, behaviorHints) {
+        const encodedMagnet = Buffer.from(magnet).toString('base64');
+        const resolveUrl = `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+        return {
+            title: title,
+            url: resolveUrl,
+            name: name,
+            description: description,
+            behaviorHints: {
+                notWebReady: false,
+                bingeGroup: `br-lazy-${Date.now()}`,
+                filename: this.sanitizeFilename(title),
+                ...behaviorHints
+            },
+            status: 'ready',
+            torrentId: undefined
+        };
+    }
+    processMagnetLazy(magnet, request) {
+        const magnetHash = this.extractHashFromMagnet(magnet.magnet);
+        if (!magnetHash) {
+            this.logger.debug('Invalid magnet hash', { requestId: request.id, magnetTitle: magnet.title });
+            return null;
+        }
+        const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+        return this.createLazyStream(magnet.title, `Brasil RD | ${quality.toUpperCase()} | LAZY`, `Conteúdo sob demanda | ${magnet.language} | Clique para carregar`, magnet.magnet, request.apiKey, quality);
     }
     extractEpisodeFromRequest(requestId) {
         const defaultResult = { season: 1, episode: 1, isValid: false };

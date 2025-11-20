@@ -303,8 +303,8 @@ export class StreamHandler {
         return false;
       }
       
-      // 2. Status downloaded
-      if (stream.status !== 'downloaded') {
+      // 2. Status downloaded ou ready (para lazy streams)
+      if (stream.status !== 'downloaded' && stream.status !== 'ready') {
         return false;
       }
       
@@ -710,22 +710,89 @@ export class StreamHandler {
     }
   }
 
-  private async processCuratedMagnets(magnets: CuratedMagnet[], request: StreamRequest): Promise<Stream[]> {
+    private async processCuratedMagnets(magnets: CuratedMagnet[], request: StreamRequest): Promise<Stream[]> {
+    // 1. Agrupar magnets por qualidade (seguindo a mesma lógica do TorrentScraperService)
+    const qualityGroups = this.groupMagnetsByQuality(magnets);
+    
+    // 2. Selecionar o melhor magnet de cada grupo de qualidade
+    const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
+    
+    // 3. Criar streams lazy para cada qualidade
     const streams: Stream[] = [];
-
-    for (const magnet of magnets) {
-      const stream = await this.processMagnetSafely(magnet, request);
+    
+    for (const magnet of bestMagnets) {
+      const stream = this.processMagnetLazy(magnet, request);
       if (stream) {
         streams.push(stream);
-        this.logger.debug('Successfully processed curated magnet', { 
-          requestId: request.id, 
-          magnetTitle: magnet.title 
+        this.logger.debug('Created lazy stream for quality', {
+          requestId: request.id,
+          magnetTitle: magnet.title,
+          quality: magnet.quality
         });
-        break;
       }
     }
+    
+    this.logger.info('Processed multiple quality streams', {
+      requestId: request.id,
+      totalQualities: streams.length,
+      qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
+    });
 
     return this.sortStreamsByQuality(streams);
+  }
+
+    /**
+   * Agrupa magnets por qualidade (adaptado do TorrentScraperService)
+   */
+  private groupMagnetsByQuality(magnets: CuratedMagnet[]): Map<string, CuratedMagnet[]> {
+    const groups = new Map<string, CuratedMagnet[]>();
+    
+    // Inicializar grupos para todas as qualidades suportadas
+    const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
+    for (const quality of allowedQualities) {
+      groups.set(quality, []);
+    }
+    
+    // Agrupar magnets por qualidade detectada
+    for (const magnet of magnets) {
+      const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+      if (allowedQualities.has(quality)) {
+        groups.get(quality)!.push(magnet);
+      }
+    }
+    
+    return groups;
+  }
+
+  /**
+   * Seleciona o melhor magnet de cada grupo de qualidade (adaptado do TorrentScraperService)
+   */
+  private selectBestFromEachQualityGroup(qualityGroups: Map<string, CuratedMagnet[]>): CuratedMagnet[] {
+    const bestMagnets: CuratedMagnet[] = [];
+    const qualityOrder = ['2160p', '1080p', '720p', 'HD']; // Ordem de preferência
+    
+    for (const quality of qualityOrder) {
+      const group = qualityGroups.get(quality);
+      if (group && group.length > 0) {
+        // Ordenar por prioridade (podemos adicionar mais critérios depois)
+        const bestInQuality = group.sort((a, b) => {
+          // Priorizar magnets com título mais descritivo
+          const aScore = a.title.length;
+          const bScore = b.title.length;
+          return bScore - aScore;
+        })[0];
+        
+        bestMagnets.push(bestInQuality);
+        
+        this.logger.debug('Selected best magnet for quality', {
+          quality,
+          magnetTitle: bestInQuality.title,
+          alternatives: group.length
+        });
+      }
+    }
+    
+    return bestMagnets;
   }
 
   private async processScrapedTorrent(torrent: ScrapedTorrent, request: StreamRequest): Promise<Stream | Stream[] | null> {
@@ -1031,15 +1098,70 @@ export class StreamHandler {
     });
   }
 
-  private identifyMainFile(files: RDFile[]): RDFile | null {
-    const filteredFiles = this.filterPromotionalFiles(files);
+    private identifyMainFile(files: RDFile[]): RDFile | null {
+    return this.selectBestVideoFile(files);
+  }
 
-    if (filteredFiles.length === 0) {
-      return null;
+  private selectBestVideoFile(files: RDFile[]): RDFile | null {
+    const filteredFiles = this.filterPromotionalFiles(files);
+    if (filteredFiles.length === 0) return null;
+
+    // Agrupar arquivos por qualidade detectada
+    const qualityGroups = new Map<string, RDFile[]>();
+    
+    for (const file of filteredFiles) {
+      const quality = this.detectFileQuality(file.path);
+      if (!qualityGroups.has(quality)) {
+        qualityGroups.set(quality, []);
+      }
+      qualityGroups.get(quality)!.push(file);
     }
 
-    const sortedFiles = filteredFiles.sort((a, b) => b.bytes - a.bytes);
-    return sortedFiles[0];
+    // Ordem de preferência de qualidade
+    const qualityOrder = ["2160p", "1080p", "720p", "HD", "SD", "unknown"];
+    
+    for (const quality of qualityOrder) {
+      const group = qualityGroups.get(quality);
+      if (group && group.length > 0) {
+        // Ordenar o grupo: tamanho > nome do arquivo
+        const bestFile = group.sort((a, b) => {
+          // Priorizar arquivos maiores
+          if (b.bytes !== a.bytes) {
+            return b.bytes - a.bytes;
+          }
+          // Despriorizar arquivos com "sample" no nome
+          const aHasSample = a.path.toLowerCase().includes("sample");
+          const bHasSample = b.path.toLowerCase().includes("sample");
+          if (aHasSample !== bHasSample) {
+            return aHasSample ? 1 : -1;
+          }
+          return 0;
+        })[0];
+        
+        this.logger.debug("Melhor arquivo selecionado", {
+          filename: bestFile.path,
+          quality: quality,
+          size: bestFile.bytes,
+          totalFilesInGroup: group.length
+        });
+        
+        return bestFile;
+      }
+    }
+    
+    return null;
+  }
+
+  private detectFileQuality(filename: string): string {
+    const lowerFilename = filename.toLowerCase();
+    
+    if (/(2160p|4k|uhd|ultra.hd)/i.test(lowerFilename)) return "2160p";
+    if (/(1080p|fhd|full.hd)/i.test(lowerFilename)) return "1080p";
+    if (/(720p|hd.ready)/i.test(lowerFilename)) return "720p";
+    if (/(hd|high.definition)/i.test(lowerFilename)) return "HD";
+    if (/(480p|sd|standard.definition)/i.test(lowerFilename)) return "SD";
+    
+    return "unknown";
   }
 
   private async processMagnetSafely(magnet: CuratedMagnet, request: StreamRequest): Promise<Stream | null> {
@@ -1196,6 +1318,64 @@ export class StreamHandler {
       });
       return null;
     }
+  }
+
+  /**
+   * Cria um stream "lazy" que será resolvido sob demanda via rota /resolve
+   */
+  private createLazyStream(
+    title: string,
+    name: string,
+    description: string,
+    magnet: string,
+    apiKey: string,
+    quality: string,
+    behaviorHints?: any
+  ): Stream {
+    // Codificar o magnet em base64 para a URL
+    const encodedMagnet = Buffer.from(magnet).toString('base64');
+    
+    // Criar URL que aponta para nossa rota de resolução
+    const resolveUrl = `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+    
+    return {
+      title: title,
+      url: resolveUrl,
+      name: name,
+      description: description,
+      behaviorHints: {
+        notWebReady: false,
+        bingeGroup: `br-lazy-${Date.now()}`,
+        filename: this.sanitizeFilename(title),
+        ...behaviorHints
+      },
+      status: 'ready', // Status especial para streams lazy
+      torrentId: undefined // Será definido quando resolvido
+    };
+  }
+
+  /**
+   * Versão lazy do processMagnet - não processa no Real-Debrid, apenas cria opção
+   */
+  private processMagnetLazy(magnet: CuratedMagnet, request: StreamRequest): Stream | null {
+    const magnetHash = this.extractHashFromMagnet(magnet.magnet);
+    if (!magnetHash) {
+      this.logger.debug('Invalid magnet hash', { requestId: request.id, magnetTitle: magnet.title });
+      return null;
+    }
+
+    // Extrair qualidade do título do magnet
+    const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+    
+    // Criar stream lazy
+    return this.createLazyStream(
+      magnet.title,
+      `Brasil RD | ${quality.toUpperCase()} | LAZY`,
+      `Conteúdo sob demanda | ${magnet.language} | Clique para carregar`,
+      magnet.magnet,
+      request.apiKey!,
+      quality
+    );
   }
 
   private extractEpisodeFromRequest(requestId: string): RequestEpisodeInfo {
