@@ -10,6 +10,10 @@ export interface Stream {
   };
   status?: string;
   torrentId?: string;
+  // NOVAS PROPRIEDADES PARA LAZY LOADING
+  magnet?: string;           // Magnet link original
+  isPending?: boolean;       // Indica que precisa ser resolvido
+  fileIndex?: number;        // Índice do arquivo no torrent
 }
 
 export interface RDTorrentInfo {

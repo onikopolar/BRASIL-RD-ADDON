@@ -57,7 +57,6 @@ interface StreamProcessingConfig {
   };
 }
 
-// ESPELHO EXATO do TorrentScraperService - mesma lógica de qualidade
 class QualityDetector {
   private readonly qualityPatterns = [
     { pattern: /\.2160p\./i, quality: '2160p', confidence: 100 },
@@ -107,7 +106,6 @@ class QualityDetector {
   extractQuality(title: string): string {
     const cleanTitle = title.toLowerCase();
     
-    // EXATAMENTE igual ao TorrentScraperService
     for (const { pattern, quality, confidence } of this.qualityPatterns) {
       if (pattern.test(cleanTitle) && confidence >= 95) {
         return quality;
@@ -130,7 +128,6 @@ class QualityDetector {
   }
 
   private inferQualityFromContext(titleLower: string): string {
-    // EXATAMENTE igual ao TorrentScraperService
     if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
       return '1080p';
     }
@@ -172,7 +169,7 @@ export class StreamHandler {
   private readonly processingConfig: StreamProcessingConfig = {
     maxConcurrentTorrents: 2,
     delayBetweenTorrents: 1000,
-    allowPendingStreams: false,
+    allowPendingStreams: true,
     maxPendingStreams: 8,
     cacheTTL: {
       downloaded: 86400000,
@@ -222,7 +219,7 @@ export class StreamHandler {
     this.qualityDetector = new QualityDetector();
     this.logger = new Logger('StreamHandler');
     
-    this.logger.info('StreamHandler initialized - ESPELHO DO SCRAPER', {
+    this.logger.info('StreamHandler initialized with lazy loading support', {
       processingConfig: this.processingConfig,
       qualityDetection: '100% igual ao TorrentScraperService'
     });
@@ -264,7 +261,6 @@ export class StreamHandler {
 
       let streams = await this.processStreamRequest(request);
       
-      // FILTRO MOBILE REFORÇADO
       streams = this.applyMobileCompatibilityFilter(streams);
       
       if (streams.length > 0) {
@@ -298,17 +294,14 @@ export class StreamHandler {
 
   private applyMobileCompatibilityFilter(streams: Stream[]): Stream[] {
     return streams.filter(stream => {
-      // 1. URL válida
       if (!stream.url || !stream.url.startsWith('http')) {
         return false;
       }
       
-      // 2. Status downloaded ou ready (para lazy streams)
-      if (stream.status !== 'downloaded' && stream.status !== 'ready') {
+      if (stream.status !== 'downloaded' && stream.status !== 'ready' && stream.status !== 'pending') {
         return false;
       }
       
-      // 3. Qualidade válida (igual ao scraper)
       const quality = this.qualityDetector.extractQualityFromStreamName(stream.name);
       if (!this.qualityDetector.isValidQuality(quality)) {
         return false;
@@ -316,13 +309,11 @@ export class StreamHandler {
       
       return true;
     }).map(stream => {
-      // Garantir behaviorHints mobile-compatible
       stream.behaviorHints = {
         ...stream.behaviorHints,
         notWebReady: false
       };
       
-      // Garantir nome formatado corretamente
       if (stream.name) {
         const currentQuality = this.qualityDetector.extractQualityFromStreamName(stream.name);
         if (!stream.name.match(/(2160p|1080p|720p|HD)/i)) {
@@ -511,7 +502,7 @@ export class StreamHandler {
 
       const batchPromises = batch.map(async (torrent) => {
         try {
-          const streamResult = await this.processScrapedTorrent(torrent, request);
+          const streamResult = await this.processScrapedTorrentLazy(torrent, request);
           if (streamResult) {
             return streamResult;
           }
@@ -540,6 +531,183 @@ export class StreamHandler {
     }
 
     return allStreams;
+  }
+
+  private generateLazyResolveUrl(magnet: string, apiKey: string): string {
+    const encodedMagnet = Buffer.from(magnet).toString('base64');
+    return `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+  }
+
+  private async analyzeTorrentFilesLazy(magnet: string): Promise<Array<{id: number, path: string, bytes: number}>> {
+    return [{
+      id: 0,
+      path: 'video_file.mp4',
+      bytes: 1024 * 1024 * 1024
+    }];
+  }
+
+  private async processScrapedTorrentLazy(torrent: ScrapedTorrent, request: StreamRequest): Promise<Stream | Stream[] | null> {
+    const requestId = request.id;
+
+    try {
+      const videoFiles = await this.analyzeTorrentFilesLazy(torrent.magnet);
+      if (videoFiles.length === 0) {
+        this.logger.debug('No video files found in torrent analysis', { requestId, title: torrent.title });
+        return null;
+      }
+
+      const cleanVideoFiles = this.filterPromotionalFiles(videoFiles);
+      if (cleanVideoFiles.length === 0) {
+        this.logger.debug('No valid video files after promotional filter', { requestId });
+        return null;
+      }
+
+      if (request.type === 'series') {
+        return await this.processSeriesTorrentLazy(torrent, request, cleanVideoFiles);
+      } else {
+        return await this.processMovieTorrentLazy(torrent, request, cleanVideoFiles);
+      }
+
+    } catch (error) {
+      this.logger.error('Lazy torrent processing failed', {
+        requestId,
+        title: torrent.title,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      return null;
+    }
+  }
+
+  private async processMovieTorrentLazy(
+    torrent: ScrapedTorrent,
+    request: StreamRequest,
+    cleanVideoFiles: Array<{id: number, path: string, bytes: number}>
+  ): Promise<Stream | null> {
+    if (cleanVideoFiles.length === 0) {
+        return null;
+    }
+
+    try {
+        const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
+        
+        const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title) || torrent.quality || 'HD';
+        const stream: Stream = {
+            title: `${torrent.title} [${torrent.provider}] [LAZY]`,
+            url: lazyUrl,
+            name: `Brasil RD | ${fileQuality.toUpperCase()}`,
+            description: `Clique para carregar via Real-Debrid | ${torrent.language}`,
+            behaviorHints: {
+                notWebReady: false,
+                bingeGroup: `br-lazy-${request.id}`,
+                filename: this.sanitizeFilename(torrent.title)
+            },
+            magnet: torrent.magnet,
+            isPending: true,
+            status: 'pending'
+        };
+        return stream;
+
+    } catch (error) {
+        this.logger.error('Lazy movie torrent processing failed', {
+            requestId: request.id,
+            title: torrent.title,
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        return null;
+    }
+  }
+
+  private async processSeriesTorrentLazy(
+    torrent: ScrapedTorrent,
+    request: StreamRequest,
+    cleanVideoFiles: Array<{id: number, path: string, bytes: number}>
+  ): Promise<Stream[] | null> {
+    const requestEpisode = this.extractEpisodeFromRequest(request.id);
+    const streams: Stream[] = [];
+
+    if (requestEpisode.isValid) {
+        if (cleanVideoFiles.length === 0) {
+            this.logger.debug('No files found for specific episode', {
+                requestId: request.id,
+                season: requestEpisode.season,
+                episode: requestEpisode.episode
+            });
+            return null;
+        }
+
+        const validStreams: Stream[] = [];
+        
+        for (const file of cleanVideoFiles) {
+            try {
+                const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
+                const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+                
+                const stream = this.createSeriesStreamLazy(
+                    torrent, 
+                    request, 
+                    lazyUrl, 
+                    torrent.title, 
+                    requestEpisode.season, 
+                    requestEpisode.episode,
+                    fileQuality
+                );
+                
+                validStreams.push(stream);
+                
+            } catch (error) {
+                continue;
+            }
+        }
+
+        return validStreams.length > 0 ? validStreams : null;
+
+    } else {
+        if (cleanVideoFiles.length === 0) {
+            this.logger.debug('No main file found for series torrent', { requestId: request.id });
+            return null;
+        }
+
+        try {
+            const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
+            const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+            const stream = this.createSeriesStreamLazy(
+                torrent, request, lazyUrl, torrent.title, 1, 1, fileQuality
+            );
+            streams.push(stream);
+        } catch (error) {
+            return null;
+        }
+    }
+
+    return streams.length > 0 ? streams : null;
+  }
+
+  private createSeriesStreamLazy(
+    torrent: ScrapedTorrent,
+    request: StreamRequest,
+    streamUrl: string,
+    filePath: string,
+    season: number,
+    episode: number,
+    quality: string
+  ): Stream {
+    const detectedQuality = this.qualityDetector.extractQuality(filePath);
+    const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+
+    return {
+      title: `${torrent.title} [${torrent.provider}] ${episodeTag} [LAZY]`,
+      url: streamUrl,
+      name: `Brasil RD | ${detectedQuality.toUpperCase()} | ${episodeTag}`,
+      description: `Clique para carregar via Real-Debrid | ${torrent.language} | ${episodeTag}`,
+      behaviorHints: {
+        notWebReady: false,
+        bingeGroup: `br-lazy-${request.id}-${season}`,
+        filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+      },
+      magnet: torrent.magnet,
+      isPending: true,
+      status: 'pending'
+    };
   }
 
   private extractSeasonFromTitle(title: string): number | null {
@@ -710,14 +878,10 @@ export class StreamHandler {
     }
   }
 
-    private async processCuratedMagnets(magnets: CuratedMagnet[], request: StreamRequest): Promise<Stream[]> {
-    // 1. Agrupar magnets por qualidade (seguindo a mesma lógica do TorrentScraperService)
+  private async processCuratedMagnets(magnets: CuratedMagnet[], request: StreamRequest): Promise<Stream[]> {
     const qualityGroups = this.groupMagnetsByQuality(magnets);
-    
-    // 2. Selecionar o melhor magnet de cada grupo de qualidade
     const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
     
-    // 3. Criar streams lazy para cada qualidade
     const streams: Stream[] = [];
     
     for (const magnet of bestMagnets) {
@@ -741,19 +905,14 @@ export class StreamHandler {
     return this.sortStreamsByQuality(streams);
   }
 
-    /**
-   * Agrupa magnets por qualidade (adaptado do TorrentScraperService)
-   */
   private groupMagnetsByQuality(magnets: CuratedMagnet[]): Map<string, CuratedMagnet[]> {
     const groups = new Map<string, CuratedMagnet[]>();
     
-    // Inicializar grupos para todas as qualidades suportadas
     const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
     for (const quality of allowedQualities) {
       groups.set(quality, []);
     }
     
-    // Agrupar magnets por qualidade detectada
     for (const magnet of magnets) {
       const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
       if (allowedQualities.has(quality)) {
@@ -764,19 +923,14 @@ export class StreamHandler {
     return groups;
   }
 
-  /**
-   * Seleciona o melhor magnet de cada grupo de qualidade (adaptado do TorrentScraperService)
-   */
   private selectBestFromEachQualityGroup(qualityGroups: Map<string, CuratedMagnet[]>): CuratedMagnet[] {
     const bestMagnets: CuratedMagnet[] = [];
-    const qualityOrder = ['2160p', '1080p', '720p', 'HD']; // Ordem de preferência
+    const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
     
     for (const quality of qualityOrder) {
       const group = qualityGroups.get(quality);
       if (group && group.length > 0) {
-        // Ordenar por prioridade (podemos adicionar mais critérios depois)
         const bestInQuality = group.sort((a, b) => {
-          // Priorizar magnets com título mais descritivo
           const aScore = a.title.length;
           const bScore = b.title.length;
           return bScore - aScore;
@@ -795,534 +949,6 @@ export class StreamHandler {
     return bestMagnets;
   }
 
-  private async processScrapedTorrent(torrent: ScrapedTorrent, request: StreamRequest): Promise<Stream | Stream[] | null> {
-    const requestId = request.id;
-
-    try {
-      const processResult = await this.rdService.processTorrent(torrent.magnet, request.apiKey!);
-      
-      if (!processResult.added || !processResult.torrentId) {
-        this.logger.debug('Failed to process scraped torrent', { requestId, title: torrent.title });
-        return null;
-      }
-
-      const torrentId = processResult.torrentId;
-      const torrentInfo = await this.rdService.getTorrentInfo(torrentId, request.apiKey!);
-
-      const videoFiles = this.filterAndSortVideoFiles(torrentInfo.files || []);
-      if (videoFiles.length === 0) {
-        this.logger.debug('No video files in scraped torrent', { requestId, torrentId });
-        return null;
-      }
-
-      const cleanVideoFiles = this.filterPromotionalFiles(videoFiles);
-      if (cleanVideoFiles.length === 0) {
-        this.logger.debug('No valid video files found after promotional filter', {
-          requestId,
-          originalFiles: videoFiles.length
-        });
-        return null;
-      }
-
-      if (request.type === 'series') {
-        return await this.processSeriesTorrent(torrent, request, torrentId, cleanVideoFiles, torrentInfo);
-      } else {
-        return await this.processMovieTorrent(torrent, request, torrentId, cleanVideoFiles, torrentInfo);
-      }
-
-    } catch (error) {
-      this.logger.error('Scraped torrent processing failed', {
-        requestId,
-        title: torrent.title,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      return null;
-    }
-  }
-
-  private async processSeriesTorrent(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    torrentId: string,
-    cleanVideoFiles: RDFile[],
-    torrentInfo: RDTorrentInfo
-  ): Promise<Stream[] | null> {
-    const requestEpisode = this.extractEpisodeFromRequest(request.id);
-    const streams: Stream[] = [];
-
-    if (requestEpisode.isValid) {
-      const episodeFiles = this.findEpisodeFilesByQuality(cleanVideoFiles, requestEpisode.season, requestEpisode.episode);
-      const validStreams: Stream[] = [];
-      
-      if (episodeFiles.length === 0) {
-        this.logger.debug('No files found for specific episode', {
-          requestId: request.id,
-          season: requestEpisode.season,
-          episode: requestEpisode.episode
-        });
-        return null;
-      }
-
-      for (const file of episodeFiles) {
-        try {
-          const streamLink = await this.rdService.getStreamLinkForFile(torrentId, file.id, request.apiKey!);
-          const fileQuality = this.qualityDetector.extractQualityFromFilename(file.path);
-          
-          if (streamLink) {
-            const stream = this.createSeriesStream(
-              torrent, 
-              request, 
-              torrentId, 
-              streamLink, 
-              file.path, 
-              requestEpisode.season, 
-              requestEpisode.episode,
-              fileQuality
-            );
-            
-            validStreams.push(stream);
-          }
-          
-        } catch (error) {
-          continue;
-        }
-      }
-
-      return validStreams.length > 0 ? validStreams : null;
-
-    } else {
-      const mainFile = this.identifyMainFile(cleanVideoFiles);
-      if (!mainFile) {
-        this.logger.debug('No main file found for series torrent', { requestId: request.id });
-        return null;
-      }
-
-      try {
-        const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
-        if (streamLink) {
-          const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
-          const stream = this.createSeriesStream(
-            torrent, request, torrentId, streamLink, mainFile.path, 1, 1, fileQuality
-          );
-          streams.push(stream);
-        }
-      } catch (error) {
-        return null;
-      }
-    }
-
-    return streams.length > 0 ? streams : null;
-  }
-
-  private async processMovieTorrent(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    torrentId: string,
-    cleanVideoFiles: RDFile[],
-    torrentInfo: RDTorrentInfo
-  ): Promise<Stream | null> {
-    const mainFile = this.identifyMainFile(cleanVideoFiles);
-    if (!mainFile) {
-      return null;
-    }
-
-    try {
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
-      
-      if (streamLink) {
-        const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
-        const stream: Stream = {
-          title: `${torrent.title} [${torrent.provider}]`,
-          url: streamLink,
-          name: `Brasil RD | ${fileQuality.toUpperCase()}`,
-          description: `Conteúdo via scraping | ${torrent.language}`,
-          behaviorHints: {
-            notWebReady: false,
-            bingeGroup: `br-scraped-${request.id}`,
-            filename: this.sanitizeFilename(torrent.title)
-          },
-          torrentId: torrentId,
-          status: 'downloaded'
-        };
-        return stream;
-      }
-      
-      return null;
-
-    } catch (error) {
-      this.logger.debug('Failed to get stream link for movie file', {
-        requestId: request.id,
-        fileId: mainFile.id
-      });
-      return null;
-    }
-  }
-
-  private createSeriesStream(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    torrentId: string,
-    streamLink: string,
-    filePath: string,
-    season: number,
-    episode: number,
-    quality: string
-  ): Stream {
-    const detectedQuality = this.qualityDetector.extractQuality(filePath);
-    const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
-
-    return {
-      title: `${torrent.title} [${torrent.provider}] ${episodeTag}`,
-      url: streamLink,
-      name: `Brasil RD | ${detectedQuality.toUpperCase()} | ${episodeTag}`,
-      description: `Conteúdo via scraping | ${torrent.language} | ${episodeTag}`,
-      behaviorHints: {
-        notWebReady: false,
-        bingeGroup: `br-scraped-${request.id}-${season}`,
-        filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
-      },
-      torrentId: torrentId,
-      status: 'downloaded'
-    };
-  }
-
-  private findEpisodeFilesByQuality(files: RDFile[], targetSeason: number, targetEpisode: number): RDFile[] {
-    const episodeFiles: RDFile[] = [];
-    
-    for (const file of files) {
-      const episodeInfo = this.extractEpisodeInfo(file.path);
-      if (episodeInfo.season === targetSeason && episodeInfo.episode === targetEpisode) {
-        episodeFiles.push(file);
-      }
-    }
-
-    return episodeFiles.sort((a, b) => {
-      const qualityA = this.qualityDetector.extractQualityFromFilename(a.path);
-      const qualityB = this.qualityDetector.extractQualityFromFilename(b.path);
-      const qualityScoreA = this.qualityPriority[qualityA] || 0;
-      const qualityScoreB = this.qualityPriority[qualityB] || 0;
-      
-      return qualityScoreB - qualityScoreA;
-    });
-  }
-
-  private async fetchTitleFromImdb(request: StreamRequest): Promise<string | null> {
-    const imdbId = this.extractImdbIdFromRequest(request);
-    
-    if (!imdbId) {
-      return null;
-    }
-
-    try {
-      const title = await this.imdbScraper.getTitleFromImdbId(imdbId);
-      if (title) {
-        this.logger.debug('Retrieved title from IMDB', { imdbId, title });
-        return title;
-      }
-    } catch (error) {
-      this.logger.error('IMDB title fetch error', {
-        imdbId,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-    }
-
-    return null;
-  }
-
-  private sortFilesByEpisode(files: RDFile[]): RDFile[] {
-    const filesWithEpisodeInfo = files.map(file => ({
-      file,
-      episodeInfo: this.extractEpisodeInfo(file.path)
-    }));
-
-    return filesWithEpisodeInfo
-      .sort((a, b) => this.compareEpisodeInfo(a.episodeInfo, b.episodeInfo))
-      .map(item => item.file);
-  }
-
-  private extractEpisodeInfo(filename: string): EpisodeInfo {
-    for (const pattern of this.episodePatterns) {
-      const match = filename.match(pattern);
-      if (match) {
-        let season = 1;
-        let episode = 0;
-
-        if (pattern.source.includes('x') || pattern.source.includes('s\\d+e')) {
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else if (pattern.source.includes('ep')) {
-          episode = parseInt(match[1]);
-        } else if (pattern.source === '^(\\d+)$') {
-          episode = parseInt(match[1]);
-        } else if (match.length >= 3) {
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        }
-
-        if (!isNaN(season) && !isNaN(episode) && season > 0 && episode > 0) {
-          return {
-            season,
-            episode,
-            rawMatch: match[0]
-          };
-        }
-      }
-    }
-
-    const fallbackMatch = filename.match(/\d+/);
-    const fallbackNumber = fallbackMatch ? parseInt(fallbackMatch[0]) : 0;
-    
-    return {
-      season: 1,
-      episode: fallbackNumber,
-      rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown'
-    };
-  }
-
-  private compareEpisodeInfo(a: EpisodeInfo, b: EpisodeInfo): number {
-    if (a.season !== b.season) {
-      return a.season - b.season;
-    }
-    
-    if (a.episode !== b.episode) {
-      return a.episode - b.episode;
-    }
-    
-    return 0;
-  }
-
-  private filterPromotionalFiles(files: RDFile[]): RDFile[] {
-    return files.filter(file => {
-      const filename = file.path.toLowerCase();
-      return !this.promotionalKeywords.some(keyword => filename.includes(keyword));
-    });
-  }
-
-    private identifyMainFile(files: RDFile[]): RDFile | null {
-    return this.selectBestVideoFile(files);
-  }
-
-  private selectBestVideoFile(files: RDFile[]): RDFile | null {
-    const filteredFiles = this.filterPromotionalFiles(files);
-    if (filteredFiles.length === 0) return null;
-
-    // Agrupar arquivos por qualidade detectada
-    const qualityGroups = new Map<string, RDFile[]>();
-    
-    for (const file of filteredFiles) {
-      const quality = this.detectFileQuality(file.path);
-      if (!qualityGroups.has(quality)) {
-        qualityGroups.set(quality, []);
-      }
-      qualityGroups.get(quality)!.push(file);
-    }
-
-    // Ordem de preferência de qualidade
-    const qualityOrder = ["2160p", "1080p", "720p", "HD", "SD", "unknown"];
-    
-    for (const quality of qualityOrder) {
-      const group = qualityGroups.get(quality);
-      if (group && group.length > 0) {
-        // Ordenar o grupo: tamanho > nome do arquivo
-        const bestFile = group.sort((a, b) => {
-          // Priorizar arquivos maiores
-          if (b.bytes !== a.bytes) {
-            return b.bytes - a.bytes;
-          }
-          // Despriorizar arquivos com "sample" no nome
-          const aHasSample = a.path.toLowerCase().includes("sample");
-          const bHasSample = b.path.toLowerCase().includes("sample");
-          if (aHasSample !== bHasSample) {
-            return aHasSample ? 1 : -1;
-          }
-          return 0;
-        })[0];
-        
-        this.logger.debug("Melhor arquivo selecionado", {
-          filename: bestFile.path,
-          quality: quality,
-          size: bestFile.bytes,
-          totalFilesInGroup: group.length
-        });
-        
-        return bestFile;
-      }
-    }
-    
-    return null;
-  }
-
-  private detectFileQuality(filename: string): string {
-    const lowerFilename = filename.toLowerCase();
-    
-    if (/(2160p|4k|uhd|ultra.hd)/i.test(lowerFilename)) return "2160p";
-    if (/(1080p|fhd|full.hd)/i.test(lowerFilename)) return "1080p";
-    if (/(720p|hd.ready)/i.test(lowerFilename)) return "720p";
-    if (/(hd|high.definition)/i.test(lowerFilename)) return "HD";
-    if (/(480p|sd|standard.definition)/i.test(lowerFilename)) return "SD";
-    
-    return "unknown";
-  }
-
-  private async processMagnetSafely(magnet: CuratedMagnet, request: StreamRequest): Promise<Stream | null> {
-    try {
-      return await this.processMagnet(magnet, request);
-    } catch (error) {
-      this.logger.error('Magnet processing error', {
-        requestId: request.id,
-        magnetTitle: magnet.title,
-        error: error instanceof Error ? error.message : 'Unknown error'
-      });
-      return null;
-    }
-  }
-
-  private async processMagnet(magnet: CuratedMagnet, request: StreamRequest): Promise<Stream | null> {
-    const magnetHash = this.extractHashFromMagnet(magnet.magnet);
-    if (!magnetHash) {
-      this.logger.debug('Invalid magnet hash', { requestId: request.id, magnetTitle: magnet.title });
-      return null;
-    }
-
-    const processResult = await this.rdService.processTorrent(magnet.magnet, request.apiKey!);
-    
-    if (!processResult.added || !processResult.torrentId) {
-      this.logger.debug('Failed to process curated magnet', { requestId: request.id, magnetTitle: magnet.title });
-      return null;
-    }
-
-    const torrentId = processResult.torrentId;
-    const torrentInfo = await this.rdService.getTorrentInfo(torrentId, request.apiKey!);
-    const videoFiles = this.filterAndSortVideoFiles(torrentInfo.files || []);
-    
-    if (videoFiles.length === 0) {
-      this.logger.debug('No video files in curated magnet', { requestId: request.id, magnetTitle: magnet.title });
-      return null;
-    }
-
-    const requestEpisode = this.extractEpisodeFromRequest(request.id);
-    
-    if (requestEpisode.isValid) {
-      return await this.processSpecificEpisode(magnet, request, torrentId, videoFiles, requestEpisode, torrentInfo);
-    } else {
-      return await this.processAllEpisodes(magnet, request, torrentId, videoFiles, torrentInfo);
-    }
-  }
-
-  private async processSpecificEpisode(
-    magnet: CuratedMagnet, 
-    request: StreamRequest, 
-    torrentId: string, 
-    videoFiles: RDFile[],
-    requestEpisode: RequestEpisodeInfo,
-    torrentInfo: RDTorrentInfo
-  ): Promise<Stream | null> {
-
-    const targetFile = this.findEpisodeFile(videoFiles, requestEpisode.season, requestEpisode.episode);
-    
-    if (!targetFile) {
-      this.logger.debug('Target episode file not found in curated magnet', { 
-        requestId: request.id, 
-        season: requestEpisode.season,
-        episode: requestEpisode.episode
-      });
-      return null;
-    }
-
-    try {
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, targetFile.id, request.apiKey!);
-      
-      if (!streamLink) {
-        this.logger.debug('No stream link for target episode file', { 
-          requestId: request.id, 
-          torrentId
-        });
-        return null;
-      }
-
-      const fileQuality = this.qualityDetector.extractQualityFromFilename(targetFile.path);
-      const streamTitle = this.generateEpisodeStreamTitle(magnet, requestEpisode.season, requestEpisode.episode);
-      const streamName = `Brasil RD | ${fileQuality.toUpperCase()} | S${requestEpisode.season}E${requestEpisode.episode}`;
-      
-      const stream: Stream = {
-        title: streamTitle,
-        url: streamLink,
-        name: streamName,
-        description: `Conteúdo curado | ${magnet.language} | Episódio ${requestEpisode.episode}`,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `br-${request.id}`,
-          filename: this.sanitizeFilename(`${magnet.title} S${requestEpisode.season}E${requestEpisode.episode}`)
-        },
-        torrentId: torrentId,
-        status: 'downloaded'
-      };
-
-      return stream;
-
-    } catch (error) {
-      this.logger.error('Specific episode processing failed', {
-        requestId: request.id,
-        magnetTitle: magnet.title
-      });
-      return null;
-    }
-  }
-
-  private async processAllEpisodes(
-    magnet: CuratedMagnet, 
-    request: StreamRequest, 
-    torrentId: string, 
-    videoFiles: RDFile[],
-    torrentInfo: RDTorrentInfo
-  ): Promise<Stream | null> {
-
-    try {
-      const mainFile = this.identifyMainFile(videoFiles);
-      if (!mainFile) {
-        this.logger.debug('No main file found in curated magnet', { requestId: request.id, magnetTitle: magnet.title });
-        return null;
-      }
-
-      const streamLink = await this.rdService.getStreamLinkForFile(torrentId, mainFile.id, request.apiKey!);
-      
-      if (!streamLink) {
-        this.logger.debug('No stream link available for torrent', { requestId: request.id, torrentId });
-        return null;
-      }
-
-      const fileQuality = this.qualityDetector.extractQualityFromFilename(mainFile.path);
-      const streamTitle = this.generateStreamTitle(magnet);
-      const streamName = `Brasil RD | ${fileQuality.toUpperCase()}`;
-      
-      const stream: Stream = {
-        title: streamTitle,
-        url: streamLink,
-        name: streamName,
-        description: `Conteúdo curado | ${magnet.language} | Coleção Completa`,
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `br-${request.id}`,
-          filename: this.sanitizeFilename(magnet.title)
-        },
-        torrentId: torrentId,
-        status: 'downloaded'
-      };
-
-      return stream;
-
-    } catch (error) {
-      this.logger.error('All episodes processing failed', {
-        requestId: request.id,
-        magnetTitle: magnet.title
-      });
-      return null;
-    }
-  }
-
-  /**
-   * Cria um stream "lazy" que será resolvido sob demanda via rota /resolve
-   */
   private createLazyStream(
     title: string,
     name: string,
@@ -1332,10 +958,7 @@ export class StreamHandler {
     quality: string,
     behaviorHints?: any
   ): Stream {
-    // Codificar o magnet em base64 para a URL
     const encodedMagnet = Buffer.from(magnet).toString('base64');
-    
-    // Criar URL que aponta para nossa rota de resolução
     const resolveUrl = `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
     
     return {
@@ -1349,14 +972,12 @@ export class StreamHandler {
         filename: this.sanitizeFilename(title),
         ...behaviorHints
       },
-      status: 'ready', // Status especial para streams lazy
-      torrentId: undefined // Será definido quando resolvido
+      magnet: magnet,
+      isPending: true,
+      status: 'pending'
     };
   }
 
-  /**
-   * Versão lazy do processMagnet - não processa no Real-Debrid, apenas cria opção
-   */
   private processMagnetLazy(magnet: CuratedMagnet, request: StreamRequest): Stream | null {
     const magnetHash = this.extractHashFromMagnet(magnet.magnet);
     if (!magnetHash) {
@@ -1364,14 +985,12 @@ export class StreamHandler {
       return null;
     }
 
-    // Extrair qualidade do título do magnet
     const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
     
-    // Criar stream lazy
     return this.createLazyStream(
       magnet.title,
-      `Brasil RD | ${quality.toUpperCase()} | LAZY`,
-      `Conteúdo sob demanda | ${magnet.language} | Clique para carregar`,
+    `Brasil RD | ${quality.toUpperCase()} | ON-DEMAND BR`,
+`Conteúdo curado | ${magnet.language} | Clique para carregar`,
       magnet.magnet,
       request.apiKey!,
       quality
@@ -1473,6 +1092,102 @@ export class StreamHandler {
 
   private sanitizeFilename(filename: string): string {
     return filename.replace(/[<>:"/\\|?*]/g, '_').substring(0, 255);
+  }
+
+  private extractEpisodeInfo(filename: string): EpisodeInfo {
+    for (const pattern of this.episodePatterns) {
+      const match = filename.match(pattern);
+      if (match) {
+        let season = 1;
+        let episode = 0;
+
+        if (pattern.source.includes('x') || pattern.source.includes('s\\d+e')) {
+          season = parseInt(match[1]);
+          episode = parseInt(match[2]);
+        } else if (pattern.source.includes('ep')) {
+          episode = parseInt(match[1]);
+        } else if (pattern.source === '^(\\d+)$') {
+          episode = parseInt(match[1]);
+        } else if (match.length >= 3) {
+          season = parseInt(match[1]);
+          episode = parseInt(match[2]);
+        }
+
+        if (!isNaN(season) && !isNaN(episode) && season > 0 && episode > 0) {
+          return {
+            season,
+            episode,
+            rawMatch: match[0]
+          };
+        }
+      }
+    }
+
+    const fallbackMatch = filename.match(/\d+/);
+    const fallbackNumber = fallbackMatch ? parseInt(fallbackMatch[0]) : 0;
+    
+    return {
+      season: 1,
+      episode: fallbackNumber,
+      rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown'
+    };
+  }
+
+  private compareEpisodeInfo(a: EpisodeInfo, b: EpisodeInfo): number {
+    if (a.season !== b.season) {
+      return a.season - b.season;
+    }
+    
+    if (a.episode !== b.episode) {
+      return a.episode - b.episode;
+    }
+    
+    return 0;
+  }
+
+  private filterPromotionalFiles(files: any[]): any[] {
+    return files.filter(file => {
+      const filename = file.path.toLowerCase();
+      return !this.promotionalKeywords.some(keyword => filename.includes(keyword));
+    });
+  }
+
+  private identifyMainFile(files: any[]): any | null {
+    return files.length > 0 ? files[0] : null;
+  }
+
+  private async fetchTitleFromImdb(request: StreamRequest): Promise<string | null> {
+    const imdbId = this.extractImdbIdFromRequest(request);
+    
+    if (!imdbId) {
+      return null;
+    }
+
+    try {
+      const title = await this.imdbScraper.getTitleFromImdbId(imdbId);
+      if (title) {
+        this.logger.debug('Retrieved title from IMDB', { imdbId, title });
+        return title;
+      }
+    } catch (error) {
+      this.logger.error('IMDB title fetch error', {
+        imdbId,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+    }
+
+    return null;
+  }
+
+  private sortFilesByEpisode(files: RDFile[]): RDFile[] {
+    const filesWithEpisodeInfo = files.map(file => ({
+      file,
+      episodeInfo: this.extractEpisodeInfo(file.path)
+    }));
+
+    return filesWithEpisodeInfo
+      .sort((a, b) => this.compareEpisodeInfo(a.episodeInfo, b.episodeInfo))
+      .map(item => item.file);
   }
 
   addCuratedMagnet(magnet: CuratedMagnet): void {

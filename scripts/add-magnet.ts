@@ -1,8 +1,5 @@
 #!/usr/bin/env ts-node
 
-import * as dotenv from 'dotenv';
-dotenv.config();
-
 import { RealDebridService } from '../src/services/RealDebridService';
 import { ImdbScraperService } from '../src/services/ImdbScraperService';
 import { Logger } from '../src/utils/logger';
@@ -56,6 +53,7 @@ interface RDFile {
 
 class MagnetAdder {
   private rl: readline.Interface;
+  private apiKey: string = '';
   private readonly downloadCheckDelay = 5000;
   private readonly maxDownloadTime = 30 * 60 * 1000;
 
@@ -164,15 +162,11 @@ class MagnetAdder {
       const cleanTitle = this.cleanTitleForSearch(title);
       console.log('Buscando ID IMDB para:', cleanTitle);
 
-      // Primeiro tenta usar o ImdbScraperService para buscar por título
       const scrapedTitle = await this.searchTitleWithScraper(cleanTitle);
       if (scrapedTitle) {
         console.log('Título encontrado via scraper:', scrapedTitle);
-        // Aqui você poderia implementar uma busca reversa do IMDB ID pelo título
-        // Por enquanto, vamos manter a lista conhecida como fallback
       }
 
-      // Fallback para lista conhecida
       const knownTitles: Record<string, string> = {
         'carros': 'tt0317219',
         'shrek': 'tt0126029',
@@ -218,8 +212,6 @@ class MagnetAdder {
   }
 
   private async searchTitleWithScraper(title: string): Promise<string | null> {
-    // Esta função pode ser expandida para usar o TorrentScraperService
-    // para buscar informações mais precisas sobre o título
     return null;
   }
 
@@ -255,11 +247,9 @@ class MagnetAdder {
     const cleanFiles = this.filterPromotionalFiles(videoFiles);
 
     if (category === 'serie') {
-      // Para séries, retornar TODOS os arquivos de vídeo (não apenas o maior)
       console.log('   Série detectada - selecionando TODOS os arquivos de vídeo');
       return this.sortFilesByEpisode(cleanFiles);
     } else {
-      // Para filmes, manter comportamento original (apenas o maior arquivo)
       const mainFile = this.identifyMainFile(cleanFiles);
       return mainFile ? [mainFile] : [];
     }
@@ -273,6 +263,16 @@ class MagnetAdder {
   async start(): Promise<void> {
     try {
       this.displayHeader();
+
+      this.apiKey = await this.question('Digite sua chave API do Real-Debrid (NÃO será salva): ');
+      
+      if (!this.apiKey.trim()) {
+        console.log('ERRO: API key é obrigatória para processar magnets');
+        this.cleanup();
+        return;
+      }
+
+      console.log('API key recebida (será usada apenas nesta sessão)\n');
 
       const magnetLink = await this.question('Digite o link magnet: ');
 
@@ -299,8 +299,10 @@ class MagnetAdder {
   }
 
   private displayHeader(): void {
-    console.log('BRASIL RD - ADICIONAR LINK MAGNET');
-    console.log('==================================\n');
+    console.log('BRASIL RD - ADICIONAR LINK MAGNET (MODO CURADOR)');
+    console.log('=================================================\n');
+    console.log('Este é seu tool pessoal para adicionar conteúdo curado');
+    console.log('Sua API key NÃO será salva em arquivo algum\n');
   }
 
   private async processMagnetInfo(magnetLink: string): Promise<{ title: string; quality: string } | null> {
@@ -407,7 +409,7 @@ class MagnetAdder {
         return this.createFailureResult('Nenhum arquivo de vídeo detectado no torrent');
       }
 
-      console.log(`Encontrados ${videoFiles.length} arquivos de vídeo válidos`);
+      console.log('Encontrados ' + videoFiles.length + ' arquivos de vídeo válidos');
       
       await this.selectVideoFiles(torrentId, videoFiles);
       const downloadResult = await this.waitForDownload(torrentId, magnetData.title);
@@ -441,21 +443,21 @@ class MagnetAdder {
       }
 
       return this.createFailureResult(
-        `Erro de processamento: ${error instanceof Error ? error.message : 'Erro desconhecido'}`
+        'Erro de processamento: ' + (error instanceof Error ? error.message : 'Erro desconhecido')
       );
     }
   }
 
   private async addMagnetToRealDebrid(magnetLink: string): Promise<string> {
     console.log('1. Adicionando magnet ao Real-Debrid...');
-    const torrentId = await rdService.addMagnet(magnetLink);
+    const torrentId = await rdService.addMagnet(magnetLink, this.apiKey);
     console.log('ID do Torrent:', torrentId);
     return torrentId;
   }
 
   private async analyzeTorrentFiles(torrentId: string, category: string): Promise<RDFile[]> {
     console.log('2. Analisando arquivos do torrent...');
-    const torrentInfo = await rdService.getTorrentInfo(torrentId);
+    const torrentInfo = await rdService.getTorrentInfo(torrentId, this.apiKey);
     const files = torrentInfo.files || [];
 
     const videoFiles = this.identifyVideoFilesForCategory(files, category);
@@ -466,11 +468,11 @@ class MagnetAdder {
       return [];
     }
 
-    console.log(`Encontrados ${videoFiles.length} arquivos de vídeo:`);
+    console.log('Encontrados ' + videoFiles.length + ' arquivos de vídeo:');
     videoFiles.forEach((file: RDFile, index: number) => {
       const sizeMB = (file.bytes / 1024 / 1024).toFixed(2);
       const isPromo = this.isPromotionalFile(file.path) ? ' [PROMO]' : '';
-      console.log(`   ${(index + 1).toString().padStart(2, ' ')}. ${file.path} (${sizeMB} MB)${isPromo}`);
+      console.log('   ' + (index + 1).toString().padStart(2, ' ') + '. ' + file.path + ' (' + sizeMB + ' MB)' + isPromo);
     });
 
     return videoFiles;
@@ -544,11 +546,11 @@ class MagnetAdder {
       const sizeMB = (file.bytes / 1024 / 1024).toFixed(2);
       const isVideo = this.videoExtensions.some(ext => file.path.toLowerCase().endsWith(ext));
       const videoTag = isVideo ? ' [VIDEO]' : '';
-      console.log(`   ${(index + 1).toString().padStart(2, ' ')}. ${file.path} (${sizeMB} MB)${videoTag}`);
+      console.log('   ' + (index + 1).toString().padStart(2, ' ') + '. ' + file.path + ' (' + sizeMB + ' MB)' + videoTag);
     });
 
     if (files.length > 10) {
-      console.log('   ... e mais', files.length - 10, 'arquivos');
+      console.log('   ... e mais ' + (files.length - 10) + ' arquivos');
     }
   }
 
@@ -560,11 +562,11 @@ class MagnetAdder {
     }
 
     const videoFileIds = videoFiles.map(file => file.id.toString()).join(',');
-    await rdService.selectFiles(torrentId, videoFileIds);
+    await rdService.selectFiles(torrentId, this.apiKey, videoFileIds);
     
-    console.log(`${videoFiles.length} arquivos selecionados:`);
+    console.log(videoFiles.length + ' arquivos selecionados:');
     videoFiles.forEach((file, index) => {
-      console.log(`      ${index + 1}. ${file.path}`);
+      console.log('      ' + (index + 1) + '. ' + file.path);
     });
   }
 
@@ -578,7 +580,7 @@ class MagnetAdder {
 
     while (Date.now() - startTime < this.maxDownloadTime) {
       try {
-        const torrentInfo = await rdService.getTorrentInfo(torrentId);
+        const torrentInfo = await rdService.getTorrentInfo(torrentId, this.apiKey);
         const currentProgress = Math.floor(torrentInfo.progress);
         const currentStatus = torrentInfo.status;
 
@@ -586,7 +588,7 @@ class MagnetAdder {
           const elapsedTime = Math.round((Date.now() - startTime) / 1000);
           const minutes = Math.floor(elapsedTime / 60);
           const seconds = elapsedTime % 60;
-          console.log(`   Progresso: ${currentProgress}% | Tempo: ${minutes}m${seconds}s | Status: ${currentStatus}`);
+          console.log('   Progresso: ' + currentProgress + '% | Tempo: ' + minutes + 'm' + seconds + 's | Status: ' + currentStatus);
           lastProgress = currentProgress;
           lastStatus = currentStatus;
         }
@@ -595,12 +597,12 @@ class MagnetAdder {
           const totalTime = Math.round((Date.now() - startTime) / 1000);
           const totalMinutes = Math.floor(totalTime / 60);
           const totalSeconds = totalTime % 60;
-          console.log(`Download concluído! Tempo total: ${totalMinutes}m${totalSeconds}s`);
+          console.log('Download concluído! Tempo total: ' + totalMinutes + 'm' + totalSeconds + 's');
           return await this.handleDownloadCompletion(torrentId);
         }
 
         if (this.errorStatuses.includes(torrentInfo.status)) {
-          return this.createDownloadFailure(`Download falhou. Status: ${torrentInfo.status}`);
+          return this.createDownloadFailure('Download falhou. Status: ' + torrentInfo.status);
         }
 
         await this.delay(this.downloadCheckDelay);
@@ -616,13 +618,13 @@ class MagnetAdder {
     }
 
     return this.createDownloadFailure(
-      `Tempo máximo de espera excedido (${this.maxDownloadTime / 60000} minutos). Download pode continuar em segundo plano.`
+      'Tempo máximo de espera excedido (' + (this.maxDownloadTime / 60000) + ' minutos). Download pode continuar em segundo plano.'
     );
   }
 
   private async handleDownloadCompletion(torrentId: string): Promise<DownloadWaitResult> {
     try {
-      const downloadLink = await rdService.getExistingStreamLink(torrentId);
+      const downloadLink = await rdService.getStreamLinkForTorrent(torrentId, this.apiKey);
       
       if (!downloadLink) {
         return this.createDownloadFailure('Não foi possível obter o link de download após conclusão');
@@ -636,7 +638,7 @@ class MagnetAdder {
       });
 
       return this.createDownloadFailure(
-        `Download concluído mas erro ao obter link: ${error instanceof Error ? error.message : 'Erro desconhecido'}`  
+        'Download concluído mas erro ao obter link: ' + (error instanceof Error ? error.message : 'Erro desconhecido')
       );
     }
   }
@@ -658,7 +660,7 @@ class MagnetAdder {
 
   private displayResult(result: ProcessResult): void {
     if (result.success) {
-      console.log('SUCESSO: Magnet adicionado ao catálogo e Real-Debrid');
+      console.log('\nSUCESSO: Magnet adicionado ao catálogo e Real-Debrid');
       console.log('Arquivo(s) principal(is):', result.mainFile);
       console.log('Arquivos selecionados:', result.selectedFiles);
       console.log('Link de download:', result.downloadLink);
@@ -666,14 +668,14 @@ class MagnetAdder {
       if (result.downloadTime) {
         const minutes = Math.floor(result.downloadTime / 60);
         const seconds = result.downloadTime % 60;
-        console.log('Tempo total:', `${minutes}m${seconds}s`);
+        console.log('Tempo total:', minutes + 'm' + seconds + 's');
       }
 
       if (result.torrentId) {
         console.log('ID do Torrent:', result.torrentId);
       }
     } else {
-      console.log(' AVISO: Magnet adicionado ao catálogo, mas download precisa de atenção');
+      console.log('\nAVISO: Magnet adicionado ao catálogo, mas download precisa de atenção');
       if (result.message) {
         console.log('Informação:', result.message);
       }
@@ -682,7 +684,7 @@ class MagnetAdder {
 
   private handleError(context: string, error: unknown): void {
     const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-    console.log(` ERRO: ${context}:`, errorMessage);
+    console.log('ERRO: ' + context + ':', errorMessage);
 
     logger.error(context, {
       error: errorMessage,
@@ -691,7 +693,9 @@ class MagnetAdder {
   }
 
   private cleanup(): void {
+    this.apiKey = '';
     this.rl.close();
+    console.log('\nSessão finalizada - API key removida da memória');
   }
 
   private async addToJSON(magnetData: MagnetData): Promise<void> {
@@ -714,6 +718,8 @@ class MagnetAdder {
         language: magnetData.language,
         category: magnetData.category
       });
+
+      console.log('Magnet salvo no catálogo público (data/magnets.json)');
     } catch (error) {
       logger.error('Erro ao salvar magnet no JSON', {
         error: error instanceof Error ? error.message : 'Erro desconhecido',
@@ -727,7 +733,7 @@ class MagnetAdder {
 if (require.main === module) {
   const adder = new MagnetAdder();
   adder.start().catch(error => {
-    console.log(' ERRO CRÍTICO:', error);
+    console.log('ERRO CRÍTICO:', error);
     process.exit(1);
   });
 }

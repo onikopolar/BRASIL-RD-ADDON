@@ -250,6 +250,16 @@ export class RealDebridService {
     try {
       const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
       
+      // LOG DIAGNÓSTICO - Status do torrent
+      this.logger.debug('DEBUG - Torrent streaming analysis', {
+        torrentId,
+        fileId,
+        status: torrentInfo.status,
+        linksCount: torrentInfo.links?.length || 0,
+        filesCount: torrentInfo.files?.length || 0,
+        selectedFilesCount: torrentInfo.files?.filter(f => f.selected === 1).length || 0
+      });
+
       if (torrentInfo.status !== 'downloaded') {
         this.logger.debug('Torrent not ready for streaming', {
           torrentId,
@@ -265,8 +275,18 @@ export class RealDebridService {
       }
 
       const selectedFiles = torrentInfo.files?.filter(file => file.selected === 1) || [];
-      const fileIndex = selectedFiles.findIndex(file => file.id === fileId);
       
+      // LOG DIAGNÓSTICO - Análise de arquivos selecionados
+      this.logger.debug('DEBUG - Selected files details', {
+        torrentId,
+        fileId,
+        selectedFilesCount: selectedFiles.length,
+        selectedFileIds: selectedFiles.map(f => f.id),
+        lookingForFileId: fileId
+      });
+
+      const fileIndex = selectedFiles.findIndex(file => file.id === fileId);
+
       if (fileIndex === -1) {
         this.logger.debug('File not found in selected files', {
           torrentId,
@@ -288,8 +308,17 @@ export class RealDebridService {
       }
 
       const rdLink = torrentInfo.links[fileIndex];
-      const directLink = await this.unrestrictLink(rdLink, apiKey);
       
+      // LOG DIAGNÓSTICO - Antes de gerar link direto
+      this.logger.debug('DEBUG - Generating direct link', {
+        torrentId,
+        fileId,
+        fileIndex,
+        rdLink: this.sanitizeLink(rdLink)
+      });
+
+      const directLink = await this.unrestrictLink(rdLink, apiKey);
+
       this.logger.debug('Stream link obtained for file', {
         torrentId,
         fileId,

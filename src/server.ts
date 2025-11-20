@@ -459,6 +459,7 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
     const apiKey = req.query.apiKey as string;
 
     const cacheKey = `resolve:${encodedMagnet}:${apiKey}`;
+        
     const cachedDirectLink = cacheService.get<string>(cacheKey);
     
     if (cachedDirectLink) {
@@ -556,6 +557,15 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             throw new Error('Nenhum arquivo de vídeo encontrado no torrent');
         }
 
+        // Log detalhado para diagnóstico
+        logger.debug('DEBUG - Informações do torrent', {
+            torrentId,
+            filesCount: torrentInfo.files?.length || 0,
+            videoFilesCount: videoFiles.length,
+            linksCount: torrentInfo.links?.length || 0,
+            selectedFilesCount: torrentInfo.files?.filter(f => f.selected === 1).length || 0
+        });
+
         const sortedFiles = videoFiles
             .map(file => {
                 let priority = file.bytes;
@@ -572,13 +582,14 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             })
             .sort((a, b) => b.priority - a.priority);
 
-        const mainFile = sortedFiles[0];
-        logger.info('Arquivo de vídeo principal selecionado', {
-            filename: mainFile.path,
-            size: mainFile.bytes
+        const selectedFile = sortedFiles[0];
+        logger.info('Arquivo de vídeo principal selecionado automaticamente', {
+            filename: selectedFile.path,
+            size: selectedFile.bytes,
+            fileId: selectedFile.id
         });
 
-        const directLink = await rdService.getStreamLinkForFile(torrentId, mainFile.id, apiKey);
+        const directLink = await rdService.getStreamLinkForFile(torrentId, selectedFile.id, apiKey);
         
         if (!directLink) {
             throw new Error('Falha ao gerar link direto do arquivo');
@@ -587,6 +598,7 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
         cacheService.set(cacheKey, directLink, CACHE_TTL);
 
         logger.info('Redirecionando para link direto do Real-Debrid', {
+            filename: selectedFile.path,
             directLink: directLink.substring(0, 100) + '...',
             cached: true
         });

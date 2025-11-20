@@ -1,6 +1,8 @@
-import { addonBuilder } from 'stremio-addon-sdk';
-const express = require('express');
-const cors = require('cors');
+import { addonBuilder, getRouter } from 'stremio-addon-sdk';
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs';
+import https from 'https';
 import { StreamHandler } from './services/StreamHandler';
 import { RealDebridService } from './services/RealDebridService';
 import { CacheService } from './services/CacheService';
@@ -46,9 +48,9 @@ const manifest = {
         {
             key: 'apiKey',
             type: 'text',
-            title: 'Configuração Real-Debrid - Obtenha sua chave API (real-debrid.com/apitoken)',
+            title: 'Chave de API do Real-Debrid',
             required: true,
-            placeholder: 'Site: real-debrid.com/apitoken - Cole a chave aqui'
+            placeholder: 'Cole sua chave de API aqui'
         }
     ]
 };
@@ -131,10 +133,11 @@ builder.defineStreamHandler(async (args: any) => {
     }
 });
 
+// Obter o router do SDK Stremio
+const stremioRouter = getRouter(builder.getInterface());
+
 // Configuração de cache
 const cacheMaxAge = 600;
-
-// Middleware de cache
 app.use((req: any, res: any, next: any) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
         res.setHeader('Cache-Control', 'max-age=' + cacheMaxAge + ', public');
@@ -142,62 +145,284 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-// Servir o manifest
-app.get('/manifest.json', (req: any, res: any) => {
-    const { config } = req.query;
-    let manifestResp = manifest;
-    
-    if (config && manifest.behaviorHints && (manifest.behaviorHints.configurationRequired || manifest.behaviorHints.configurable)) {
-        const manifestClone = JSON.parse(JSON.stringify(manifest));
-        delete manifestClone.behaviorHints.configurationRequired;
-        delete manifestClone.behaviorHints.configurable;
-        manifestResp = manifestClone;
-    }
-    
-    res.setHeader('Content-Type', 'application/json; charset=utf-8');
-    res.json(manifestResp);
-});
-
-// Página de configuração
+// Página de configuração personalizada com design limpo
 app.get('/configure', (req: any, res: any) => {
+    const background = manifest.background || 'https://dl.strem.io/addon-background.jpg'
+    const logo = manifest.logo || 'https://dl.strem.io/addon-logo.png'
+    
     const landingHTML = `
         <!DOCTYPE html>
-        <html>
+        <html style="background-image: url(${background});">
         <head>
-            <title>${manifest.name}</title>
-            <meta name="viewport" content="width=device-width, initial-scale=1">
+            <meta charset="utf-8">
+            <title>${manifest.name} - Stremio Addon</title>
             <style>
-                body { font-family: Arial, sans-serif; margin: 40px; background: #f5f5f5; }
-                .container { max-width: 600px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
-                h1 { color: #333; margin-bottom: 20px; }
-                .form-group { margin-bottom: 20px; }
-                label { display: block; margin-bottom: 5px; font-weight: bold; color: #555; }
-                input[type="text"] { width: 100%; padding: 10px; border: 1px solid #ddd; border-radius: 4px; font-size: 16px; }
-                .help-text { font-size: 14px; color: #666; margin-top: 5px; }
-                .submit-btn { background: #007cba; color: white; border: none; padding: 12px 24px; border-radius: 4px; cursor: pointer; font-size: 16px; }
-                .submit-btn:hover { background: #005a87; }
+                * {
+                    box-sizing: border-box;
+                }
+
+                body,
+                html {
+                    margin: 0;
+                    padding: 0;
+                    width: 100%;
+                    min-height: 100%;
+                }
+
+                body {
+                    padding: 2vh;
+                    font-size: 2.2vh;
+                }
+
+                html {
+                    background-size: auto 100%;
+                    background-size: cover;
+                    background-position: center center;
+                    background-repeat: no-repeat;
+                    box-shadow: inset 0 0 0 2000px rgb(0 0 0 / 60%);
+                }
+
+                body {
+                    display: flex;
+                    font-family: 'Open Sans', Arial, sans-serif;
+                    color: white;
+                }
+
+                h1 {
+                    font-size: 4.5vh;
+                    font-weight: 700;
+                }
+
+                h2 {
+                    font-size: 2.2vh;
+                    font-weight: normal;
+                    font-style: italic;
+                    opacity: 0.8;
+                }
+
+                h3 {
+                    font-size: 2.2vh;
+                }
+
+                h1,
+                h2,
+                h3,
+                p {
+                    margin: 0;
+                    text-shadow: 0 0 1vh rgba(0, 0, 0, 0.15);
+                }
+
+                p {
+                    font-size: 1.75vh;
+                }
+
+                ul {
+                    font-size: 1.75vh;
+                    margin: 0;
+                    margin-top: 1vh;
+                    padding-left: 3vh;
+                }
+
+                a {
+                    color: white
+                }
+
+                a.install-link {
+                    text-decoration: none
+                }
+
+                a.api-link {
+                    color: #34c5dbff;
+                    text-decoration: none;
+                    font-weight: 600;
+                }
+
+                a.info-link {
+                    color: #34c5dbff;
+                    text-decoration: none;
+                    font-weight: 600;
+                }
+
+                a.api-link:hover,
+                a.info-link:hover {
+                    text-decoration: underline;
+                }
+
+                button {
+                    border: 0;
+                    outline: 0;
+                    color: white;
+                    background: #8A5AAB;
+                    padding: 1.2vh 3.5vh;
+                    margin: auto;
+                    text-align: center;
+                    font-family: 'Open Sans', Arial, sans-serif;
+                    font-size: 2.2vh;
+                    font-weight: 600;
+                    cursor: pointer;
+                    display: block;
+                    box-shadow: 0 0.5vh 1vh rgba(0, 0, 0, 0.2);
+                    transition: box-shadow 0.1s ease-in-out;
+                }
+
+                button:hover {
+                    box-shadow: none;
+                }
+
+                button:active {
+                    box-shadow: 0 0 0 0.5vh white inset;
+                }
+
+                #addon {
+                    width: 40vh;
+                    margin: auto;
+                }
+
+                .logo {
+                    height: 14vh;
+                    width: 14vh;
+                    margin: auto;
+                    margin-bottom: 3vh;
+                }
+
+                .logo img {
+                    width: 100%;
+                }
+
+                .name, .version {
+                    display: inline-block;
+                    vertical-align: top;
+                }
+
+                .name {
+                    line-height: 5vh;
+                    margin: 0;
+                }
+
+                .version {
+                    position: relative;
+                    line-height: 5vh;
+                    opacity: 0.8;
+                    margin-bottom: 2vh;
+                }
+
+                .contact {
+                    position: absolute;
+                    left: 0;
+                    bottom: 4vh;
+                    width: 100%;
+                    text-align: center;
+                }
+
+                .contact a {
+                    font-size: 1.4vh;
+                    font-style: italic;
+                }
+
+                .separator {
+                    margin-bottom: 4vh;
+                }
+
+                .form-element {
+                    margin-bottom: 2vh;
+                }
+
+                .label-to-top {
+                    margin-bottom: 2vh;
+                }
+
+                .label-to-right {
+                    margin-left: 1vh !important;
+                }
+
+                .full-width {
+                    width: 100%;
+                }
+
+                input[type="text"] {
+                    width: 100%;
+                    padding: 8px;
+                    border: 1px solid #ccc;
+                    border-radius: 3px;
+                    font-size: 14px;
+                }
+
+                .info-text {
+                    font-size: 1.8vh;
+                    color: #ecf0f1;
+                    margin-top: 1.5vh;
+                    line-height: 1.4;
+                    text-shadow: 0 0 1vh rgba(0, 0, 0, 0.3);
+                }
+
+                .warning-text {
+                    font-size: 1.7vh;
+                    color: #fff428ff;
+                    margin-top: 2vh;
+                    padding: 1.5vh;
+                    background: rgba(243, 156, 18, 0.15);
+                    border-radius: 5px;
+                    border-left: 4px solid #f39c12;
+                    line-height: 1.5;
+                    text-shadow: 0 0 1vh rgba(0, 0, 0, 0.3);
+                }
+
+                .warning-text strong {
+                    color: #fce729ff;
+                }
             </style>
+            <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,600,700&display=swap" rel="stylesheet">
         </head>
         <body>
-            <div class="container">
-                <h1>${manifest.name}</h1>
-                <p>${manifest.description}</p>
-                <form id="configForm">
-                    <div class="form-group">
-                        <label for="apiKey">Chave API do Real-Debrid</label>
-                        <input type="text" id="apiKey" name="apiKey" placeholder="${manifest.config[0].placeholder}" required>
-                        <div class="help-text">${manifest.config[0].title}</div>
+            <div id="addon">
+                <div class="logo">
+                    <img src="${logo}">
+                </div>
+                <h1 class="name">${manifest.name}</h1>
+                <h2 class="version">v${manifest.version}</h2>
+                <h2 class="description">${manifest.description}</h2>
+
+                <div class="separator"></div>
+
+                <h3 class="gives">Este addon oferece: :</h3>
+                <ul>
+                    <li>Filmes</li>
+                    <li>Séries</li>
+                </ul>
+
+                <div class="separator"></div>
+
+                <form class="pure-form" id="mainForm">
+                    <div class="form-element">
+                        <div class="label-to-top">Chave de API do Real-Debrid (Obtenha sua <a href="https://real-debrid.com/apitoken" target="_blank" class="api-link">API aqui</a>)</div>
+                        <input type="text" id="${manifest.config[0].key}" name="${manifest.config[0].key}" class="full-width" required placeholder="${manifest.config[0].placeholder}"/>
+                        
+                        <div class="info-text">
+                            Documentação completa do addon disponível <a href="https://github.com/onikopolar/BRASIL-RD-ADDON" target="_blank" class="info-link">aqui</a>
+                        </div>
+
+                        <div class="warning-text">
+                            <strong>Aviso de Segurança:</strong> Este é o repositório oficial mantido por ONIKO. Não me responsabilizo pela segurança de sua chave API em forks ou versões não oficiais deste projeto.
+                        </div>
                     </div>
-                    <button type="submit" class="submit-btn">Salvar Configuração</button>
                 </form>
+
+                <div class="separator"></div>
+
+                <a id="installLink" class="install-link" href="#">
+                    <button name="Install">INSTALL</button>
+                </a>
             </div>
             <script>
-                document.getElementById('configForm').addEventListener('submit', function(e) {
-                    e.preventDefault();
-                    const apiKey = document.getElementById('apiKey').value;
-                    const config = btoa(JSON.stringify({ apiKey: apiKey }));
-                    window.location.href = 'stremio://' + window.location.host + '/manifest.json?config=' + config;
-                });
+                installLink.onclick = () => {
+                    return mainForm.reportValidity()
+                }
+                const updateLink = () => {
+                    const config = Object.fromEntries(new FormData(mainForm))
+                    installLink.href = 'stremio://' + window.location.host + '/' + encodeURIComponent(JSON.stringify(config)) + '/manifest.json'
+                }
+                mainForm.onchange = updateLink
+                updateLink()
             </script>
         </body>
         </html>
@@ -207,45 +432,10 @@ app.get('/configure', (req: any, res: any) => {
     res.end(landingHTML);
 });
 
-// Rota de stream do Stremio
-app.get('/stream/:type/:id.json', async (req: any, res: any) => {
-    try {
-        const { type, id } = req.params;
-        const config = req.query.config ? JSON.parse(Buffer.from(req.query.config as string, 'base64').toString()) : {};
-        
-        // Usar a mesma lógica do handler original
-        if (!config || !config.apiKey) {
-            return res.json({ streams: [] });
-        }
+// Usar o router do SDK para todas as rotas Stremio
+app.use(stremioRouter);
 
-        const streamRequest: StreamRequest = {
-            type: type as 'movie' | 'series',
-            id: id,
-            title: '',
-            apiKey: config.apiKey,
-            config: {
-                quality: 'Todas as Qualidades',
-                maxResults: '15 streams',
-                language: 'pt-BR',
-                enableAggressiveSearch: true,
-                minSeeders: 2,
-                requireExactMatch: false,
-                maxConcurrentTorrents: 8
-            }
-        };
-
-        const result = await streamHandler.handleStreamRequest(streamRequest);
-        res.json(result);
-        
-    } catch (error) {
-        logger.error('Erro na rota de stream', {
-            error: error instanceof Error ? error.message : 'Unknown error'
-        });
-        res.json({ streams: [] });
-    }
-});
-
-// === ROTAS CUSTOMIZADAS PARA O MODO TORRENTIO-LIKE ===
+// Rotas customizadas
 
 // Health check
 app.get('/health', (req: any, res: any) => {
@@ -263,12 +453,11 @@ app.get('/health', (req: any, res: any) => {
     });
 });
 
-// Rota de resolução sob demanda (OTIMIZADA COM CACHE SERVICE)
+// Rota de resolução sob demanda
 app.get('/resolve/:magnet', async (req: any, res: any) => {
     const encodedMagnet = req.params.magnet;
     const apiKey = req.query.apiKey as string;
 
-    // CACHE: Verificar se já temos este magnet resolvido
     const cacheKey = `resolve:${encodedMagnet}:${apiKey}`;
     const cachedDirectLink = cacheService.get<string>(cacheKey);
     
@@ -295,10 +484,8 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             });
         }
 
-        // Instanciar o RealDebridService
         const rdService = new RealDebridService();
         
-        // 1. Verificar se o torrent já existe no Real-Debrid
         const magnetHash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
         let existingTorrent = null;
         
@@ -309,7 +496,6 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
         let torrentId: string;
         
         if (existingTorrent && existingTorrent.id) {
-            // OTIMIZAÇÃO: Usar torrent existente
             torrentId = existingTorrent.id;
             logger.info('Torrent já existe no Real-Debrid', { 
                 torrentId,
@@ -317,7 +503,6 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
                 progress: existingTorrent.progress
             });
         } else {
-            // 2. Processar o magnet no Real-Debrid
             const processResult = await rdService.processTorrent(magnet, apiKey);
             
             if (!processResult.added || !processResult.torrentId) {
@@ -328,10 +513,9 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             logger.info('Magnet adicionado ao Real-Debrid', { torrentId });
         }
 
-        // 3. Aguardar e buscar informações do torrent (com timeout inteligente)
         let torrentInfo;
         let attempts = 0;
-        const maxAttempts = existingTorrent?.status === 'downloaded' ? 1 : 30; // OTIMIZAÇÃO: Menos tentativas se já estiver baixado
+        const maxAttempts = existingTorrent?.status === 'downloaded' ? 1 : 30;
         
         while (attempts < maxAttempts) {
             torrentInfo = await rdService.getTorrentInfo(torrentId, apiKey);
@@ -348,16 +532,15 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
                 const progress = Math.round(torrentInfo.progress);
                 logger.info('Aguardando download do torrent', { 
                     torrentId, 
-                    progress: `${progress}%`,
+                    progress: progress + '%',
                     attempt: attempts + 1
                 });
                 
-                // OTIMIZAÇÃO: Aumentar intervalo conforme progresso
-                const delay = progress > 80 ? 2000 : 1000; // 2 segundos se estiver perto do fim
+                const delay = progress > 80 ? 2000 : 1000;
                 await new Promise(resolve => setTimeout(resolve, delay));
                 attempts++;
             } else {
-                throw new Error(`Status do torrent não suportado: ${torrentInfo.status}`);
+                throw new Error('Status do torrent não suportado: ' + torrentInfo.status);
             }
         }
 
@@ -365,7 +548,6 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             throw new Error('Timeout aguardando download do torrent');
         }
 
-        // 4. Encontrar o arquivo de vídeo principal
         const videoFiles = (torrentInfo.files || []).filter(file =>
             /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|ts|mts|vob)$/i.test(file.path)
         );
@@ -374,17 +556,14 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             throw new Error('Nenhum arquivo de vídeo encontrado no torrent');
         }
 
-        // OTIMIZAÇÃO: Ordenar por prioridade (maior arquivo primeiro, mas considerar qualidade no nome)
         const sortedFiles = videoFiles
             .map(file => {
-                let priority = file.bytes; // Tamanho como base
+                let priority = file.bytes;
                 
-                // Priorizar arquivos com qualidade no nome
                 if (/1080p|720p|2160p|4k/i.test(file.path)) {
                     priority *= 1.5;
                 }
                 
-                // Penalizar arquivos com "sample" ou "trailer"
                 if (/sample|trailer|teaser/i.test(file.path)) {
                     priority *= 0.1;
                 }
@@ -396,18 +575,15 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
         const mainFile = sortedFiles[0];
         logger.info('Arquivo de vídeo principal selecionado', {
             filename: mainFile.path,
-            size: mainFile.bytes,
-            priority: Math.round(mainFile.priority / mainFile.bytes * 100) / 100
+            size: mainFile.bytes
         });
 
-        // 5. Gerar link direto
         const directLink = await rdService.getStreamLinkForFile(torrentId, mainFile.id, apiKey);
         
         if (!directLink) {
             throw new Error('Falha ao gerar link direto do arquivo');
         }
 
-        // CACHE: Salvar resultado no cache usando CacheService
         cacheService.set(cacheKey, directLink, CACHE_TTL);
 
         logger.info('Redirecionando para link direto do Real-Debrid', {
@@ -415,7 +591,6 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             cached: true
         });
 
-        // 6. Redirecionar para o link direto
         res.redirect(302, directLink);
 
     } catch (error) {
@@ -430,7 +605,7 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
     }
 });
 
-// Rota para limpar cache (útil para desenvolvimento)
+// Rota para limpar cache
 app.delete('/cache', (req: any, res: any) => {
     cacheService.clear();
     logger.info('Cache limpo manualmente');
@@ -454,47 +629,84 @@ app.get('/', (req: any, res: any) => {
     res.redirect('/configure');
 });
 
-// Iniciar servidor
-const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
+// Configuração de HTTPS (Opcional)
+function createServer() {
+    const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
+    
+    const sslOptions = getSSLOptions();
+    
+    if (sslOptions) {
+        const httpsServer = https.createServer(sslOptions, app);
+        httpsServer.listen(port, () => {
+            logServerStart(port, true);
+        });
+        return httpsServer;
+    } else {
+        return app.listen(port, () => {
+            logServerStart(port, false);
+        });
+    }
+}
 
-app.listen(port, () => {
-    logger.info('Brasil RD Addon iniciado com Express customizado', {
-        port: port,
+function getSSLOptions() {
+    try {
+        const privateKeyPath = process.env.SSL_PRIVATE_KEY;
+        const certificatePath = process.env.SSL_CERTIFICATE;
+        
+        if (privateKeyPath && certificatePath && 
+            fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
+            
+            return {
+                key: fs.readFileSync(privateKeyPath),
+                cert: fs.readFileSync(certificatePath)
+            };
+        }
+        
+        logger.info('SSL não configurado - usando HTTP para desenvolvimento');
+        return null;
+        
+    } catch (error) {
+        logger.warn('Erro ao carregar certificados SSL', {
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        return null;
+    }
+}
+
+function logServerStart(port: number, httpsEnabled: boolean) {
+    const protocol = httpsEnabled ? 'https' : 'http';
+    
+    logger.info('Brasil RD Addon iniciado com sucesso', {
+        port,
+        protocol,
         configurable: true,
         environment: process.env.NODE_ENV || 'development',
         cacheEnabled: true,
-        optimizations: true
+        httpsEnabled
     });
 
-    console.log('=== BRASIL RD ADDON (TORRENTIO MODE) - OTIMIZADO ===');
-    console.log(`Addon rodando: http://localhost:${port}/manifest.json`);
-    console.log(`Interface de config: http://localhost:${port}/configure`);
-    console.log(`Health check: http://localhost:${port}/health`);
-    console.log(`Rota de resolução: http://localhost:${port}/resolve/{magnet}?apiKey=...`);
+    console.log('=== BRASIL RD ADDON ===');
+    console.log('Addon rodando: ' + protocol + '://localhost:' + port + '/manifest.json');
+    console.log('Interface de config: ' + protocol + '://localhost:' + port + '/configure');
+    console.log('Health check: ' + protocol + '://localhost:' + port + '/health');
+    console.log('Rota de resolução: ' + protocol + '://localhost:' + port + '/resolve/{magnet}?apiKey=...');
     console.log('');
-    console.log('    OTIMIZACOES IMPLEMENTADAS:');
-    console.log('   • Cache inteligente de 24h para links resolvidos');
-    console.log('   • Verificacao de torrents existentes no Real-Debrid');
-    console.log('   • Timeout adaptativo baseado no progresso do download');
-    console.log('   • Selecao inteligente de arquivos por qualidade');
-    console.log('   • Logs detalhados de performance');
-    console.log('   • Uso correto do CacheService');
+    console.log('CONFIGURACAO:');
+    console.log('- 15 streams por requisicao');
+    console.log('- Todas as qualidades automaticamente');
+    console.log('- Busca otimizada por conteudo');
+    console.log('- Cache inteligente de 24h');
     console.log('');
-    console.log('    ESTATISTICAS:');
-    console.log('   • Cache TTL: 24 horas');
-    console.log('   • Timeout maximo: 30 segundos');
-    console.log('   • Verificacao de torrents existentes');
-    console.log('   • Selecao por qualidade + tamanho');
+    console.log('PLATAFORMAS SUPORTADAS:');
+    console.log('- Desktop (Windows, macOS, Linux)');
+    console.log('- Mobile (Android, iOS)');
+    console.log('- TV (Android TV, Smart TVs)');
     console.log('');
-    console.log('    PROXIMAS OTIMIZACOES:');
-    console.log('   • Multiplas qualidades por stream');
-    console.log('   • Suporte avancado a series');
-    console.log('   • Tratamento de erros com retry');
-    console.log('   • Timeouts configuraveis por tamanho');
-    console.log('   • Cache distribuído para produção');
-    console.log('');
-    console.log('    PLATAFORMAS SUPORTADAS:');
-    console.log('   • Desktop (Windows, macOS, Linux)');
-    console.log('   • Mobile (Android, iOS)');
-    console.log('   • TV (Android TV, Smart TVs)');
-});
+    
+    if (!httpsEnabled) {
+        console.log('PARA HTTPS: Defina SSL_PRIVATE_KEY e SSL_CERTIFICATE no .env');
+    }
+}
+
+// Iniciar servidor
+createServer();
