@@ -39,6 +39,15 @@ Diferente de outros addons como Torrentio e seus derivados, eu priorizo:
 - Configuração por ambiente
 - Interface web para configuração simplificada
 
+## Configuração Rápida
+
+1. Acesse o painel de configuração: https://brasil-rd-addon.up.railway.app/configure
+2. Cole sua API Key do Real-Debrid
+3.  Salve as configurações
+4.  Clique em install e ele vai automaticamente te redirecionar pro stremio
+
+Logo após o Stremio abrir, e você adicionar, seu addon já vai funcionar.
+
 ## Solicitação de Conteúdo Exclusivo
 
 Reconheço que algum conteúdo específico pode estar faltando. Por isso:
