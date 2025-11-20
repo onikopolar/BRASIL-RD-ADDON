@@ -175,6 +175,15 @@ class StreamHandler {
             }
             let streams = await this.processStreamRequest(request);
             streams = this.applyMobileCompatibilityFilter(streams);
+            this.logger.debug('DEBUG - URLs sendo retornadas para o cliente:', {
+                requestId,
+                streamCount: streams.length,
+                urls: streams.map(s => ({
+                    url: s.url,
+                    title: s.title,
+                    status: s.status
+                }))
+            });
             if (streams.length > 0) {
                 const cacheTTL = this.calculateDynamicCacheTTL(streams);
                 this.cacheService.set(cacheKey, streams, cacheTTL);

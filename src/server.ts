@@ -41,7 +41,7 @@ const manifest = {
         configurable: true,
         configurationRequired: true,
         adult: false,
-        p2p: true
+        p2p: false
     },
 
     config: [
@@ -143,6 +143,49 @@ app.use((req: any, res: any, next: any) => {
         res.setHeader('Cache-Control', 'max-age=' + cacheMaxAge + ', public');
     }
     next();
+});
+
+// Rota de teste para desenvolvimento - aceita API key via query parameter
+app.get('/stream/:type/:id.json', async (req: any, res: any) => {
+    const { type, id } = req.params;
+    const apiKey = req.query.apiKey;
+
+    if (!apiKey) {
+        logger.warn('Test route - Requisição de stream sem API key', { type, id });
+        return res.json({ streams: [] });
+    }
+
+    const streamRequest: StreamRequest = {
+        type: type as 'movie' | 'series',
+        id: id,
+        title: '',
+        apiKey: apiKey,
+        config: {
+            quality: 'Todas as Qualidades',
+            maxResults: '15 streams',
+            language: 'pt-BR',
+            enableAggressiveSearch: true,
+            minSeeders: 2,
+            requireExactMatch: false,
+            maxConcurrentTorrents: 8
+        }
+    };
+
+    logger.info('Test route - Processando requisição de stream', {
+        type: type,
+        id: id,
+        apiKey: apiKey.substring(0, 8) + '...'
+    });
+
+    try {
+        const result = await streamHandler.handleStreamRequest(streamRequest);
+        res.json(result);
+    } catch (error) {
+        logger.error('Test route - Falha no processamento', {
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        res.json({ streams: [] });
+    }
 });
 
 // Página de configuração personalizada com design limpo
