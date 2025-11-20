@@ -533,9 +533,11 @@ export class StreamHandler {
     return allStreams;
   }
 
-  private generateLazyResolveUrl(magnet: string, apiKey: string): string {
+    private generateLazyResolveUrl(magnet: string, apiKey: string): string {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
-    return `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+    const domain = process.env.RAILWAY_STATIC_URL || 'brasil-rd-addon.up.railway.app';
+    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    return `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
   }
 
   private async analyzeTorrentFilesLazy(magnet: string): Promise<Array<{id: number, path: string, bytes: number}>> {
