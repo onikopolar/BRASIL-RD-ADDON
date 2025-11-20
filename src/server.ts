@@ -386,8 +386,8 @@ app.get('/configure', (req: any, res: any) => {
 
                 <h3 class="gives">Este addon oferece: :</h3>
                 <ul>
-                    <li>Movies</li>
-                    <li>Series</li>
+                    <li>Filmes</li>
+                    <li>Séries</li>
                 </ul>
 
                 <div class="separator"></div>
