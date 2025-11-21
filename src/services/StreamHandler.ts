@@ -546,10 +546,22 @@ export class StreamHandler {
 
       private generateLazyResolveUrl(magnet: string, apiKey: string): string {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
+    
+    // DEBUG: Log para verificar variáveis de ambiente
+    console.log('DEBUG generateLazyResolveUrl:', {
+        RAILWAY_STATIC_URL: process.env.RAILWAY_STATIC_URL,
+        NODE_ENV: process.env.NODE_ENV,
+        RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT
+    });
+    
     const domain = process.env.RAILWAY_STATIC_URL || (process.env.NODE_ENV === 'production' ? 'brasil-rd-addon.up.railway.app' : 'localhost:7000');
     const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
-    return `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
-  }
+    
+    const url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+    console.log('DEBUG URL gerada:', url);
+    
+    return url;
+}
 
   private async analyzeTorrentFilesLazy(magnet: string): Promise<Array<{id: number, path: string, bytes: number}>> {
     return [{
