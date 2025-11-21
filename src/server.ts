@@ -704,18 +704,22 @@ function getSSLOptions() {
 }
 
 function logServerStart(port: number, httpsEnabled: boolean) {
-    const protocol = httpsEnabled ? 'https' : 'http';
-    const host = process.env.RAILWAY_STATIC_URL ? new URL(process.env.RAILWAY_STATIC_URL).hostname : `localhost:${port}`;
-    
-    logger.info('Brasil RD Addon iniciado com sucesso', {
-        port,
-        protocol,
-        configurable: true,
-        environment: process.env.NODE_ENV || 'production',
-        cacheEnabled: true,
-        httpsEnabled,
-        features: ['auto-magnet', 'smart-resolve', 'real-debrid-check']
-    });
+   const protocol = httpsEnabled ? 'https' : 'http';
+const host = process.env.RAILWAY_STATIC_URL ? 
+    (process.env.RAILWAY_STATIC_URL.startsWith('http') ? 
+        new URL(process.env.RAILWAY_STATIC_URL).hostname : 
+        process.env.RAILWAY_STATIC_URL) : 
+    `localhost:${port}`;
+
+logger.info('Brasil RD Addon iniciado com sucesso', {
+    port,
+    protocol,
+    configurable: true,
+    environment: process.env.NODE_ENV || 'production',
+    cacheEnabled: true,
+    httpsEnabled,
+    features: ['auto-magnet', 'smart-resolve', 'real-debrid-check']
+});
 
     console.log('=== BRASIL RD ADDON (MODO INTELIGENTE) ===');
     console.log(`Addon rodando: ${protocol}://${host}/manifest.json`);
