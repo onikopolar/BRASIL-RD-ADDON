@@ -118,6 +118,13 @@ builder.defineStreamHandler(async (args: any) => {
             });
         }
 
+        logger.info("DEBUG - Streams sendo retornados para o cliente:", { 
+            requestId: args.id, 
+            streamCount: result.streams.length, 
+            streamTitles: result.streams.map(s => s.title), 
+            streamUrls: result.streams.map(s => s.url.substring(0, 100) + "..."), 
+            streamNames: result.streams.map(s => s.name) 
+        });
         return result;
 
     } catch (error) {
