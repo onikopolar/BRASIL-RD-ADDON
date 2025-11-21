@@ -495,14 +495,18 @@ export class StreamHandler {
     return this.sortStreamsByQuality(streams);
   }
 
-  private async processTorrentsWithRateLimit(
+   private async processTorrentsWithRateLimit(
     torrents: ScrapedTorrent[], 
     request: StreamRequest
   ): Promise<Stream[]> {
     const allStreams: Stream[] = [];
     
+    console.log('DEBUG processTorrentsWithRateLimit: Iniciando processamento de', torrents.length, 'torrents');
+    
     for (let i = 0; i < torrents.length; i += this.processingConfig.maxConcurrentTorrents) {
       const batch = torrents.slice(i, i + this.processingConfig.maxConcurrentTorrents);
+      
+      console.log('DEBUG: Processando batch', Math.floor(i / this.processingConfig.maxConcurrentTorrents) + 1, 'com', batch.length, 'torrents');
       
       this.logger.debug('Processing torrent batch', {
         requestId: request.id,
@@ -513,11 +517,19 @@ export class StreamHandler {
 
       const batchPromises = batch.map(async (torrent) => {
         try {
+          console.log('DEBUG: Iniciando processamento LAZY para torrent:', torrent.title);
+          console.log('DEBUG: Provider:', torrent.provider, 'Quality:', torrent.quality);
+          
           const streamResult = await this.processScrapedTorrentLazy(torrent, request);
+          
           if (streamResult) {
+            console.log('DEBUG: Stream result obtido para:', torrent.title);
             return streamResult;
+          } else {
+            console.log('DEBUG: Nenhum stream result para:', torrent.title);
           }
         } catch (error) {
+          console.log('DEBUG: ERRO no processamento de:', torrent.title, error);
           this.logger.error('Torrent processing failed in batch', {
             requestId: request.id,
             title: torrent.title,
@@ -529,26 +541,36 @@ export class StreamHandler {
 
       const batchResults = await Promise.allSettled(batchPromises);
       
-      batchResults.forEach((result) => {
+      console.log('DEBUG: Batch results:', batchResults.length, 'resultados');
+      
+      batchResults.forEach((result, index) => {
         if (result.status === 'fulfilled' && result.value !== null) {
+          console.log('DEBUG: Resultado fulfilled para índice', index);
           const streams = Array.isArray(result.value) ? result.value : [result.value];
           allStreams.push(...streams);
+          console.log('DEBUG: Adicionados', streams.length, 'streams ao total');
+        } else if (result.status === 'rejected') {
+          console.log('DEBUG: Resultado rejected para índice', index, result.reason);
         }
       });
 
+      console.log('DEBUG: Total de streams após batch:', allStreams.length);
+
       if (i + this.processingConfig.maxConcurrentTorrents < torrents.length) {
+        console.log('DEBUG: Aguardando delay entre batches');
         await this.delay(this.processingConfig.delayBetweenTorrents);
       }
     }
 
+    console.log('DEBUG processTorrentsWithRateLimit: Processamento finalizado. Total streams:', allStreams.length);
     return allStreams;
   }
 
-      private generateLazyResolveUrl(magnet: string, apiKey: string): string {
+  private generateLazyResolveUrl(magnet: string, apiKey: string): string {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
     
-    // DEBUG: Log para verificar variáveis de ambiente
-    console.log('DEBUG generateLazyResolveUrl:', {
+    console.log('DEBUG generateLazyResolveUrl: Iniciando');
+    console.log('DEBUG generateLazyResolveUrl - Variáveis:', {
         RAILWAY_STATIC_URL: process.env.RAILWAY_STATIC_URL,
         NODE_ENV: process.env.NODE_ENV,
         RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT
@@ -558,7 +580,10 @@ export class StreamHandler {
     const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
     
     const url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
-    console.log('DEBUG URL gerada:', url);
+    
+    console.log('DEBUG generateLazyResolveUrl - URL gerada:', url);
+    console.log('DEBUG generateLazyResolveUrl - Domain usado:', domain);
+    console.log('DEBUG generateLazyResolveUrl - Protocol usado:', protocol);
     
     return url;
 }
