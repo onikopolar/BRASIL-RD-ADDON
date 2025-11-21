@@ -45,6 +45,7 @@ export interface CuratedMagnet {
   magnet: string;
   quality: '4K' | '1080p' | '720p' | 'SD';
   seeds: number;
+  size?: string;  // ← ADICIONAR ESTE CAMPO (opcional)
   addedAt: Date;
   category: string;
   language: 'pt-BR' | 'pt' | 'en';

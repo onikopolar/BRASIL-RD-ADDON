@@ -5,12 +5,14 @@ import fs from 'fs';
 import https from 'https';
 import { StreamHandler } from './services/StreamHandler';
 import { RealDebridService } from './services/RealDebridService';
+import { AutoMagnetService } from './services/AutoMagnetService';
 import { CacheService } from './services/CacheService';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
+const autoMagnetService = new AutoMagnetService();
 const cacheService = new CacheService();
 const app = express();
 
@@ -151,8 +153,6 @@ app.use((req: any, res: any, next: any) => {
     }
     next();
 });
-
-// Rota de teste para desenvolvimento - aceita API key via query parameter
 
 // Página de configuração personalizada com design limpo
 app.get('/configure', (req: any, res: any) => {
@@ -462,7 +462,7 @@ app.get('/health', (req: any, res: any) => {
     });
 });
 
-// Rota de resolução sob demanda
+// Rota de resolução sob demanda - INTELIGENTE
 app.get('/resolve/:magnet', async (req: any, res: any) => {
     const encodedMagnet = req.params.magnet;
     const apiKey = req.query.apiKey as string;
@@ -481,10 +481,10 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
 
     try {
         const magnet = Buffer.from(encodedMagnet, 'base64').toString();
-        logger.info('Resolvendo magnet sob demanda', {
+        
+        logger.info('Iniciando resolução inteligente de magnet', {
             magnet: magnet.substring(0, 100) + '...',
-            apiKey: apiKey ? apiKey.substring(0, 8) + '...' : 'none',
-            cacheMiss: true
+            apiKey: apiKey ? apiKey.substring(0, 8) + '...' : 'none'
         });
 
         if (!apiKey) {
@@ -494,137 +494,146 @@ app.get('/resolve/:magnet', async (req: any, res: any) => {
             });
         }
 
-        const rdService = new RealDebridService();
-        
-        const magnetHash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
-        let existingTorrent = null;
-        
-        if (magnetHash) {
-            existingTorrent = await rdService.findExistingTorrent(magnetHash, apiKey);
+        // Cria dados do magnet para o AutoMagnetService
+        const magnetData = {
+            imdbId: 'resolve-' + Date.now(),
+            title: 'Stream sob demanda',
+            magnet: magnet,
+            quality: '1080p',
+            seeds: 50,
+            category: 'filme',
+            language: 'pt-BR',
+            addedAt: new Date().toISOString()
+        };
+
+        // PERGUNTA AO REAL-DEBRID: "Você tem este magnet?"
+        const rdResult = await autoMagnetService.processRealDebridOnClick(magnetData, apiKey);
+
+        if (!rdResult.success) {
+            throw new Error(rdResult.message || 'Falha ao processar com Real-Debrid');
         }
 
-        let torrentId: string;
-        
-        if (existingTorrent && existingTorrent.id) {
-            torrentId = existingTorrent.id;
-            logger.info('Torrent já existe no Real-Debrid', { 
-                torrentId,
-                status: existingTorrent.status,
-                progress: existingTorrent.progress
+        // RESPOSTA INTELIGENTE BASEADA NO STATUS
+        if (rdResult.status === 'ready' && rdResult.streamLink) {
+            // JÁ ESTÁ BAIXADO - Stream instantâneo
+            logger.info('Stream instantâneo - conteúdo já disponível no Real-Debrid', {
+                streamLink: rdResult.streamLink.substring(0, 100) + '...'
             });
+
+            cacheService.set(cacheKey, rdResult.streamLink, CACHE_TTL);
+            return res.redirect(302, rdResult.streamLink);
+
+        } else if (rdResult.status === 'downloading' || rdResult.status === 'queued' || rdResult.status === 'magnet_conversion') {
+            // ⏳ ESTÁ BAIXANDO - Retorna status informativo
+            logger.info('Conteúdo em processamento no Real-Debrid', {
+                status: rdResult.status,
+                message: rdResult.message
+            });
+
+            return res.json({
+                success: true,
+                status: rdResult.status,
+                message: rdResult.message || 'Conteúdo está sendo preparado...',
+                action: 'refresh',
+                estimatedTime: '2-5 minutos'
+            });
+
         } else {
-            const processResult = await rdService.processTorrent(magnet, apiKey);
-            
-            if (!processResult.added || !processResult.torrentId) {
-                throw new Error('Falha ao adicionar magnet no Real-Debrid');
-            }
-
-            torrentId = processResult.torrentId;
-            logger.info('Magnet adicionado ao Real-Debrid', { torrentId });
+            // ❌ STATUS NÃO RECONHECIDO
+            throw new Error(`Status do Real-Debrid não suportado: ${rdResult.status}`);
         }
-
-        let torrentInfo;
-        let attempts = 0;
-        const maxAttempts = existingTorrent?.status === 'downloaded' ? 1 : 30;
-        
-        while (attempts < maxAttempts) {
-            torrentInfo = await rdService.getTorrentInfo(torrentId, apiKey);
-            
-            if (torrentInfo.status === 'downloaded') {
-                logger.info('Torrent pronto no Real-Debrid', { 
-                    torrentId,
-                    totalAttempts: attempts + 1
-                });
-                break;
-            }
-            
-            if (torrentInfo.status === 'downloading' || torrentInfo.status === 'queued' || torrentInfo.status === 'uploading') {
-                const progress = Math.round(torrentInfo.progress);
-                logger.info('Aguardando download do torrent', { 
-                    torrentId, 
-                    progress: progress + '%',
-                    attempt: attempts + 1
-                });
-                
-                const delay = progress > 80 ? 2000 : 1000;
-                await new Promise(resolve => setTimeout(resolve, delay));
-                attempts++;
-            } else {
-                throw new Error('Status do torrent não suportado: ' + torrentInfo.status);
-            }
-        }
-
-        if (attempts >= maxAttempts || !torrentInfo) {
-            throw new Error('Timeout aguardando download do torrent');
-        }
-
-        const videoFiles = (torrentInfo.files || []).filter(file =>
-            /\.(mp4|mkv|avi|mov|wmv|flv|webm|m4v|mpg|mpeg|ts|mts|vob)$/i.test(file.path)
-        );
-
-        if (videoFiles.length === 0) {
-            throw new Error('Nenhum arquivo de vídeo encontrado no torrent');
-        }
-
-        // Log detalhado para diagnóstico
-        logger.debug('DEBUG - Informações do torrent', {
-            torrentId,
-            filesCount: torrentInfo.files?.length || 0,
-            videoFilesCount: videoFiles.length,
-            linksCount: torrentInfo.links?.length || 0,
-            selectedFilesCount: torrentInfo.files?.filter(f => f.selected === 1).length || 0
-        });
-
-        const sortedFiles = videoFiles
-            .map(file => {
-                let priority = file.bytes;
-                
-                if (/1080p|720p|2160p|4k/i.test(file.path)) {
-                    priority *= 1.5;
-                }
-                
-                if (/sample|trailer|teaser/i.test(file.path)) {
-                    priority *= 0.1;
-                }
-                
-                return { ...file, priority };
-            })
-            .sort((a, b) => b.priority - a.priority);
-
-        const selectedFile = sortedFiles[0];
-        logger.info('Arquivo de vídeo principal selecionado automaticamente', {
-            filename: selectedFile.path,
-            size: selectedFile.bytes,
-            fileId: selectedFile.id
-        });
-
-        const directLink = await rdService.getStreamLinkForFile(torrentId, selectedFile.id, apiKey);
-        
-        if (!directLink) {
-            throw new Error('Falha ao gerar link direto do arquivo');
-        }
-
-        cacheService.set(cacheKey, directLink, CACHE_TTL);
-
-        logger.info('Redirecionando para link direto do Real-Debrid', {
-            filename: selectedFile.path,
-            directLink: directLink.substring(0, 100) + '...',
-            cached: true
-        });
-
-        res.redirect(302, directLink);
 
     } catch (error) {
-        logger.error('Erro ao resolver magnet', {
+        logger.error('Erro na resolução inteligente de magnet', {
             error: error instanceof Error ? error.message : 'Unknown error',
-            cacheKey
+            encodedMagnet: encodedMagnet.substring(0, 50) + '...'
         });
+        
         res.status(500).json({
             success: false,
-            error: 'Falha ao resolver o stream: ' + (error instanceof Error ? error.message : 'Unknown error')
+            error: 'Falha ao resolver o stream: ' + (error instanceof Error ? error.message : 'Unknown error'),
+            action: 'retry'
         });
     }
 });
+
+// Rota para verificar status de um magnet específico
+app.get('/resolve/:magnet/status', async (req: any, res: any) => {
+    const encodedMagnet = req.params.magnet;
+    const apiKey = req.query.apiKey as string;
+
+    try {
+        const magnet = Buffer.from(encodedMagnet, 'base64').toString();
+        
+        if (!apiKey) {
+            return res.status(400).json({
+                success: false,
+                error: 'API key do Real-Debrid é obrigatória'
+            });
+        }
+
+        const rdService = new RealDebridService();
+        const magnetHash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
+        
+        if (!magnetHash) {
+            return res.status(400).json({
+                success: false,
+                error: 'Magnet link inválido'
+            });
+        }
+
+        // Busca torrent existente no Real-Debrid
+        const existingTorrent = await rdService.findExistingTorrent(magnetHash, apiKey);
+        
+        if (existingTorrent && existingTorrent.id) {
+            const torrentInfo = await rdService.getTorrentInfo(existingTorrent.id, apiKey);
+            
+            return res.json({
+                success: true,
+                status: torrentInfo.status,
+                progress: Math.round(torrentInfo.progress),
+                downloaded: torrentInfo.status === 'downloaded',
+                message: getStatusMessage(torrentInfo.status, torrentInfo.progress),
+                torrentId: existingTorrent.id
+            });
+        } else {
+            return res.json({
+                success: true,
+                status: 'not_found',
+                progress: 0,
+                downloaded: false,
+                message: 'Torrent não encontrado no Real-Debrid'
+            });
+        }
+
+    } catch (error) {
+        logger.error('Erro ao verificar status do magnet', {
+            error: error instanceof Error ? error.message : 'Unknown error'
+        });
+        
+        res.status(500).json({
+            success: false,
+            error: 'Falha ao verificar status: ' + (error instanceof Error ? error.message : 'Unknown error')
+        });
+    }
+});
+
+// Helper para mensagens de status
+function getStatusMessage(status: string, progress: number): string {
+    const messages: Record<string, string> = {
+        'downloaded': 'Conteúdo pronto para assistir',
+        'downloading': `Baixando... ${Math.round(progress)}% concluído`,
+        'queued': 'Na fila de download',
+        'magnet_conversion': 'Convertendo magnet...',
+        'uploading': 'Fazendo upload...',
+        'compressing': 'Comprimindo arquivos...',
+        'error': 'Erro no processamento',
+        'dead': 'Torrent sem seeds',
+        'virus': 'Arquivo infectado detectado'
+    };
+    
+    return messages[status] || `Status: ${status}`;
+}
 
 // Rota para limpar cache
 app.delete('/cache', (req: any, res: any) => {
@@ -703,25 +712,28 @@ function logServerStart(port: number, httpsEnabled: boolean) {
         configurable: true,
         environment: process.env.NODE_ENV || 'development',
         cacheEnabled: true,
-        httpsEnabled
+        httpsEnabled,
+        features: ['auto-magnet', 'smart-resolve', 'real-debrid-check']
     });
 
-    console.log('=== BRASIL RD ADDON ===');
+    console.log('=== BRASIL RD ADDON (MODO INTELIGENTE) ===');
     console.log('Addon rodando: ' + protocol + '://localhost:' + port + '/manifest.json');
     console.log('Interface de config: ' + protocol + '://localhost:' + port + '/configure');
     console.log('Health check: ' + protocol + '://localhost:' + port + '/health');
     console.log('Rota de resolução: ' + protocol + '://localhost:' + port + '/resolve/{magnet}?apiKey=...');
     console.log('');
-    console.log('CONFIGURACAO:');
-    console.log('- 15 streams por requisicao');
-    console.log('- Todas as qualidades automaticamente');
-    console.log('- Busca otimizada por conteudo');
+    console.log('NOVAS FUNCIONALIDADES:');
+    console.log('- Auto-salvamento de magnets no catálogo');
+    console.log('- Verificação inteligente: "Real-Debrid, você tem este magnet?"');
+    console.log('- Stream instantâneo se já estiver baixado');
+    console.log('- Status em tempo real se estiver baixando');
     console.log('- Cache inteligente de 24h');
     console.log('');
-    console.log('PLATAFORMAS SUPORTADAS:');
-    console.log('- Desktop (Windows, macOS, Linux)');
-    console.log('- Mobile (Android, iOS)');
-    console.log('- TV (Android TV, Smart TVs)');
+    console.log('FLUXO INTELIGENTE:');
+    console.log('1. Usuário clica no stream → Pergunta ao Real-Debrid');
+    console.log('2. Se já tem: Stream instantâneo');
+    console.log('3. Se não tem: Adiciona e mostra progresso');
+    console.log('4. Próximo usuário: Já está no catálogo');
     console.log('');
     
     if (!httpsEnabled) {

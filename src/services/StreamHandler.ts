@@ -1,5 +1,6 @@
 import { RealDebridService } from './RealDebridService';
 import { CuratedMagnetService } from './CuratedMagnetService';
+import { AutoMagnetService } from './AutoMagnetService';
 import { CacheService } from './CacheService';
 import { TorrentScraperService } from './TorrentScraperService';
 import { ImdbScraperService } from './ImdbScraperService';
@@ -160,6 +161,7 @@ class QualityDetector {
 export class StreamHandler {
   private readonly rdService: RealDebridService;
   private readonly magnetService: CuratedMagnetService;
+  private readonly autoMagnetService: AutoMagnetService;
   private readonly cacheService: CacheService;
   private readonly torrentScraper: TorrentScraperService;
   private readonly imdbScraper: ImdbScraperService;
@@ -172,7 +174,7 @@ export class StreamHandler {
     allowPendingStreams: true,
     maxPendingStreams: 8,
     cacheTTL: {
-      downloaded: 86400000,
+      downloaded: 0,
       downloading: 300000,
       error: 120000
     }
@@ -213,21 +215,20 @@ export class StreamHandler {
   constructor() {
     this.rdService = new RealDebridService();
     this.magnetService = new CuratedMagnetService();
+    this.autoMagnetService = new AutoMagnetService();
     this.cacheService = new CacheService();
     this.torrentScraper = new TorrentScraperService();
     this.imdbScraper = new ImdbScraperService();
     this.qualityDetector = new QualityDetector();
     this.logger = new Logger('StreamHandler');
     
-    this.logger.info('StreamHandler initialized with lazy loading support', {
-      processingConfig: this.processingConfig,
-      qualityDetection: '100% igual ao TorrentScraperService'
+    this.logger.info('StreamHandler initialized with AutoMagnetService', {
+      processingConfig: this.processingConfig
     });
   }
 
   async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
-    const cacheKey = this.generateCacheKey(request);
     
     if (!request.apiKey) {
       this.logger.warn('Stream request sem API key', { requestId });
@@ -235,36 +236,24 @@ export class StreamHandler {
     }
     
     try {
-      const cachedStreams = this.cacheService.get<Stream[]>(cacheKey);
-      if (cachedStreams && cachedStreams.length > 0) {
-        const allDownloaded = cachedStreams.every(stream => stream.status === 'downloaded');
-        if (allDownloaded) {
-          const qualities = cachedStreams.map(s => 
-            this.qualityDetector.extractQualityFromStreamName(s.name)
-          );
-          this.logger.debug('Returning cached downloaded streams', { 
-            requestId, 
-            cacheKey,
-            streamCount: cachedStreams.length,
-            qualities
-          });
-          return { streams: cachedStreams };
-        } else {
-          this.logger.debug('Invalidating cache with non-downloaded streams', {
-            requestId,
-            cacheKey,
-            statuses: cachedStreams.map(s => s.status)
-          });
-          this.cacheService.delete(cacheKey);
-        }
+      // PRIMEIRO: Sempre verificar se já existe no catálogo (magnet.json)
+      const catalogStreams = await this.getStreamsFromCatalog(request);
+      if (catalogStreams.length > 0) {
+        this.logger.debug('Returning streams from catalog', {
+          requestId,
+          streamCount: catalogStreams.length,
+          source: 'catalog'
+        });
+        return { streams: catalogStreams };
       }
 
+      // SEGUNDO: Se não tem no catálogo, fazer scraping UMA vez
+      this.logger.debug('No streams in catalog, performing scraping', { requestId });
       let streams = await this.processStreamRequest(request);
       
       streams = this.applyMobileCompatibilityFilter(streams);
       
-      // DEBUG: Log das URLs que estão sendo retornadas
-      this.logger.debug('DEBUG - URLs sendo retornadas para o cliente:', {
+      this.logger.debug('URLs sendo retornadas para o cliente:', {
         requestId,
         streamCount: streams.length,
         urls: streams.map(s => ({
@@ -273,24 +262,6 @@ export class StreamHandler {
           status: s.status
         }))
       });
-      
-      if (streams.length > 0) {
-        const cacheTTL = this.calculateDynamicCacheTTL(streams);
-        this.cacheService.set(cacheKey, streams, cacheTTL);
-        
-        const qualities = streams.map(s => 
-          this.qualityDetector.extractQualityFromStreamName(s.name)
-        );
-        
-        this.logger.info('Cached new mobile-compatible streams', { 
-          requestId, 
-          cacheKey, 
-          streamCount: streams.length,
-          cacheTTL: `${cacheTTL / 60000}min`,
-          qualities,
-          statuses: streams.map(s => s.status)
-        });
-      }
 
       return { streams };
 
@@ -303,13 +274,41 @@ export class StreamHandler {
     }
   }
 
+  private async getStreamsFromCatalog(request: StreamRequest): Promise<Stream[]> {
+    const curatedMagnets = this.magnetService.searchMagnets(request);
+    
+    if (curatedMagnets.length === 0) {
+      return [];
+    }
+
+    const qualityGroups = this.groupMagnetsByQuality(curatedMagnets);
+    const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
+    
+    const streams: Stream[] = [];
+    
+    for (const magnet of bestMagnets) {
+      const stream = this.processMagnetLazy(magnet, request);
+      if (stream) {
+        streams.push(stream);
+      }
+    }
+    
+    this.logger.debug('Created streams from catalog', {
+      requestId: request.id,
+      totalStreams: streams.length,
+      qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
+    });
+
+    return this.sortStreamsByQuality(streams);
+  }
+
   private applyMobileCompatibilityFilter(streams: Stream[]): Stream[] {
     return streams.filter(stream => {
       if (!stream.url || !stream.url.startsWith('http')) {
         return false;
       }
       
-      if (stream.status !== 'downloaded' && stream.status !== 'ready' && stream.status !== 'pending') {
+      if (stream.status !== 'downloaded' && stream.status !== 'ready' && stream.status !== 'available') {
         return false;
       }
       
@@ -325,27 +324,8 @@ export class StreamHandler {
         notWebReady: false
       };
       
-      if (stream.name) {
-        const currentQuality = this.qualityDetector.extractQualityFromStreamName(stream.name);
-        if (!stream.name.match(/(2160p|1080p|720p|HD)/i)) {
-          stream.name = `Brasil RD | ${currentQuality.toUpperCase()}`;
-        }
-      }
-      
       return stream;
     });
-  }
-
-  private calculateDynamicCacheTTL(streams: Stream[]): number {
-    if (streams.length === 0) {
-      return this.processingConfig.cacheTTL.error;
-    }
-
-    if (streams.every(stream => stream.status === 'downloaded')) {
-      return this.processingConfig.cacheTTL.downloaded;
-    }
-
-    return this.processingConfig.cacheTTL.error;
   }
 
   private async processStreamRequest(request: StreamRequest): Promise<Stream[]> {
@@ -357,30 +337,10 @@ export class StreamHandler {
   }
 
   private async processSeriesRequest(request: StreamRequest): Promise<Stream[]> {
-    const curatedMagnets = this.magnetService.searchMagnets(request);
-    
-    if (curatedMagnets.length > 0) {
-      this.logger.debug('Processing curated magnets for series', { 
-        requestId: request.id, 
-        magnetCount: curatedMagnets.length 
-      });
-      return await this.processCuratedMagnets(curatedMagnets, request);
-    }
-    
     return await this.processSeriesScraping(request);
   }
 
   private async processMovieRequest(request: StreamRequest): Promise<Stream[]> {
-    const curatedMagnets = this.magnetService.searchMagnets(request);
-    
-    if (curatedMagnets.length > 0) {
-      this.logger.debug('Processing curated magnets for movie', { 
-        requestId: request.id, 
-        magnetCount: curatedMagnets.length 
-      });
-      return await this.processCuratedMagnets(curatedMagnets, request);
-    }
-    
     return await this.processMovieScraping(request);
   }
 
@@ -479,7 +439,18 @@ export class StreamHandler {
       return [];
     }
 
-    const streams = await this.processTorrentsWithRateLimit(torrentResults, request);
+    const filteredTorrents = this.applyTitleFilter(torrentResults, title, request.id);
+    
+    this.logger.info('Title filtering applied', {
+      requestId: request.id,
+      originalTorrents: torrentResults.length,
+      filteredTorrents: filteredTorrents.length,
+      filteredOut: torrentResults.length - filteredTorrents.length
+    });
+
+    await this.saveScrapedTorrentsToCatalog(filteredTorrents, request, title);
+
+    const streams = await this.processTorrentsWithRateLimit(filteredTorrents, request);
     
     const streamQualities = streams.map(s => 
       this.qualityDetector.extractQualityFromStreamName(s.name)
@@ -495,19 +466,201 @@ export class StreamHandler {
     return this.sortStreamsByQuality(streams);
   }
 
-   private async processTorrentsWithRateLimit(
+  private applyTitleFilter(torrents: any[], originalTitle: string, requestId: string): any[] {
+    const normalizedOriginalTitle = this.normalizeTitleForComparison(originalTitle);
+    
+    return torrents.filter(torrent => {
+      const normalizedTorrentTitle = this.normalizeTitleForComparison(torrent.title);
+      const shouldInclude = this.shouldIncludeTorrent(normalizedTorrentTitle, normalizedOriginalTitle);
+      
+      if (!shouldInclude) {
+        this.logger.debug('Filtering torrent - title mismatch', {
+          requestId,
+          originalTitle,
+          torrentTitle: torrent.title,
+          normalizedOriginal: normalizedOriginalTitle,
+          normalizedTorrent: normalizedTorrentTitle
+        });
+      }
+      
+      return shouldInclude;
+    });
+  }
+
+  private shouldIncludeTorrent(torrentTitle: string, originalTitle: string): boolean {
+    if (torrentTitle.includes(originalTitle) || originalTitle.includes(torrentTitle)) {
+        return true;
+    }
+    
+    const originalKeywords = this.extractTitleKeywords(originalTitle);
+    const torrentKeywords = this.extractTitleKeywords(torrentTitle);
+    
+    if (originalKeywords.length === 0 || torrentKeywords.length === 0) {
+        return this.calculateStringSimilarity(originalTitle, torrentTitle) >= 0.6;
+    }
+    
+    const matchingKeywords = originalKeywords.filter(originalKeyword => 
+        torrentKeywords.some(torrentKeyword => 
+            this.areKeywordsSimilar(originalKeyword, torrentKeyword)
+        )
+    );
+    
+    const matchThreshold = Math.max(1, Math.floor(originalKeywords.length * 0.6));
+    
+    const hasSufficientMatch = matchingKeywords.length >= matchThreshold;
+    const hasMainKeywords = matchingKeywords.length >= 2 && originalKeywords.length >= 3;
+    
+    return hasSufficientMatch || hasMainKeywords;
+  }
+
+  private extractTitleKeywords(title: string): string[] {
+    const commonWords = [
+        'o', 'a', 'os', 'as', 'um', 'uma', 'uns', 'umas', 'de', 'da', 'do', 'das', 'dos',
+        'em', 'no', 'na', 'nos', 'nas', 'por', 'para', 'com', 'sem', 'sob', 'sobre',
+        'ano', 'anos', 'temporada', 'season', 'episodio', 'episode', 'parte', 'part',
+        'filme', 'movie', 'serie', 'series', 'tv', 'complete', 'completa', 'dual', 'dublado',
+        'the', 'and', 'of', 'in', 'on', 'at', 'to', 'for', 'with', 'by', 'from'
+    ];
+    
+    return title
+        .split(' ')
+        .filter(word => 
+            word.length > 2 && 
+            !commonWords.includes(word.toLowerCase()) &&
+            !/^\d{4}$/.test(word) &&
+            !/^\d+$/.test(word)
+        )
+        .map(word => word.toLowerCase());
+  }
+
+  private areKeywordsSimilar(keyword1: string, keyword2: string): boolean {
+    if (keyword1 === keyword2) {
+        return true;
+    }
+    
+    if (keyword1.includes(keyword2) || keyword2.includes(keyword1)) {
+        return true;
+    }
+    
+    if (keyword1.length <= 6 && keyword2.length <= 6) {
+        const distance = this.calculateLevenshteinDistance(keyword1, keyword2);
+        const maxLength = Math.max(keyword1.length, keyword2.length);
+        return distance <= 1;
+    }
+    
+    return false;
+  }
+
+  private calculateStringSimilarity(str1: string, str2: string): number {
+    const longer = str1.length > str2.length ? str1 : str2;
+    const shorter = str1.length > str2.length ? str2 : str1;
+    
+    if (longer.length === 0) {
+        return 1.0;
+    }
+    
+    const distance = this.calculateLevenshteinDistance(longer, shorter);
+    return (longer.length - distance) / longer.length;
+  }
+
+  private calculateLevenshteinDistance(str1: string, str2: string): number {
+    const matrix = Array(str2.length + 1).fill(null).map(() => Array(str1.length + 1).fill(null));
+
+    for (let i = 0; i <= str1.length; i++) {
+        matrix[0][i] = i;
+    }
+
+    for (let j = 0; j <= str2.length; j++) {
+        matrix[j][0] = j;
+    }
+
+    for (let j = 1; j <= str2.length; j++) {
+        for (let i = 1; i <= str1.length; i++) {
+            const indicator = str1[i - 1] === str2[j - 1] ? 0 : 1;
+            matrix[j][i] = Math.min(
+                matrix[j][i - 1] + 1,
+                matrix[j - 1][i] + 1,
+                matrix[j - 1][i - 1] + indicator
+            );
+        }
+    }
+
+    return matrix[str2.length][str1.length];
+  }
+
+  private normalizeTitleForComparison(title: string): string {
+    return title
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^\w\s]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+  }
+
+  private async saveScrapedTorrentsToCatalog(
+    torrents: any[],
+    request: StreamRequest,
+    originalTitle: string
+  ): Promise<void> {
+    const imdbId = this.extractImdbIdFromRequest(request);
+
+    if (!imdbId) {
+      this.logger.debug('No IMDB ID available for auto-saving magnets', { requestId: request.id });
+      return;
+    }
+
+    let savedCount = 0;
+    let skippedCount = 0;
+
+    for (const torrent of torrents) {
+      try {
+        const result = await this.autoMagnetService.autoAddMagnet(
+          torrent.magnet,
+          torrent.title,
+          imdbId,
+          request.type,
+          torrent.seeders,
+          torrent.quality,
+          torrent.size
+        );
+
+        if (result.success && result.magnetAdded) {
+          this.logger.debug('Auto-saved magnet to catalog', {
+            requestId: request.id,
+            title: torrent.title,
+            quality: torrent.quality,
+            seeds: torrent.seeders
+          });
+          savedCount++;
+        }
+      } catch (error) {
+        this.logger.debug('Error auto-saving magnet', {
+          requestId: request.id,
+          title: torrent.title,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    }
+
+    this.logger.info('Auto-save completed for scraped torrents', { 
+      requestId: request.id, 
+      totalTorrents: torrents.length,
+      savedCount,
+      skippedCount,
+      imdbId 
+    });
+  }
+
+  private async processTorrentsWithRateLimit(
     torrents: ScrapedTorrent[], 
     request: StreamRequest
   ): Promise<Stream[]> {
     const allStreams: Stream[] = [];
-    
-    console.log('DEBUG processTorrentsWithRateLimit: Iniciando processamento de', torrents.length, 'torrents');
-    
+
     for (let i = 0; i < torrents.length; i += this.processingConfig.maxConcurrentTorrents) {
       const batch = torrents.slice(i, i + this.processingConfig.maxConcurrentTorrents);
-      
-      console.log('DEBUG: Processando batch', Math.floor(i / this.processingConfig.maxConcurrentTorrents) + 1, 'com', batch.length, 'torrents');
-      
+
       this.logger.debug('Processing torrent batch', {
         requestId: request.id,
         batchIndex: Math.floor(i / this.processingConfig.maxConcurrentTorrents) + 1,
@@ -517,19 +670,12 @@ export class StreamHandler {
 
       const batchPromises = batch.map(async (torrent) => {
         try {
-          console.log('DEBUG: Iniciando processamento LAZY para torrent:', torrent.title);
-          console.log('DEBUG: Provider:', torrent.provider, 'Quality:', torrent.quality);
-          
           const streamResult = await this.processScrapedTorrentLazy(torrent, request);
           
           if (streamResult) {
-            console.log('DEBUG: Stream result obtido para:', torrent.title);
             return streamResult;
-          } else {
-            console.log('DEBUG: Nenhum stream result para:', torrent.title);
           }
         } catch (error) {
-          console.log('DEBUG: ERRO no processamento de:', torrent.title, error);
           this.logger.error('Torrent processing failed in batch', {
             requestId: request.id,
             title: torrent.title,
@@ -541,52 +687,31 @@ export class StreamHandler {
 
       const batchResults = await Promise.allSettled(batchPromises);
       
-      console.log('DEBUG: Batch results:', batchResults.length, 'resultados');
-      
-      batchResults.forEach((result, index) => {
+      batchResults.forEach((result) => {
         if (result.status === 'fulfilled' && result.value !== null) {
-          console.log('DEBUG: Resultado fulfilled para índice', index);
           const streams = Array.isArray(result.value) ? result.value : [result.value];
           allStreams.push(...streams);
-          console.log('DEBUG: Adicionados', streams.length, 'streams ao total');
-        } else if (result.status === 'rejected') {
-          console.log('DEBUG: Resultado rejected para índice', index, result.reason);
         }
       });
 
-      console.log('DEBUG: Total de streams após batch:', allStreams.length);
-
       if (i + this.processingConfig.maxConcurrentTorrents < torrents.length) {
-        console.log('DEBUG: Aguardando delay entre batches');
         await this.delay(this.processingConfig.delayBetweenTorrents);
       }
     }
 
-    console.log('DEBUG processTorrentsWithRateLimit: Processamento finalizado. Total streams:', allStreams.length);
     return allStreams;
   }
 
   private generateLazyResolveUrl(magnet: string, apiKey: string): string {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
     
-    console.log('DEBUG generateLazyResolveUrl: Iniciando');
-    console.log('DEBUG generateLazyResolveUrl - Variáveis:', {
-        RAILWAY_STATIC_URL: process.env.RAILWAY_STATIC_URL,
-        NODE_ENV: process.env.NODE_ENV,
-        RAILWAY_ENVIRONMENT: process.env.RAILWAY_ENVIRONMENT
-    });
-    
     const domain = process.env.RAILWAY_STATIC_URL || (process.env.NODE_ENV === 'production' ? 'brasil-rd-addon.up.railway.app' : 'localhost:7000');
     const protocol = (process.env.RAILWAY_STATIC_URL || process.env.NODE_ENV === "production") ? "https" : "http";
     
     const url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${encodeURIComponent(apiKey)}`;
     
-    console.log('DEBUG generateLazyResolveUrl - URL gerada:', url);
-    console.log('DEBUG generateLazyResolveUrl - Domain usado:', domain);
-    console.log('DEBUG generateLazyResolveUrl - Protocol usado:', protocol);
-    
     return url;
-}
+  }
 
   private async analyzeTorrentFilesLazy(magnet: string): Promise<Array<{id: number, path: string, bytes: number}>> {
     return [{
@@ -637,25 +762,17 @@ export class StreamHandler {
         return null;
     }
 
+    const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+
     try {
-        const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
-        
-        const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title) || torrent.quality || 'HD';
-        const stream: Stream = {
-            title: `${torrent.title} [${torrent.provider}] [LAZY]`,
-            url: lazyUrl,
-            name: `Brasil RD | ${fileQuality.toUpperCase()}`,
-            description: `Clique para carregar via Real-Debrid | ${torrent.language}`,
-            behaviorHints: {
-                notWebReady: false,
-                bingeGroup: `br-lazy-${request.id}`,
-                filename: this.sanitizeFilename(torrent.title)
-            },
-            magnet: torrent.magnet,
-            isPending: true,
-            status: 'pending'
-        };
-        return stream;
+        return this.createLazyStream(
+            `Brasil RD (${quality})`,
+            `Brasil RD (${quality})`,
+            `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)}`,
+            torrent.magnet,
+            request.apiKey!,
+            quality
+        );
 
     } catch (error) {
         this.logger.error('Lazy movie torrent processing failed', {
@@ -690,7 +807,6 @@ export class StreamHandler {
         for (const file of cleanVideoFiles) {
             try {
                 const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
-                const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title);
                 
                 const stream = this.createSeriesStreamLazy(
                     torrent, 
@@ -698,8 +814,7 @@ export class StreamHandler {
                     lazyUrl, 
                     torrent.title, 
                     requestEpisode.season, 
-                    requestEpisode.episode,
-                    fileQuality
+                    requestEpisode.episode
                 );
                 
                 validStreams.push(stream);
@@ -719,9 +834,8 @@ export class StreamHandler {
 
         try {
             const lazyUrl = this.generateLazyResolveUrl(torrent.magnet, request.apiKey!);
-            const fileQuality = this.qualityDetector.extractQualityFromFilename(torrent.title);
             const stream = this.createSeriesStreamLazy(
-                torrent, request, lazyUrl, torrent.title, 1, 1, fileQuality
+                torrent, request, lazyUrl, torrent.title, 1, 1
             );
             streams.push(stream);
         } catch (error) {
@@ -738,26 +852,23 @@ export class StreamHandler {
     streamUrl: string,
     filePath: string,
     season: number,
-    episode: number,
-    quality: string
+    episode: number
   ): Stream {
-    const detectedQuality = this.qualityDetector.extractQuality(filePath);
     const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+    const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
 
-    return {
-      title: `${torrent.title} [${torrent.provider}] ${episodeTag} [LAZY]`,
-      url: streamUrl,
-      name: `Brasil RD | ${detectedQuality.toUpperCase()} | ${episodeTag}`,
-      description: `Clique para carregar via Real-Debrid | ${torrent.language} | ${episodeTag}`,
-      behaviorHints: {
-        notWebReady: false,
-        bingeGroup: `br-lazy-${request.id}-${season}`,
+    return this.createLazyStream(
+      `Brasil RD (${quality})`,
+      `Brasil RD (${quality}) ${episodeTag}`,
+      `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)} | ${episodeTag}`,
+      torrent.magnet,
+      request.apiKey!,
+      quality,
+      {
+        bingeGroup: `br-${request.id}-${season}`,
         filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
-      },
-      magnet: torrent.magnet,
-      isPending: true,
-      status: 'pending'
-    };
+      }
+    );
   }
 
   private extractSeasonFromTitle(title: string): number | null {
@@ -814,7 +925,13 @@ export class StreamHandler {
       return null;
     }
 
-    const bestTorrent = torrentResults[0];
+    const filteredTorrents = this.applyTitleFilter(torrentResults, title, imdbId);
+    if (filteredTorrents.length === 0) {
+      this.logger.debug('No valid torrents found after title filtering for season', { imdbId, season });
+      return null;
+    }
+
+    const bestTorrent = filteredTorrents[0];
     const magnetHash = this.extractHashFromMagnet(bestTorrent.magnet);
     
     if (!magnetHash) {
@@ -896,8 +1013,8 @@ export class StreamHandler {
       const stream: Stream = {
         title: `${title} ${episodeTag}`,
         url: streamLink,
-        name: `Brasil RD | ${fileQuality.toUpperCase()} | ${episodeTag}`,
-        description: `Conteúdo via temporada completa | ${episodeTag}`,
+        name: `${title} ${episodeTag}`,
+        description: `${fileQuality.toUpperCase()} | Conteúdo via temporada completa | ${episodeTag}`,
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `br-season-${imdbId}-${season}`,
@@ -926,33 +1043,6 @@ export class StreamHandler {
       });
       return null;
     }
-  }
-
-  private async processCuratedMagnets(magnets: CuratedMagnet[], request: StreamRequest): Promise<Stream[]> {
-    const qualityGroups = this.groupMagnetsByQuality(magnets);
-    const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
-    
-    const streams: Stream[] = [];
-    
-    for (const magnet of bestMagnets) {
-      const stream = this.processMagnetLazy(magnet, request);
-      if (stream) {
-        streams.push(stream);
-        this.logger.debug('Created lazy stream for quality', {
-          requestId: request.id,
-          magnetTitle: magnet.title,
-          quality: magnet.quality
-        });
-      }
-    }
-    
-    this.logger.info('Processed multiple quality streams', {
-      requestId: request.id,
-      totalQualities: streams.length,
-      qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
-    });
-
-    return this.sortStreamsByQuality(streams);
   }
 
   private groupMagnetsByQuality(magnets: CuratedMagnet[]): Map<string, CuratedMagnet[]> {
@@ -1023,9 +1113,19 @@ export class StreamHandler {
         ...behaviorHints
       },
       magnet: magnet,
-      isPending: true,
-      status: 'pending'
+      status: 'available'
     };
+  }
+
+  private extractCleanMovieTitle(fullTitle: string): string {
+    const cleanTitle = fullTitle
+      .replace(/(1080p|720p|4K|2160p|HD|WEB-DL|WEBRip|BluRay|H264|H265|x264|x265|AC3|DTS|DUAL|Dublado|Legendado)/gi, '')
+      .replace(/[.\-_]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .replace(/\([^)]*\)/g, '')
+      .trim();
+    
+    return cleanTitle || fullTitle;
   }
 
   private processMagnetLazy(magnet: CuratedMagnet, request: StreamRequest): Stream | null {
@@ -1037,10 +1137,10 @@ export class StreamHandler {
 
     const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
     
-    return this.createLazyStream(
-      magnet.title,
-    `Brasil RD | ${quality.toUpperCase()} | ON-DEMAND BR`,
-`Conteúdo curado | ${magnet.language} | Clique para carregar`,
+     return this.createLazyStream(
+      `Brasil RD (${magnet.quality})`,
+      `Brasil RD (${magnet.quality})`,
+      `${this.extractCleanMovieTitle(magnet.title)}\n${magnet.seeds} seeds | ${magnet.size || 'Tamanho não especificado'} | ${this.formatLanguage(magnet.language)}`,
       magnet.magnet,
       request.apiKey!,
       quality
@@ -1316,7 +1416,35 @@ export class StreamHandler {
     return hash.length >= 32 && hash.length <= 40;
   }
 
+  private formatLanguage(language: string): string {
+    const langMap: Record<string, string> = {
+      'pt-BR': 'PT-BR',
+      'pt-BR,en': 'Dual audio PT-BR / EN',
+      'en': 'EN',
+      'dual': 'Dual audio',
+      'multi': 'Multi language'
+    };
+    return langMap[language] || language;
+  }
+
   private async delay(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+  
+  private async getMovieTitle(request: StreamRequest): Promise<string> {
+    try {
+      if (request.type === 'movie') {
+        const imdbScraper = new ImdbScraperService();
+        const movieTitle = await imdbScraper.getTitleFromImdbId(request.id);
+        return movieTitle || request.id;
+      }
+      return request.id;
+    } catch (error) {
+      this.logger.debug('Error getting movie title, using request ID', {
+        requestId: request.id,
+        error: error instanceof Error ? error.message : 'Unknown error'
+      });
+      return request.id;
+    }
   }
 }

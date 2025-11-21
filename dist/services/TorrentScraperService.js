@@ -188,7 +188,7 @@ class TorrentScraperService {
         logger.debug('Applying TITLE + QUALITY match filtering', {
             originalQuery,
             normalizedQuery,
-            searchTitlePatterns,
+            searchTitlePatterns: searchTitlePatterns.map(p => p.source),
             totalResults: results.length
         });
         for (const result of results) {
@@ -199,7 +199,7 @@ class TorrentScraperService {
                 result.confidence = titleMatch.confidence;
                 result.relevanceScore = this.calculateTitleQualityRelevanceScore(result, titleMatch.confidence);
                 filteredResults.push(result);
-                logger.debug('Torrent passed TITLE + QUALITY filter', {
+                logger.debug('✅ Torrent PASSED TITLE + QUALITY filter', {
                     originalTitle: result.title,
                     normalizedTitle: normalizedResultTitle,
                     quality: result.quality,
@@ -208,12 +208,13 @@ class TorrentScraperService {
                 });
             }
             else {
-                logger.debug('Torrent filtered by TITLE + QUALITY', {
+                logger.debug('❌ Torrent FILTERED by TITLE + QUALITY', {
                     title: result.title,
                     quality: result.quality,
                     titleMatch: titleMatch.matches,
                     qualityMatch: qualityMatch,
-                    matchType: titleMatch.matchType
+                    matchType: titleMatch.matchType,
+                    reason: !titleMatch.matches ? 'title_mismatch' : !qualityMatch ? 'quality_mismatch' : 'invalid_content'
                 });
             }
         }
@@ -257,40 +258,137 @@ class TorrentScraperService {
         return patterns;
     }
     doesTitleMatchSearch(resultTitle, searchPatterns, normalizedQuery) {
+        logger.debug('🔍 STARTING TITLE MATCHING', {
+            query: normalizedQuery,
+            result: resultTitle
+        });
         if (this.isPromotionalContent(resultTitle)) {
+            logger.debug('🚫 PROMOTIONAL CONTENT - REJECTED', {
+                result: resultTitle
+            });
             return { matches: false, confidence: 0, matchType: 'promotional' };
+        }
+        const cleanQuery = normalizedQuery.replace(/\s+/g, ' ').trim();
+        const cleanResult = resultTitle.replace(/\s+/g, ' ').trim();
+        logger.debug('📝 COMPARING CLEAN TITLES', {
+            cleanQuery,
+            cleanResult,
+            exactMatch: cleanQuery === cleanResult
+        });
+        if (cleanQuery === cleanResult) {
+            logger.debug('🎯 EXACT MATCH FOUND - titles are identical', {
+                query: cleanQuery,
+                result: cleanResult
+            });
+            return {
+                matches: true,
+                confidence: 1.0,
+                matchType: 'exact-clean'
+            };
         }
         for (const pattern of searchPatterns) {
             if (pattern.test(resultTitle)) {
                 const matchLength = pattern.source.replace(/\\s\+/g, ' ').length - 4;
                 const confidence = Math.min(matchLength / normalizedQuery.length, 1.0);
-                if (matchLength > normalizedQuery.length * 0.7) {
+                logger.debug('🔤 REGEX PATTERN MATCH', {
+                    pattern: pattern.source,
+                    matchLength,
+                    normalizedQueryLength: normalizedQuery.length,
+                    confidence: confidence.toFixed(2)
+                });
+                if (matchLength > normalizedQuery.length * 0.8) {
+                    logger.debug('✅ STRONG REGEX MATCH - accepting', {
+                        matchType: 'exact',
+                        finalConfidence: Math.max(confidence, 0.95)
+                    });
                     return {
                         matches: true,
-                        confidence: Math.max(confidence, 0.9),
+                        confidence: Math.max(confidence, 0.95),
                         matchType: 'exact'
                     };
                 }
                 else {
+                    logger.debug('✅ PARTIAL REGEX MATCH - accepting', {
+                        matchType: 'partial',
+                        finalConfidence: Math.max(confidence, 0.8)
+                    });
                     return {
                         matches: true,
-                        confidence: Math.max(confidence, 0.7),
+                        confidence: Math.max(confidence, 0.8),
                         matchType: 'partial'
                     };
                 }
             }
         }
-        const queryWords = normalizedQuery.split(' ').filter(word => word.length > 3);
-        const titleWords = resultTitle.split(' ');
-        const matchingWords = queryWords.filter(queryWord => titleWords.some(titleWord => titleWord.includes(queryWord)));
-        if (matchingWords.length >= Math.max(2, queryWords.length * 0.6)) {
-            const confidence = matchingWords.length / queryWords.length;
-            return {
-                matches: true,
-                confidence: Math.max(confidence, 0.6),
-                matchType: 'keyword'
-            };
+        const queryWords = cleanQuery.split(' ').filter(word => word.length > 2);
+        const resultWords = cleanResult.split(' ').filter(word => word.length > 2);
+        logger.debug('📊 WORD-BASED MATCHING ANALYSIS', {
+            queryWords,
+            resultWords,
+            queryWordCount: queryWords.length,
+            resultWordCount: resultWords.length
+        });
+        if (queryWords.length >= 3) {
+            const matchingWords = queryWords.filter(queryWord => resultWords.includes(queryWord));
+            const conflictingWords = resultWords.filter(word => !queryWords.includes(word) && word.length > 3);
+            logger.debug('📈 WORD MATCHING DETAILS', {
+                matchingWords,
+                matchingCount: matchingWords.length,
+                totalQueryWords: queryWords.length,
+                matchPercentage: ((matchingWords.length / queryWords.length) * 100).toFixed(1) + '%',
+                conflictingWords,
+                conflictingCount: conflictingWords.length
+            });
+            if (matchingWords.length === queryWords.length) {
+                logger.debug('🎯 PERFECT WORD MATCH - 100% words matched', {
+                    matchType: 'exact-words'
+                });
+                return {
+                    matches: true,
+                    confidence: 1.0,
+                    matchType: 'exact-words'
+                };
+            }
+            if (matchingWords.length >= queryWords.length * 0.9 && conflictingWords.length === 0) {
+                const confidence = matchingWords.length / queryWords.length;
+                logger.debug('✅ STRICT KEYWORD MATCH - 90%+ words matched, no conflicts', {
+                    matchType: 'strict-keyword',
+                    finalConfidence: Math.max(confidence, 0.9)
+                });
+                return {
+                    matches: true,
+                    confidence: Math.max(confidence, 0.9),
+                    matchType: 'strict-keyword'
+                };
+            }
+            logger.debug('❌ WORD MATCHING FAILED - insufficient match or conflicts', {
+                matchPercentage: ((matchingWords.length / queryWords.length) * 100).toFixed(1) + '%',
+                requiredPercentage: '90%',
+                hasConflicts: conflictingWords.length > 0
+            });
         }
+        if (queryWords.length === 2) {
+            const matchingWords = queryWords.filter(queryWord => resultWords.includes(queryWord));
+            logger.debug('📏 SHORT TITLE MATCHING', {
+                matchingWords,
+                required: '2/2 words'
+            });
+            if (matchingWords.length === 2) {
+                logger.debug('✅ PERFECT SHORT TITLE MATCH', {
+                    matchType: 'exact-short'
+                });
+                return {
+                    matches: true,
+                    confidence: 1.0,
+                    matchType: 'exact-short'
+                };
+            }
+        }
+        logger.debug('🚫 NO ACCEPTABLE MATCH FOUND - rejecting torrent', {
+            query: normalizedQuery,
+            result: resultTitle,
+            reason: 'No matching criteria met'
+        });
         return { matches: false, confidence: 0, matchType: 'no-match' };
     }
     calculateTitleQualityRelevanceScore(result, confidence) {
@@ -670,8 +768,40 @@ class TorrentScraperService {
         };
     }
     extractMagnetFromContent(content) {
-        const magnetMatch = content.match(/magnet:\?[^"'\s<>]+/);
-        return magnetMatch ? magnetMatch[0] : null;
+        const magnetMatches = content.match(/magnet:\?[^"'\s<>]+/g);
+        if (magnetMatches && magnetMatches.length > 0) {
+            let bestMagnet = magnetMatches[0];
+            for (const magnet of magnetMatches) {
+                if (magnet.length > bestMagnet.length) {
+                    bestMagnet = magnet;
+                }
+            }
+            if (bestMagnet.includes('xt=urn:btih:') && bestMagnet.includes('&dn=')) {
+                logger.debug('Magnet link completo encontrado', {
+                    magnetLength: bestMagnet.length,
+                    hasHash: bestMagnet.includes('xt=urn:btih:'),
+                    hasName: bestMagnet.includes('&dn='),
+                    hasTrackers: bestMagnet.includes('&tr=')
+                });
+                return bestMagnet;
+            }
+        }
+        const fallbackPatterns = [
+            /magnet:\?xt=urn:btih:[a-zA-Z0-9]+&dn=[^"'\s<>]+/,
+            /magnet:\?xt=urn:btih:[a-zA-Z0-9]+[^"'\s<>]*/,
+            /magnet:\?[^"'\s<>]*xt=urn:btih:[a-zA-Z0-9]+[^"'\s<>]*/
+        ];
+        for (const pattern of fallbackPatterns) {
+            const match = content.match(pattern);
+            if (match) {
+                logger.debug('Magnet link encontrado via fallback pattern', {
+                    pattern: pattern.source,
+                    magnetLength: match[0].length
+                });
+                return match[0];
+            }
+        }
+        return null;
     }
     extractSizeFromContent(content) {
         const sizeMatch = content.match(/(\d+\.?\d*)\s*(GB|MB|GiB|MiB)/i);
@@ -687,10 +817,17 @@ class TorrentScraperService {
         const magnetResults = await Promise.allSettled(magnetPromises);
         magnetResults.forEach((result, index) => {
             if (result.status === 'fulfilled' && result.value.magnet) {
-                enrichedResults.push({
+                const enrichedResult = {
                     ...results[index],
                     magnet: result.value.magnet
+                };
+                logger.debug('Resultado enriquecido com magnet link completo', {
+                    title: enrichedResult.title,
+                    magnetLength: enrichedResult.magnet.length,
+                    hasTrackers: enrichedResult.magnet.includes('&tr='),
+                    provider: provider.name
                 });
+                enrichedResults.push(enrichedResult);
             }
         });
         return enrichedResults;
@@ -779,6 +916,11 @@ class TorrentScraperService {
         });
         const availableQualities = bestResults.map(r => r.quality);
         const uniqueQualities = [...new Set(availableQualities)];
+        const magnetStats = {
+            totalMagnets: bestResults.length,
+            completeMagnets: bestResults.filter(r => r.magnet && r.magnet.includes('&tr=')).length,
+            averageMagnetLength: bestResults.reduce((sum, r) => sum + (r.magnet?.length || 0), 0) / bestResults.length
+        };
         logger.info('TITLE + QUALITY search completed', {
             query,
             type,
@@ -788,6 +930,7 @@ class TorrentScraperService {
             duration: `${duration}ms`,
             qualityDistribution,
             availableStreamQualities: uniqueQualities,
+            magnetStats,
             matchDetection: 'Title + Quality exact match in magnet names',
             streamsPerQuality: availableQualities.reduce((acc, quality) => {
                 acc[quality] = (acc[quality] || 0) + 1;
