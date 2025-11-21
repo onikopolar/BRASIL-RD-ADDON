@@ -544,9 +544,9 @@ export class StreamHandler {
     return allStreams;
   }
 
-    private generateLazyResolveUrl(magnet: string, apiKey: string): string {
+      private generateLazyResolveUrl(magnet: string, apiKey: string): string {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
-    const domain = process.env.RAILWAY_STATIC_URL || 'brasil-rd-addon.up.railway.app';
+    const domain = process.env.RAILWAY_STATIC_URL || (process.env.NODE_ENV === 'production' ? 'brasil-rd-addon.up.railway.app' : 'localhost:7000');
     const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
     return `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
   }
