@@ -1009,7 +1009,7 @@ export class StreamHandler {
     behaviorHints?: any
   ): Stream {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
-    const resolveUrl = `http://localhost:7000/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+    const resolveUrl = this.generateLazyResolveUrl(magnet, apiKey);
     
     return {
       title: title,
