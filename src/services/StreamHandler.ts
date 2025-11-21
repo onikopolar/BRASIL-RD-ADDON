@@ -577,9 +577,9 @@ export class StreamHandler {
     });
     
     const domain = process.env.RAILWAY_STATIC_URL || (process.env.NODE_ENV === 'production' ? 'brasil-rd-addon.up.railway.app' : 'localhost:7000');
-    const protocol = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+    const protocol = (process.env.RAILWAY_STATIC_URL || process.env.NODE_ENV === "production") ? "https" : "http";
     
-    const url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${apiKey}`;
+    const url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${encodeURIComponent(apiKey)}`;
     
     console.log('DEBUG generateLazyResolveUrl - URL gerada:', url);
     console.log('DEBUG generateLazyResolveUrl - Domain usado:', domain);
