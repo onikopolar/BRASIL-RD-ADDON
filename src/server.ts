@@ -1,5 +1,5 @@
-// src/server.ts
-import { addonBuilder, getRouter } from 'stremio-addon-sdk';
+import pkg from 'stremio-addon-sdk';
+const { addonBuilder, getRouter } = pkg;
 import express from 'express';
 import cors from 'cors';
 import { StreamHandler } from './services/StreamHandler.js';
@@ -258,11 +258,11 @@ async function initialize() {
             console.log(`Configure: ${protocol}://${host}/configure`);
             console.log(`Health: ${protocol}://${host}/health`);
             console.log('');
-            console.log('🎯 FEATURES:');
-            console.log('✅ Database-backed streams (Torrentio style)');
-            console.log('✅ Real-Debrid integration');
-            console.log('✅ Quality filtering & sorting');
-            console.log('✅ Mobile compatible');
+            console.log('FEATURES:');
+            console.log('Database-backed streams (Torrentio style)');
+            console.log('Real-Debrid integration');
+            console.log('Quality filtering & sorting');
+            console.log('Mobile compatible');
             console.log('');
             console.log('⚡ PRONTO PARA USAR!');
         });
