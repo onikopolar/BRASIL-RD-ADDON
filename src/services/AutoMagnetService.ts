@@ -1,3 +1,4 @@
+import { getTorrent, createTorrent, createFile } from '../database/repository';
 import { RealDebridService } from './RealDebridService';
 import { ImdbScraperService } from './ImdbScraperService';
 import { Logger } from '../utils/logger';
@@ -121,7 +122,7 @@ export class AutoMagnetService {
       };
 
       // Salva no catálogo
-      await this.addToJSON(magnetData);
+      await this.addToDatabase(magnetData);
 
       logger.info('Magnet adicionado automaticamente ao catálogo', {
         title: magnetData.title,
@@ -255,48 +256,69 @@ export class AutoMagnetService {
   /**
    * Salva magnet no JSON (igual ao add-magnet)
    */
-  private async addToJSON(magnetData: MagnetData): Promise<void> {
-    const jsonPath = path.join(process.cwd(), 'data', 'magnets.json');
-
-    try {
-      let data: { magnets: MagnetData[] } = { magnets: [] };
-
-      if (await fs.pathExists(jsonPath)) {
-        data = await fs.readJson(jsonPath);
-      }
-
-            // Verifica se já existe para evitar duplicatas
-      const alreadyExists = data.magnets.some(
-        (m: MagnetData) => m.magnet === magnetData.magnet || 
-        (m.imdbId === magnetData.imdbId && m.quality === magnetData.quality)
-      );
-
-      if (!alreadyExists) {
-        data.magnets.push(magnetData);
-        await fs.writeJson(jsonPath, data, { spaces: 2 });
-
-        logger.info('Magnet adicionado ao JSON automaticamente', {
-          title: magnetData.title,
-          imdbId: magnetData.imdbId,
-          quality: magnetData.quality,
-          language: magnetData.language,
-          category: magnetData.category
-        });
-      } else {
-        logger.debug('Magnet já existe no catálogo, ignorando', {
-          title: magnetData.title,
-          imdbId: magnetData.imdbId
-        });
-      }
-
-    } catch (error) {
-      logger.error('Erro ao salvar magnet no JSON', {
-        error: error instanceof Error ? error.message : 'Erro desconhecido',
-        title: magnetData.title
-      });
-      throw error;
+  private async addToDatabase(magnetData: MagnetData): Promise<void> {
+  try {
+    // Extrai infoHash do magnet link
+    const magnetHash = this.extractHashFromMagnet(magnetData.magnet);
+    if (!magnetHash) {
+      throw new Error('Não foi possível extrair infoHash do magnet');
     }
+
+    // Verifica se já existe no banco para evitar duplicatas
+    const existingTorrent = await getTorrent(magnetHash);
+    if (existingTorrent) {
+      logger.debug('Magnet já existe no banco de dados, ignorando', {
+        title: magnetData.title,
+        imdbId: magnetData.imdbId
+      });
+      return;
+    }
+
+    // Cria o torrent no banco
+    await createTorrent({
+      infoHash: magnetHash,
+      provider: 'brasil-rd',
+      title: magnetData.title,
+      size: 0, // Pode ser calculado se disponível
+      type: magnetData.category === 'serie' ? 'series' : 'movie',
+      uploadDate: new Date(),
+      seeders: magnetData.seeds || 0,
+      languages: magnetData.language,
+      resolution: magnetData.quality
+    });
+
+    // Cria o arquivo associado
+    await createFile({
+      infoHash: magnetHash,
+      title: magnetData.title,
+      imdbId: magnetData.imdbId,
+      size: 0 // Pode ser calculado se disponível
+      // imdbSeason e imdbEpisode podem ser adicionados para séries
+    });
+
+    logger.info('Magnet adicionado ao banco de dados automaticamente', {
+      title: magnetData.title,
+      imdbId: magnetData.imdbId,
+      quality: magnetData.quality,
+      language: magnetData.language,
+      category: magnetData.category,
+      infoHash: magnetHash
+    });
+
+  } catch (error) {
+    logger.error('Erro ao salvar magnet no banco de dados', {
+      error: error instanceof Error ? error.message : 'Erro desconhecido',
+      title: magnetData.title
+    });
+    throw error;
   }
+}
+
+// Função auxiliar para extrair hash do magnet
+private extractHashFromMagnet(magnet: string): string | null {
+  const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
+  return match ? match[1].toLowerCase() : null;
+}
 
   /**
    * Processa torrent no Real-Debrid (SOMENTE quando usuário clica para assistir)

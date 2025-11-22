@@ -1,44 +1,10 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AutoMagnetService = void 0;
+const repository_1 = require("../database/repository");
 const RealDebridService_1 = require("./RealDebridService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
-const fs = __importStar(require("fs-extra"));
-const path = __importStar(require("path"));
 const logger = new logger_1.Logger('AutoMagnetService');
 const rdService = new RealDebridService_1.RealDebridService();
 const imdbScraper = new ImdbScraperService_1.ImdbScraperService();
@@ -95,7 +61,7 @@ class AutoMagnetService {
                 language: language,
                 addedAt: new Date().toISOString()
             };
-            await this.addToJSON(magnetData);
+            await this.addToDatabase(magnetData);
             logger.info('Magnet adicionado automaticamente ao catálogo', {
                 title: magnetData.title,
                 imdbId: magnetData.imdbId,
@@ -199,40 +165,57 @@ class AutoMagnetService {
             return 'en';
         return 'pt-BR';
     }
-    async addToJSON(magnetData) {
-        const jsonPath = path.join(process.cwd(), 'data', 'magnets.json');
+    async addToDatabase(magnetData) {
         try {
-            let data = { magnets: [] };
-            if (await fs.pathExists(jsonPath)) {
-                data = await fs.readJson(jsonPath);
+            const magnetHash = this.extractHashFromMagnet(magnetData.magnet);
+            if (!magnetHash) {
+                throw new Error('Não foi possível extrair infoHash do magnet');
             }
-            const alreadyExists = data.magnets.some((m) => m.magnet === magnetData.magnet ||
-                (m.imdbId === magnetData.imdbId && m.quality === magnetData.quality));
-            if (!alreadyExists) {
-                data.magnets.push(magnetData);
-                await fs.writeJson(jsonPath, data, { spaces: 2 });
-                logger.info('Magnet adicionado ao JSON automaticamente', {
-                    title: magnetData.title,
-                    imdbId: magnetData.imdbId,
-                    quality: magnetData.quality,
-                    language: magnetData.language,
-                    category: magnetData.category
-                });
-            }
-            else {
-                logger.debug('Magnet já existe no catálogo, ignorando', {
+            const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
+            if (existingTorrent) {
+                logger.debug('Magnet já existe no banco de dados, ignorando', {
                     title: magnetData.title,
                     imdbId: magnetData.imdbId
                 });
+                return;
             }
+            await (0, repository_1.createTorrent)({
+                infoHash: magnetHash,
+                provider: 'brasil-rd',
+                title: magnetData.title,
+                size: 0,
+                type: magnetData.category === 'serie' ? 'series' : 'movie',
+                uploadDate: new Date(),
+                seeders: magnetData.seeds || 0,
+                languages: magnetData.language,
+                resolution: magnetData.quality
+            });
+            await (0, repository_1.createFile)({
+                infoHash: magnetHash,
+                title: magnetData.title,
+                imdbId: magnetData.imdbId,
+                size: 0
+            });
+            logger.info('Magnet adicionado ao banco de dados automaticamente', {
+                title: magnetData.title,
+                imdbId: magnetData.imdbId,
+                quality: magnetData.quality,
+                language: magnetData.language,
+                category: magnetData.category,
+                infoHash: magnetHash
+            });
         }
         catch (error) {
-            logger.error('Erro ao salvar magnet no JSON', {
+            logger.error('Erro ao salvar magnet no banco de dados', {
                 error: error instanceof Error ? error.message : 'Erro desconhecido',
                 title: magnetData.title
             });
             throw error;
         }
+    }
+    extractHashFromMagnet(magnet) {
+        const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
+        return match ? match[1].toLowerCase() : null;
     }
     async processRealDebridOnClick(magnetData, apiKey) {
         try {
