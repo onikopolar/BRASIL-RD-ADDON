@@ -2,14 +2,14 @@
   "name": "brasil-rd-addon",
   "version": "1.0.0",
   "description": "Addon brasileiro para Stremio com suporte completo ao Real-Debrid",
-  "type": "commonjs",
+  "type": "module",
   "main": "dist/server.js",
   "scripts": {
     "build": "node build.js",
     "start": "npm run start:stremio",
     "start:stremio": "node dist/server.js",
     "dev": "npm run dev:stremio",
-    "dev:stremio": "ts-node src/server.ts",
+    "dev:stremio": "node --loader ts-node/esm src/server.ts",
     "test": "jest",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build"

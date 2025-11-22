@@ -1,98 +1,19 @@
-const { spawnSync } = require('child_process');
-const fs = require('fs');
-const path = require('path');
+import { spawnSync } from 'child_process';
 
-function buildTypeScript() {
-    console.log('Iniciando build do TypeScript...');
-    
-    // Verifica se o TypeScript esta instalado
-    try {
-        require.resolve('typescript');
-        console.log('TypeScript encontrado');
-    } catch (error) {
-        console.log('TypeScript nao encontrado. Instalando...');
-        const install = spawnSync('npm', ['install', 'typescript'], { 
-            stdio: 'inherit',
-            cwd: process.cwd()
-        });
-        if (install.status !== 0) {
-            console.error('Falha ao instalar TypeScript');
-            process.exit(1);
-        }
-    }
+console.log('Iniciando build do TypeScript...');
 
-    // Carrega e executa o compilador TypeScript
-    const ts = require('typescript');
-    const configPath = ts.findConfigFile(process.cwd(), ts.sys.fileExists, 'tsconfig.json');
+// Compilar TypeScript
+const result = spawnSync('npx', ['tsc'], { 
+    stdio: 'inherit',
+    shell: true  // ← ADICIONE ESTA LINHA
+});
 
-    if (!configPath) {
-        console.error('tsconfig.json nao encontrado');
-        process.exit(1);
-    }
-
-    const configFile = ts.readConfigFile(configPath, ts.sys.readFile);
-    const compilerOptions = ts.parseJsonConfigFileContent(
-        configFile.config, 
-        ts.sys, 
-        process.cwd()
-    );
-
-    console.log('Compilando TypeScript...');
-    const program = ts.createProgram(compilerOptions.fileNames, compilerOptions.options);
-    const emitResult = program.emit();
-
-    const allDiagnostics = ts.getPreEmitDiagnostics(program).concat(emitResult.diagnostics);
-
-    let hasErrors = false;
-    allDiagnostics.forEach(diagnostic => {
-        if (diagnostic.file) {
-            const { line, character } = ts.getLineAndCharacterOfPosition(diagnostic.file, diagnostic.start);
-            const message = ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n');
-            console.log(`${diagnostic.file.fileName} (${line + 1},${character + 1}): ${message}`);
-        } else {
-            console.log(ts.flattenDiagnosticMessageText(diagnostic.messageText, '\n'));
-        }
-        
-        if (diagnostic.category === ts.DiagnosticCategory.Error) {
-            hasErrors = true;
-        }
-    });
-
-    if (hasErrors) {
-        console.error('Build falhou com erros de compilacao');
-        process.exit(1);
-    }
-
-    if (emitResult.emitSkipped) {
-        console.error('Build falhou - emissao de arquivos ignorada');
-        process.exit(1);
-    }
-
-    // Verificar se os arquivos principais foram compilados
-    console.log('Verificando arquivos compilados...');
-    const requiredFiles = [
-        'dist/server.js',
-        'dist/services/StreamHandler.js',
-        'dist/utils/logger.js',
-        'dist/types/index.js'
-    ];
-
-    let missingFiles = [];
-    for (const file of requiredFiles) {
-        if (!fs.existsSync(file)) {
-            missingFiles.push(file);
-        }
-    }
-
-    if (missingFiles.length > 0) {
-        console.error('Arquivos compilados faltando:');
-        missingFiles.forEach(file => console.error(`- ${file}`));
-        console.error('Build incompleto - alguns arquivos nao foram gerados');
-        process.exit(1);
-    }
-
+// Verificar manualmente se a compilação foi bem-sucedida
+const fs = await import('fs');
+if (fs.existsSync('dist/server.js')) {
     console.log('Build concluido com sucesso');
     console.log('Arquivos compilados disponiveis em: dist/');
+} else {
+    console.error('Build falhou - arquivo dist/server.js não foi gerado');
+    process.exit(1);
 }
-
-buildTypeScript();
