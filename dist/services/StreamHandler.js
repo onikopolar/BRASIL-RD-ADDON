@@ -22,6 +22,7 @@ export class StreamHandler {
                     requestId: request.id
                 });
                 await this.triggerScrapingAndSave(request);
+                await this.delay(1500);
                 streams = await this.getStreamsFromDatabase(request);
             }
             const enhancedStreams = await this.enhanceWithRealDebrid(streams, request.apiKey);
@@ -108,6 +109,9 @@ export class StreamHandler {
                 error: error instanceof Error ? error.message : 'Unknown error'
             });
         }
+    }
+    delay(ms) {
+        return new Promise(resolve => setTimeout(resolve, ms));
     }
     extractImdbId(id) {
         const match = id.match(/^(tt\d+)/);

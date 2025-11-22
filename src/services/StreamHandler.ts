@@ -37,6 +37,9 @@ export class StreamHandler {
         
         await this.triggerScrapingAndSave(request);
         
+        // ADICIONAR DELAY PARA GARANTIR SALVAMENTO
+        await this.delay(1500);
+        
         // Tenta buscar novamente após scraping
         streams = await this.getStreamsFromDatabase(request);
       }
@@ -107,15 +110,15 @@ export class StreamHandler {
       for (const torrent of torrents.slice(0, 10)) {
         try {
           const magnetData = {
-    imdbId: imdbId,
-    title: torrent.title,
-    magnet: torrent.magnet,
-    quality: torrent.quality,
-    seeds: torrent.seeders,
-    category: request.type,
-    language: torrent.language,
-    addedAt: new Date().toISOString() // ← CORRIGIDO: usa toISOString()
-};
+            imdbId: imdbId,
+            title: torrent.title,
+            magnet: torrent.magnet,
+            quality: torrent.quality,
+            seeds: torrent.seeders,
+            category: request.type,
+            language: torrent.language,
+            addedAt: new Date().toISOString()
+          };
 
           const result = await this.autoMagnetService.processRealDebridOnClick(magnetData, request.apiKey);
           if (result.success) {
@@ -143,8 +146,12 @@ export class StreamHandler {
     }
   }
 
+  // ADICIONAR MÉTODO DELAY
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
   private extractImdbId(id: string): string | null {
-    // Extrai tt1234567 de tt1234567:1:2
     const match = id.match(/^(tt\d+)/);
     return match ? match[1] : null;
   }
@@ -198,7 +205,6 @@ export class StreamHandler {
     const enhancedStreams: Stream[] = [];
     const infoHashes = streams.map(s => s.infoHash).filter(Boolean) as string[];
 
-    // Busca torrents existentes no Real-Debrid em lote
     const rdTorrents = new Map<string, boolean>();
     
     for (const infoHash of infoHashes) {
@@ -210,7 +216,6 @@ export class StreamHandler {
       }
     }
 
-    // Aplica marcação [RD] nos streams disponíveis
     for (const stream of streams) {
       if (stream.infoHash && rdTorrents.get(stream.infoHash)) {
         enhancedStreams.push({
