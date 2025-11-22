@@ -1,0 +1,4 @@
+[[volumes]]
+name = "data-volume"
+mount_path = "/app/data"
+local_path = "./data"

@@ -10,3 +10,7 @@ restartPolicyMaxRetries = 10
 [environments]
   [environments.production]
   NODE_ENV = "production"
+[[volumes]]
+name = "data-volume"
+mount_path = "/app/data"
+local_path = "./data"

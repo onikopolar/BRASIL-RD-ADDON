@@ -8,6 +8,7 @@ const CacheService_1 = require("./CacheService");
 const TorrentScraperService_1 = require("./TorrentScraperService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
+const stream_fix_1 = require("../types/stream-fix");
 class QualityDetector {
     constructor() {
         this.qualityPatterns = [
@@ -160,7 +161,8 @@ class StreamHandler {
                     source: 'catalog',
                     originalCount: catalogStreams.length
                 });
-                return { streams: filteredCatalogStreams };
+                const mobileCatalogStreams = (0, stream_fix_1.convertStreamsToMobile)(filteredCatalogStreams);
+                return { streams: mobileCatalogStreams };
             }
             this.logger.debug('No streams in catalog, performing scraping', { requestId });
             let streams = await this.processStreamRequest(request);
@@ -174,7 +176,8 @@ class StreamHandler {
                     status: s.status
                 }))
             });
-            return { streams };
+            const mobileStreams = (0, stream_fix_1.convertStreamsToMobile)(streams);
+            return { streams: mobileStreams };
         }
         catch (error) {
             this.logger.error('Stream request processing failed', {
@@ -813,11 +816,13 @@ class StreamHandler {
     createLazyStream(title, name, description, magnet, apiKey, quality, behaviorHints) {
         const encodedMagnet = Buffer.from(magnet).toString('base64');
         const resolveUrl = this.generateLazyResolveUrl(magnet, apiKey);
+        const magnetHash = this.extractHashFromMagnet(magnet);
+        const sources = magnetHash ? [`dht:${magnetHash}`] : [];
         return {
             title: title,
-            url: resolveUrl,
             name: name,
             description: description,
+            sources: sources,
             behaviorHints: {
                 notWebReady: false,
                 bingeGroup: `br-lazy-${Date.now()}`,
@@ -825,7 +830,8 @@ class StreamHandler {
                 ...behaviorHints
             },
             magnet: magnet,
-            status: 'available'
+            status: 'available',
+            url: resolveUrl
         };
     }
     extractCleanMovieTitle(fullTitle) {

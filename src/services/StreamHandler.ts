@@ -6,6 +6,7 @@ import { TorrentScraperService } from './TorrentScraperService';
 import { ImdbScraperService } from './ImdbScraperService';
 import { Logger } from '../utils/logger';
 import { Stream, StreamRequest, CuratedMagnet, RDFile, RDTorrentInfo } from '../types/index';
+import { convertStreamsToMobile } from '../types/stream-fix'; // <-- ADICIONE ESTA LINHA
 
 interface EpisodeInfo {
   season: number;
@@ -246,7 +247,8 @@ export class StreamHandler {
           source: 'catalog',
           originalCount: catalogStreams.length
         });
-        return { streams: filteredCatalogStreams };
+        const mobileCatalogStreams = convertStreamsToMobile(filteredCatalogStreams);
+        return { streams: mobileCatalogStreams as any };
       }
 
       // SEGUNDO: Se não tem no catálogo, fazer scraping UMA vez
@@ -265,7 +267,8 @@ export class StreamHandler {
         }))
       });
 
-      return { streams };
+      const mobileStreams = convertStreamsToMobile(streams);
+      return { streams: mobileStreams as any };
 
     } catch (error) {
       this.logger.error('Stream request processing failed', {
@@ -1124,7 +1127,7 @@ export class StreamHandler {
     return bestMagnets;
   }
 
-  private createLazyStream(
+    private createLazyStream(
     title: string,
     name: string,
     description: string,
@@ -1136,11 +1139,15 @@ export class StreamHandler {
     const encodedMagnet = Buffer.from(magnet).toString('base64');
     const resolveUrl = this.generateLazyResolveUrl(magnet, apiKey);
     
+    // Extrai infoHash do magnet para formato sources
+    const magnetHash = this.extractHashFromMagnet(magnet);
+    const sources = magnetHash ? [`dht:${magnetHash}`] : [];
+
     return {
       title: title,
-      url: resolveUrl,
       name: name,
       description: description,
+      sources: sources,  // ← CORRIGIDO: usa sources em vez de url
       behaviorHints: {
         notWebReady: false,
         bingeGroup: `br-lazy-${Date.now()}`,
@@ -1148,8 +1155,9 @@ export class StreamHandler {
         ...behaviorHints
       },
       magnet: magnet,
-      status: 'available'
-    };
+      status: 'available',
+      url: resolveUrl  // ← MANTÉM para compatibilidade com código existente
+    } as any;  // ← Type assertion para evitar erros de tipo
   }
 
   private extractCleanMovieTitle(fullTitle: string): string {
