@@ -7,6 +7,7 @@ import { ImdbScraperService } from './ImdbScraperService';
 import { Logger } from '../utils/logger';
 import { Stream, StreamRequest, CuratedMagnet, RDFile, RDTorrentInfo } from '../types/index';
 import { convertStreamsToMobile } from '../types/stream-fix'; // <-- ADICIONE ESTA LINHA
+import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../database/repository';
 
 interface EpisodeInfo {
   season: number;
@@ -278,32 +279,118 @@ export class StreamHandler {
   }
 
   private async getStreamsFromCatalog(request: StreamRequest): Promise<Stream[]> {
-    const curatedMagnets = this.magnetService.searchMagnets(request);
-    
-    if (curatedMagnets.length === 0) {
-      return [];
-    }
+  // PRIMEIRO: Tenta buscar do banco de dados
+  const dbStreams = await this.getStreamsFromDatabase(request);
+  if (dbStreams.length > 0) {
+    this.logger.debug('Streams encontrados no banco de dados', {
+      requestId: request.id,
+      streamCount: dbStreams.length,
+      source: 'database'
+    });
+    return dbStreams;
+  }
 
-    const qualityGroups = this.groupMagnetsByQuality(curatedMagnets);
-    const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
+  // SEGUNDO: Se não encontrar no banco, busca do JSON
+  const curatedMagnets = this.magnetService.searchMagnets(request);
+  
+  if (curatedMagnets.length === 0) {
+    return [];
+  }
+
+  const qualityGroups = this.groupMagnetsByQuality(curatedMagnets);
+  const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
+  
+  const streams: Stream[] = [];
+  
+  for (const magnet of bestMagnets) {
+    const stream = this.processMagnetLazy(magnet, request);
+    if (stream) {
+      streams.push(stream);
+    }
+  }
+  
+  this.logger.debug('Created streams from catalog JSON', {
+    requestId: request.id,
+    totalStreams: streams.length,
+    qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name)),
+    source: 'json'
+  });
+
+  return this.sortStreamsByQuality(streams);
+}
+
+private async getStreamsFromDatabase(request: StreamRequest): Promise<Stream[]> {
+  try {
+    let fileEntries: any[] = [];
     
-    const streams: Stream[] = [];
-    
-    for (const magnet of bestMagnets) {
-      const stream = this.processMagnetLazy(magnet, request);
-      if (stream) {
-        streams.push(stream);
+    if (request.type === 'movie') {
+      // Busca filmes do banco
+      fileEntries = await getImdbIdMovieEntries(request.id);
+    } else if (request.type === 'series') {
+      // Extrai season e episode do ID (formato: tt1234567:1:2)
+      const parts = request.id.split(':');
+      if (parts.length >= 3) {
+        const imdbId = parts[0];
+        const season = parseInt(parts[1], 10);
+        const episode = parseInt(parts[2], 10);
+        fileEntries = await getImdbIdSeriesEntries(imdbId, season, episode);
       }
     }
-    
-    this.logger.debug('Created streams from catalog', {
-      requestId: request.id,
-      totalStreams: streams.length,
-      qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
-    });
 
-    return this.sortStreamsByQuality(streams);
+    // Converte File entries para Stream format
+    const streams: Stream[] = [];
+    for (const fileEntry of fileEntries) {
+      const torrent = fileEntry.torrent;
+      if (torrent) {
+        const stream = await this.fileEntryToStream(fileEntry, torrent, request);
+        if (stream) {
+          streams.push(stream);
+        }
+      }
+    }
+
+    return streams;
+
+  } catch (error) {
+    this.logger.debug('Nenhum stream encontrado no banco ou erro na consulta', {
+      requestId: request.id,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    return [];
   }
+}
+
+private async fileEntryToStream(fileEntry: any, torrent: any, request: StreamRequest): Promise<Stream | null> {
+  try {
+    const magnetHash = torrent.infoHash;
+    const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+    
+    // Cria magnet link a partir do infoHash
+    const magnetLink = `magnet:?xt=urn:btih:${magnetHash}`;
+    
+    const stream: Stream = {
+      title: torrent.title,
+      name: `Brasil RD (${quality})`,
+      description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${this.formatLanguage('pt-BR')}`,
+      sources: [`dht:${magnetHash}`],
+      behaviorHints: {
+        notWebReady: false,
+        bingeGroup: `br-db-${request.id}`
+      },
+      status: 'available',
+      infoHash: magnetHash
+    };
+
+    return stream;
+
+  } catch (error) {
+    this.logger.error('Erro ao converter file entry para stream', {
+      requestId: request.id,
+      error: error instanceof Error ? error.message : 'Unknown error'
+    });
+    return null;
+  }
+}
 
  private applyMobileCompatibilityFilter(streams: Stream[]): Stream[] {
     const filteredStreams = streams.filter(stream => {

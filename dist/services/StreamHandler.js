@@ -8,6 +8,7 @@ const CacheService_1 = require("./CacheService");
 const TorrentScraperService_1 = require("./TorrentScraperService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
+const repository_1 = require("../database/repository");
 class QualityDetector {
     constructor() {
         this.qualityPatterns = [
@@ -185,6 +186,15 @@ class StreamHandler {
         }
     }
     async getStreamsFromCatalog(request) {
+        const dbStreams = await this.getStreamsFromDatabase(request);
+        if (dbStreams.length > 0) {
+            this.logger.debug('Streams encontrados no banco de dados', {
+                requestId: request.id,
+                streamCount: dbStreams.length,
+                source: 'database'
+            });
+            return dbStreams;
+        }
         const curatedMagnets = this.magnetService.searchMagnets(request);
         if (curatedMagnets.length === 0) {
             return [];
@@ -198,12 +208,75 @@ class StreamHandler {
                 streams.push(stream);
             }
         }
-        this.logger.debug('Created streams from catalog', {
+        this.logger.debug('Created streams from catalog JSON', {
             requestId: request.id,
             totalStreams: streams.length,
-            qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name))
+            qualities: streams.map(s => this.qualityDetector.extractQualityFromStreamName(s.name)),
+            source: 'json'
         });
         return this.sortStreamsByQuality(streams);
+    }
+    async getStreamsFromDatabase(request) {
+        try {
+            let fileEntries = [];
+            if (request.type === 'movie') {
+                fileEntries = await (0, repository_1.getImdbIdMovieEntries)(request.id);
+            }
+            else if (request.type === 'series') {
+                const parts = request.id.split(':');
+                if (parts.length >= 3) {
+                    const imdbId = parts[0];
+                    const season = parseInt(parts[1], 10);
+                    const episode = parseInt(parts[2], 10);
+                    fileEntries = await (0, repository_1.getImdbIdSeriesEntries)(imdbId, season, episode);
+                }
+            }
+            const streams = [];
+            for (const fileEntry of fileEntries) {
+                const torrent = fileEntry.torrent;
+                if (torrent) {
+                    const stream = await this.fileEntryToStream(fileEntry, torrent, request);
+                    if (stream) {
+                        streams.push(stream);
+                    }
+                }
+            }
+            return streams;
+        }
+        catch (error) {
+            this.logger.debug('Nenhum stream encontrado no banco ou erro na consulta', {
+                requestId: request.id,
+                error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            return [];
+        }
+    }
+    async fileEntryToStream(fileEntry, torrent, request) {
+        try {
+            const magnetHash = torrent.infoHash;
+            const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+            const magnetLink = `magnet:?xt=urn:btih:${magnetHash}`;
+            const stream = {
+                title: torrent.title,
+                name: `Brasil RD (${quality})`,
+                description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${this.formatLanguage('pt-BR')}`,
+                sources: [`dht:${magnetHash}`],
+                behaviorHints: {
+                    notWebReady: false,
+                    bingeGroup: `br-db-${request.id}`
+                },
+                status: 'available',
+                infoHash: magnetHash
+            };
+            return stream;
+        }
+        catch (error) {
+            this.logger.error('Erro ao converter file entry para stream', {
+                requestId: request.id,
+                error: error instanceof Error ? error.message : 'Unknown error'
+            });
+            return null;
+        }
     }
     applyMobileCompatibilityFilter(streams) {
         const filteredStreams = streams.filter(stream => {
