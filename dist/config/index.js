@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.config = void 0;
-exports.config = {
+export const config = {
     realDebrid: {
         apiKey: process.env.REAL_DEBRID_API_KEY || '',
         baseUrl: 'https://api.real-debrid.com/rest/1.0',

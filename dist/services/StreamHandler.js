@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.StreamHandler = void 0;
-const RealDebridService_1 = require("./RealDebridService");
-const CuratedMagnetService_1 = require("./CuratedMagnetService");
-const AutoMagnetService_1 = require("./AutoMagnetService");
-const CacheService_1 = require("./CacheService");
-const TorrentScraperService_1 = require("./TorrentScraperService");
-const ImdbScraperService_1 = require("./ImdbScraperService");
-const logger_1 = require("../utils/logger");
-const repository_1 = require("../database/repository");
+import { RealDebridService } from './RealDebridService';
+import { CuratedMagnetService } from './CuratedMagnetService';
+import { AutoMagnetService } from './AutoMagnetService';
+import { CacheService } from './CacheService';
+import { TorrentScraperService } from './TorrentScraperService';
+import { ImdbScraperService } from './ImdbScraperService';
+import { Logger } from '../utils/logger';
+import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../database/repository';
 class QualityDetector {
     constructor() {
         this.qualityPatterns = [
@@ -93,7 +90,7 @@ class QualityDetector {
         return this.allowedQualities.has(quality);
     }
 }
-class StreamHandler {
+export class StreamHandler {
     constructor() {
         this.processingConfig = {
             maxConcurrentTorrents: 2,
@@ -133,14 +130,14 @@ class StreamHandler {
         this.torrentCacheTTL = 60 * 60 * 1000;
         this.downloadTimeout = 30 * 60 * 1000;
         this.downloadPollInterval = 5000;
-        this.rdService = new RealDebridService_1.RealDebridService();
-        this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
-        this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-        this.cacheService = new CacheService_1.CacheService();
-        this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
-        this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
+        this.rdService = new RealDebridService();
+        this.magnetService = new CuratedMagnetService();
+        this.autoMagnetService = new AutoMagnetService();
+        this.cacheService = new CacheService();
+        this.torrentScraper = new TorrentScraperService();
+        this.imdbScraper = new ImdbScraperService();
         this.qualityDetector = new QualityDetector();
-        this.logger = new logger_1.Logger('StreamHandler');
+        this.logger = new Logger('StreamHandler');
         this.logger.info('StreamHandler initialized with AutoMagnetService', {
             processingConfig: this.processingConfig
         });
@@ -220,7 +217,7 @@ class StreamHandler {
         try {
             let fileEntries = [];
             if (request.type === 'movie') {
-                fileEntries = await (0, repository_1.getImdbIdMovieEntries)(request.id);
+                fileEntries = await getImdbIdMovieEntries(request.id);
             }
             else if (request.type === 'series') {
                 const parts = request.id.split(':');
@@ -228,7 +225,7 @@ class StreamHandler {
                     const imdbId = parts[0];
                     const season = parseInt(parts[1], 10);
                     const episode = parseInt(parts[2], 10);
-                    fileEntries = await (0, repository_1.getImdbIdSeriesEntries)(imdbId, season, episode);
+                    fileEntries = await getImdbIdSeriesEntries(imdbId, season, episode);
                 }
             }
             const streams = [];
@@ -1153,7 +1150,7 @@ class StreamHandler {
     async getMovieTitle(request) {
         try {
             if (request.type === 'movie') {
-                const imdbScraper = new ImdbScraperService_1.ImdbScraperService();
+                const imdbScraper = new ImdbScraperService();
                 const movieTitle = await imdbScraper.getTitleFromImdbId(request.id);
                 return movieTitle || request.id;
             }
@@ -1168,4 +1165,3 @@ class StreamHandler {
         }
     }
 }
-exports.StreamHandler = StreamHandler;

@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.Logger = void 0;
-class Logger {
+export class Logger {
     constructor(context) {
         this.context = context;
         this.logLevel = process.env.LOG_LEVEL || 'info';
@@ -33,4 +30,3 @@ class Logger {
         }
     }
 }
-exports.Logger = Logger;

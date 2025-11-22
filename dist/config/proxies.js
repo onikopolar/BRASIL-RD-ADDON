@@ -1,7 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getRandomProxy = exports.proxyConfig = void 0;
-exports.proxyConfig = [
+export const proxyConfig = [
     {
         host: 'proxy.scraperapi.com',
         port: 8000,
@@ -10,10 +7,9 @@ exports.proxyConfig = [
         password: ''
     }
 ];
-const getRandomProxy = () => {
-    if (exports.proxyConfig.length === 0)
+export const getRandomProxy = () => {
+    if (proxyConfig.length === 0)
         return null;
-    const randomIndex = Math.floor(Math.random() * exports.proxyConfig.length);
-    return exports.proxyConfig[randomIndex];
+    const randomIndex = Math.floor(Math.random() * proxyConfig.length);
+    return proxyConfig[randomIndex];
 };
-exports.getRandomProxy = getRandomProxy;

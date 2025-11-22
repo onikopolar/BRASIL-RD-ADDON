@@ -9,6 +9,7 @@ import { AutoMagnetService } from './services/AutoMagnetService';
 import { CacheService } from './services/CacheService';
 import { Logger } from './utils/logger';
 import { StreamRequest } from './types';
+import { syncDatabase } from './database/repository';
 
 const logger = new Logger('Main');
 const streamHandler = new StreamHandler();
@@ -658,6 +659,9 @@ app.get('/cache/status', (req: any, res: any) => {
 app.get('/', (req: any, res: any) => {
     res.redirect('/configure');
 });
+
+await syncDatabase();
+console.log('Banco de dados sincronizado!');
 
 // Configuração de HTTPS (Opcional)
 function createServer() {

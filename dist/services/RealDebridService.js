@@ -1,28 +1,22 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.RealDebridService = void 0;
-const axios_1 = __importDefault(require("axios"));
-const index_1 = require("../config/index");
-const logger_1 = require("../utils/logger");
-class RealDebridService {
+import axios from 'axios';
+import { config } from '../config/index';
+import { Logger } from '../utils/logger';
+export class RealDebridService {
     constructor() {
         this.maxRetries = 3;
         this.baseDelay = 1000;
-        this.logger = new logger_1.Logger('RealDebridService');
+        this.logger = new Logger('RealDebridService');
     }
     createHttpClient(apiKey) {
         if (!apiKey || apiKey.trim().length === 0) {
             throw new Error('Real-Debrid API Key is required');
         }
-        if (!index_1.config.realDebrid.baseUrl) {
+        if (!config.realDebrid.baseUrl) {
             throw new Error('Real-Debrid base URL is required');
         }
-        return axios_1.default.create({
-            baseURL: index_1.config.realDebrid.baseUrl,
-            timeout: index_1.config.realDebrid.timeout || 30000,
+        return axios.create({
+            baseURL: config.realDebrid.baseUrl,
+            timeout: config.realDebrid.timeout || 30000,
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
@@ -442,4 +436,3 @@ class RealDebridService {
         return new Promise(resolve => setTimeout(resolve, ms));
     }
 }
-exports.RealDebridService = RealDebridService;

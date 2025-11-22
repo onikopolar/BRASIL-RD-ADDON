@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.apiKeyManager = exports.ApiKeyManager = void 0;
-const logger_1 = require("./logger");
-class ApiKeyManager {
+import { Logger } from './logger';
+export class ApiKeyManager {
     constructor() {
         this.sessions = new Map();
         this.cleanupInterval = 30 * 60 * 1000;
         this.maxSessionAge = 24 * 60 * 60 * 1000;
         this.maxSessions = 1000;
-        this.logger = new logger_1.Logger('ApiKeyManager');
+        this.logger = new Logger('ApiKeyManager');
         this.startCleanupTimer();
         this.logger.info('ApiKeyManager initialized', {
             maxSessions: this.maxSessions,
@@ -144,5 +141,4 @@ class ApiKeyManager {
         this.logger.info('Todas as sessões removidas', { removedCount: count });
     }
 }
-exports.ApiKeyManager = ApiKeyManager;
-exports.apiKeyManager = new ApiKeyManager();
+export const apiKeyManager = new ApiKeyManager();

@@ -1,26 +1,22 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-const stremio_addon_sdk_1 = require("stremio-addon-sdk");
-const express_1 = __importDefault(require("express"));
-const cors_1 = __importDefault(require("cors"));
-const fs_1 = __importDefault(require("fs"));
-const https_1 = __importDefault(require("https"));
-const StreamHandler_1 = require("./services/StreamHandler");
-const RealDebridService_1 = require("./services/RealDebridService");
-const AutoMagnetService_1 = require("./services/AutoMagnetService");
-const CacheService_1 = require("./services/CacheService");
-const logger_1 = require("./utils/logger");
-const logger = new logger_1.Logger('Main');
-const streamHandler = new StreamHandler_1.StreamHandler();
-const autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-const cacheService = new CacheService_1.CacheService();
-const app = (0, express_1.default)();
+import { addonBuilder, getRouter } from 'stremio-addon-sdk';
+import express from 'express';
+import cors from 'cors';
+import fs from 'fs';
+import https from 'https';
+import { StreamHandler } from './services/StreamHandler';
+import { RealDebridService } from './services/RealDebridService';
+import { AutoMagnetService } from './services/AutoMagnetService';
+import { CacheService } from './services/CacheService';
+import { Logger } from './utils/logger';
+import { syncDatabase } from './database/repository';
+const logger = new Logger('Main');
+const streamHandler = new StreamHandler();
+const autoMagnetService = new AutoMagnetService();
+const cacheService = new CacheService();
+const app = express();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
-app.use((0, cors_1.default)());
-app.use(express_1.default.json());
+app.use(cors());
+app.use(express.json());
 const manifest = {
     id: 'org.brasilrd.addon',
     version: '1.0.0',
@@ -49,7 +45,7 @@ const manifest = {
         }
     ]
 };
-const builder = new stremio_addon_sdk_1.addonBuilder(manifest);
+const builder = new addonBuilder(manifest);
 builder.defineStreamHandler(async (args) => {
     const requestStartTime = Date.now();
     const config = args.config;
@@ -120,7 +116,7 @@ builder.defineStreamHandler(async (args) => {
         return { streams: [] };
     }
 });
-const stremioRouter = (0, stremio_addon_sdk_1.getRouter)(builder.getInterface());
+const stremioRouter = getRouter(builder.getInterface());
 const cacheMaxAge = 600;
 app.use((req, res, next) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
@@ -511,7 +507,7 @@ app.get('/resolve/:magnet/status', async (req, res) => {
                 error: 'API key do Real-Debrid é obrigatória'
             });
         }
-        const rdService = new RealDebridService_1.RealDebridService();
+        const rdService = new RealDebridService();
         const magnetHash = magnet.match(/btih:([a-zA-Z0-9]+)/i)?.[1];
         if (!magnetHash) {
             return res.status(400).json({
@@ -583,11 +579,13 @@ app.get('/cache/status', (req, res) => {
 app.get('/', (req, res) => {
     res.redirect('/configure');
 });
+await syncDatabase();
+console.log('Banco de dados sincronizado!');
 function createServer() {
     const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
     const sslOptions = getSSLOptions();
     if (sslOptions) {
-        const httpsServer = https_1.default.createServer(sslOptions, app);
+        const httpsServer = https.createServer(sslOptions, app);
         httpsServer.listen(port, '0.0.0.0', () => {
             logServerStart(port, true);
         });
@@ -604,10 +602,10 @@ function getSSLOptions() {
         const privateKeyPath = process.env.SSL_PRIVATE_KEY;
         const certificatePath = process.env.SSL_CERTIFICATE;
         if (privateKeyPath && certificatePath &&
-            fs_1.default.existsSync(privateKeyPath) && fs_1.default.existsSync(certificatePath)) {
+            fs.existsSync(privateKeyPath) && fs.existsSync(certificatePath)) {
             return {
-                key: fs_1.default.readFileSync(privateKeyPath),
-                cert: fs_1.default.readFileSync(certificatePath)
+                key: fs.readFileSync(privateKeyPath),
+                cert: fs.readFileSync(certificatePath)
             };
         }
         logger.info('SSL não configurado - usando HTTP para desenvolvimento');

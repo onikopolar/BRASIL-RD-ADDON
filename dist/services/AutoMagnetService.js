@@ -1,14 +1,11 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.AutoMagnetService = void 0;
-const repository_1 = require("../database/repository");
-const RealDebridService_1 = require("./RealDebridService");
-const ImdbScraperService_1 = require("./ImdbScraperService");
-const logger_1 = require("../utils/logger");
-const logger = new logger_1.Logger('AutoMagnetService');
-const rdService = new RealDebridService_1.RealDebridService();
-const imdbScraper = new ImdbScraperService_1.ImdbScraperService();
-class AutoMagnetService {
+import { getTorrent, createTorrent, createFile } from '../database/repository';
+import { RealDebridService } from './RealDebridService';
+import { ImdbScraperService } from './ImdbScraperService';
+import { Logger } from '../utils/logger';
+const logger = new Logger('AutoMagnetService');
+const rdService = new RealDebridService();
+const imdbScraper = new ImdbScraperService();
+export class AutoMagnetService {
     constructor() {
         this.videoExtensions = [
             '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -171,7 +168,7 @@ class AutoMagnetService {
             if (!magnetHash) {
                 throw new Error('Não foi possível extrair infoHash do magnet');
             }
-            const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
+            const existingTorrent = await getTorrent(magnetHash);
             if (existingTorrent) {
                 logger.debug('Magnet já existe no banco de dados, ignorando', {
                     title: magnetData.title,
@@ -179,7 +176,7 @@ class AutoMagnetService {
                 });
                 return;
             }
-            await (0, repository_1.createTorrent)({
+            await createTorrent({
                 infoHash: magnetHash,
                 provider: 'brasil-rd',
                 title: magnetData.title,
@@ -190,7 +187,7 @@ class AutoMagnetService {
                 languages: magnetData.language,
                 resolution: magnetData.quality
             });
-            await (0, repository_1.createFile)({
+            await createFile({
                 infoHash: magnetHash,
                 title: magnetData.title,
                 imdbId: magnetData.imdbId,
@@ -318,5 +315,4 @@ class AutoMagnetService {
         return match ? match[1] : '';
     }
 }
-exports.AutoMagnetService = AutoMagnetService;
-exports.default = AutoMagnetService;
+export default AutoMagnetService;

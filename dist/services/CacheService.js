@@ -1,11 +1,8 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.CacheService = void 0;
-const logger_1 = require("../utils/logger");
-class CacheService {
+import { Logger } from '../utils/logger';
+export class CacheService {
     constructor() {
         this.cache = new Map();
-        this.logger = new logger_1.Logger('CacheService');
+        this.logger = new Logger('CacheService');
         this.startCleanupInterval();
     }
     set(key, data, ttl = 3600000) {
@@ -64,4 +61,3 @@ class CacheService {
         };
     }
 }
-exports.CacheService = CacheService;

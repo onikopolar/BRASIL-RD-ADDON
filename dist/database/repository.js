@@ -1,86 +1,74 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.getTorrent = getTorrent;
-exports.getFiles = getFiles;
-exports.getImdbIdMovieEntries = getImdbIdMovieEntries;
-exports.getImdbIdSeriesEntries = getImdbIdSeriesEntries;
-exports.getKitsuIdMovieEntries = getKitsuIdMovieEntries;
-exports.getKitsuIdSeriesEntries = getKitsuIdSeriesEntries;
-exports.createTorrent = createTorrent;
-exports.createFile = createFile;
-exports.createSubtitle = createSubtitle;
-exports.syncDatabase = syncDatabase;
-const sequelize_1 = require("sequelize");
-const models_1 = require("./models");
-function getTorrent(infoHash) {
-    return models_1.Torrent.findOne({ where: { infoHash } });
+import { Op } from 'sequelize';
+import { Torrent, File, Subtitle } from './models';
+export function getTorrent(infoHash) {
+    return Torrent.findOne({ where: { infoHash } });
 }
-function getFiles(infoHashes) {
-    return models_1.File.findAll({ where: { infoHash: { [sequelize_1.Op.in]: infoHashes } } });
+export function getFiles(infoHashes) {
+    return File.findAll({ where: { infoHash: { [Op.in]: infoHashes } } });
 }
-function getImdbIdMovieEntries(imdbId) {
-    return models_1.File.findAll({
+export function getImdbIdMovieEntries(imdbId) {
+    return File.findAll({
         where: {
-            imdbId: { [sequelize_1.Op.eq]: imdbId }
+            imdbId: { [Op.eq]: imdbId }
         },
-        include: [models_1.Torrent],
+        include: [Torrent],
         limit: 500,
         order: [
-            [models_1.Torrent, 'seeders', 'DESC']
+            [Torrent, 'seeders', 'DESC']
         ]
     });
 }
-function getImdbIdSeriesEntries(imdbId, season, episode) {
-    return models_1.File.findAll({
+export function getImdbIdSeriesEntries(imdbId, season, episode) {
+    return File.findAll({
         where: {
-            imdbId: { [sequelize_1.Op.eq]: imdbId },
-            imdbSeason: { [sequelize_1.Op.eq]: season },
-            imdbEpisode: { [sequelize_1.Op.eq]: episode }
+            imdbId: { [Op.eq]: imdbId },
+            imdbSeason: { [Op.eq]: season },
+            imdbEpisode: { [Op.eq]: episode }
         },
-        include: [models_1.Torrent],
+        include: [Torrent],
         limit: 500,
         order: [
-            [models_1.Torrent, 'seeders', 'DESC']
+            [Torrent, 'seeders', 'DESC']
         ]
     });
 }
-function getKitsuIdMovieEntries(kitsuId) {
-    return models_1.File.findAll({
+export function getKitsuIdMovieEntries(kitsuId) {
+    return File.findAll({
         where: {
-            kitsuId: { [sequelize_1.Op.eq]: kitsuId }
+            kitsuId: { [Op.eq]: kitsuId }
         },
-        include: [models_1.Torrent],
+        include: [Torrent],
         limit: 500,
         order: [
-            [models_1.Torrent, 'seeders', 'DESC']
+            [Torrent, 'seeders', 'DESC']
         ]
     });
 }
-function getKitsuIdSeriesEntries(kitsuId, episode) {
-    return models_1.File.findAll({
+export function getKitsuIdSeriesEntries(kitsuId, episode) {
+    return File.findAll({
         where: {
-            kitsuId: { [sequelize_1.Op.eq]: kitsuId },
-            kitsuEpisode: { [sequelize_1.Op.eq]: episode }
+            kitsuId: { [Op.eq]: kitsuId },
+            kitsuEpisode: { [Op.eq]: episode }
         },
-        include: [models_1.Torrent],
+        include: [Torrent],
         limit: 500,
         order: [
-            [models_1.Torrent, 'seeders', 'DESC']
+            [Torrent, 'seeders', 'DESC']
         ]
     });
 }
-async function createTorrent(torrentData) {
-    return models_1.Torrent.create(torrentData);
+export async function createTorrent(torrentData) {
+    return Torrent.create(torrentData);
 }
-async function createFile(fileData) {
-    return models_1.File.create(fileData);
+export async function createFile(fileData) {
+    return File.create(fileData);
 }
-async function createSubtitle(subtitleData) {
-    return models_1.Subtitle.create(subtitleData);
+export async function createSubtitle(subtitleData) {
+    return Subtitle.create(subtitleData);
 }
-async function syncDatabase() {
-    await models_1.Torrent.sync();
-    await models_1.File.sync();
-    await models_1.Subtitle.sync();
+export async function syncDatabase() {
+    await Torrent.sync();
+    await File.sync();
+    await Subtitle.sync();
     console.log('Banco de dados sincronizado!');
 }

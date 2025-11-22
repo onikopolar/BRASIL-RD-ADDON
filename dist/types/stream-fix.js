@@ -1,8 +1,4 @@
-"use strict";
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.convertToMobileStream = convertToMobileStream;
-exports.convertStreamsToMobile = convertStreamsToMobile;
-function convertToMobileStream(stream) {
+export function convertToMobileStream(stream) {
     const magnetMatch = stream.url?.match(/btih:([a-zA-Z0-9]+)/i);
     const infoHash = magnetMatch ? magnetMatch[1] : undefined;
     const sources = stream.url?.startsWith('magnet:')
@@ -18,6 +14,6 @@ function convertToMobileStream(stream) {
         fileIdx: stream.fileIndex
     };
 }
-function convertStreamsToMobile(streams) {
+export function convertStreamsToMobile(streams) {
     return streams.map(convertToMobileStream);
 }

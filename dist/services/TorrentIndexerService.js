@@ -1,12 +1,6 @@
-"use strict";
-var __importDefault = (this && this.__importDefault) || function (mod) {
-    return (mod && mod.__esModule) ? mod : { "default": mod };
-};
-Object.defineProperty(exports, "__esModule", { value: true });
-exports.TorrentIndexerService = void 0;
-const logger_1 = require("../utils/logger");
-const axios_1 = __importDefault(require("axios"));
-class TorrentIndexerService {
+import { Logger } from '../utils/logger';
+import axios from 'axios';
+export class TorrentIndexerService {
     constructor() {
         this.baseUrl = 'https://torrent-indexer.darklyn.org';
         this.mirrors = [
@@ -16,7 +10,7 @@ class TorrentIndexerService {
             'https://torrent-indexer.us-sc1.darklyn.org'
         ];
         this.currentMirrorIndex = 0;
-        this.logger = new logger_1.Logger('TorrentIndexer');
+        this.logger = new Logger('TorrentIndexer');
         this.logger.info('Serviço Torrent Indexer inicializado', {
             mirrors: this.mirrors.length,
             supportedSites: [
@@ -54,7 +48,7 @@ class TorrentIndexerService {
             }
             const searchUrl = `${this.getCurrentMirror()}${endpoint}`;
             this.logger.debug('URL da busca', { searchUrl, params });
-            const response = await axios_1.default.get(searchUrl, {
+            const response = await axios.get(searchUrl, {
                 timeout: 15000,
                 headers: this.getAPIHeaders(),
                 params
@@ -178,7 +172,7 @@ class TorrentIndexerService {
             const mirror = this.mirrors[i];
             const startTime = Date.now();
             try {
-                const response = await axios_1.default.get(`${mirror}/search?q=test`, {
+                const response = await axios.get(`${mirror}/search?q=test`, {
                     timeout: 10000,
                     headers: this.getAPIHeaders()
                 });
@@ -211,4 +205,3 @@ class TorrentIndexerService {
         return results;
     }
 }
-exports.TorrentIndexerService = TorrentIndexerService;
