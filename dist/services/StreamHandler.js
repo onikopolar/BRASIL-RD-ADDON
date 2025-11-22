@@ -844,7 +844,7 @@ class StreamHandler {
             return null;
         }
         const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
-        return this.createLazyStream(`Brasil RD (${magnet.quality})`, `Brasil RD (${magnet.quality})`, `${this.extractCleanMovieTitle(magnet.title)}\n${magnet.seeds} seeds | ${magnet.size || 'Tamanho não especificado'} | ${this.formatLanguage(magnet.language)}`, magnet.magnet, request.apiKey, quality);
+        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, `${this.extractCleanMovieTitle(magnet.title)}\n${magnet.seeds} seeds | ${magnet.size || 'Tamanho não especificado'} | ${this.formatLanguage(magnet.language)}`, magnet.magnet, request.apiKey, quality);
     }
     extractEpisodeFromRequest(requestId) {
         const defaultResult = { season: 1, episode: 1, isValid: false };
