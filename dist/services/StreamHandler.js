@@ -153,12 +153,14 @@ class StreamHandler {
         try {
             const catalogStreams = await this.getStreamsFromCatalog(request);
             if (catalogStreams.length > 0) {
+                const filteredCatalogStreams = this.applyMobileCompatibilityFilter(catalogStreams);
                 this.logger.debug('Returning streams from catalog', {
                     requestId,
-                    streamCount: catalogStreams.length,
-                    source: 'catalog'
+                    streamCount: filteredCatalogStreams.length,
+                    source: 'catalog',
+                    originalCount: catalogStreams.length
                 });
-                return { streams: catalogStreams };
+                return { streams: filteredCatalogStreams };
             }
             this.logger.debug('No streams in catalog, performing scraping', { requestId });
             let streams = await this.processStreamRequest(request);

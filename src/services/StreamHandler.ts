@@ -239,12 +239,14 @@ export class StreamHandler {
       // PRIMEIRO: Sempre verificar se já existe no catálogo (magnet.json)
       const catalogStreams = await this.getStreamsFromCatalog(request);
       if (catalogStreams.length > 0) {
+        const filteredCatalogStreams = this.applyMobileCompatibilityFilter(catalogStreams);
         this.logger.debug('Returning streams from catalog', {
           requestId,
-          streamCount: catalogStreams.length,
-          source: 'catalog'
+          streamCount: filteredCatalogStreams.length,
+          source: 'catalog',
+          originalCount: catalogStreams.length
         });
-        return { streams: catalogStreams };
+        return { streams: filteredCatalogStreams };
       }
 
       // SEGUNDO: Se não tem no catálogo, fazer scraping UMA vez
