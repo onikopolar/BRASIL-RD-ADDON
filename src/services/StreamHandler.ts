@@ -247,8 +247,7 @@ export class StreamHandler {
           source: 'catalog',
           originalCount: catalogStreams.length
         });
-        const mobileCatalogStreams = convertStreamsToMobile(filteredCatalogStreams);
-        return { streams: mobileCatalogStreams as any };
+        return { streams: filteredCatalogStreams };
       }
 
       // SEGUNDO: Se não tem no catálogo, fazer scraping UMA vez
@@ -257,18 +256,17 @@ export class StreamHandler {
       
       streams = this.applyMobileCompatibilityFilter(streams);
       
-      this.logger.debug('URLs sendo retornadas para o cliente:', {
+      this.logger.debug('Sources sendo retornadas para o cliente:', {
         requestId,
         streamCount: streams.length,
-        urls: streams.map(s => ({
-          url: s.url,
+        sources: streams.map(s => ({
+          sources: s.sources,
           title: s.title,
           status: s.status
         }))
       });
 
-      const mobileStreams = convertStreamsToMobile(streams);
-      return { streams: mobileStreams as any };
+      return { streams };
 
     } catch (error) {
       this.logger.error('Stream request processing failed', {
@@ -312,18 +310,17 @@ export class StreamHandler {
         // Log para debug
         this.logger.debug('Mobile compatibility check', {
             streamTitle: stream.title,
-            hasUrl: !!stream.url,
-            urlStartsWithHttp: stream.url?.startsWith('http'),
+            hasSources: !!stream.sources && stream.sources.length > 0,
             status: stream.status,
             name: stream.name,
             quality: this.qualityDetector.extractQualityFromStreamName(stream.name),
             isValidQuality: this.qualityDetector.isValidQuality(this.qualityDetector.extractQualityFromStreamName(stream.name))
         });
 
-        if (!stream.url || !stream.url.startsWith('http')) {
-            this.logger.debug('Stream filtered - invalid URL', { 
-                title: stream.title, 
-                url: stream.url 
+        // Verifica se tem sources válidos (pelo menos um source)
+        if (!stream.sources || stream.sources.length === 0) {
+            this.logger.debug('Stream filtered - no sources', { 
+                title: stream.title
             });
             return false;
         }
@@ -1050,9 +1047,9 @@ export class StreamHandler {
 
       const stream: Stream = {
         title: `${title} ${episodeTag}`,
-        url: streamLink,
         name: `${title} ${episodeTag}`,
         description: `${fileQuality.toUpperCase()} | Conteúdo via temporada completa | ${episodeTag}`,
+        sources: [streamLink],  // ← USA sources em vez de url
         behaviorHints: {
           notWebReady: false,
           bingeGroup: `br-season-${imdbId}-${season}`,

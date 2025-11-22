@@ -124,7 +124,7 @@ builder.defineStreamHandler(async (args: any) => {
             requestId: args.id, 
             streamCount: result.streams.length, 
             streamTitles: result.streams.map(s => s.title), 
-            streamUrls: result.streams.map(s => s.url.substring(0, 100) + "..."), 
+            streamSources: result.streams.map(s => s.sources), // ← MUDOU AQUI
             streamNames: result.streams.map(s => s.name) 
         });
         return result;

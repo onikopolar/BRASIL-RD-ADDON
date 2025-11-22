@@ -8,7 +8,6 @@ const CacheService_1 = require("./CacheService");
 const TorrentScraperService_1 = require("./TorrentScraperService");
 const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
-const stream_fix_1 = require("../types/stream-fix");
 class QualityDetector {
     constructor() {
         this.qualityPatterns = [
@@ -161,23 +160,21 @@ class StreamHandler {
                     source: 'catalog',
                     originalCount: catalogStreams.length
                 });
-                const mobileCatalogStreams = (0, stream_fix_1.convertStreamsToMobile)(filteredCatalogStreams);
-                return { streams: mobileCatalogStreams };
+                return { streams: filteredCatalogStreams };
             }
             this.logger.debug('No streams in catalog, performing scraping', { requestId });
             let streams = await this.processStreamRequest(request);
             streams = this.applyMobileCompatibilityFilter(streams);
-            this.logger.debug('URLs sendo retornadas para o cliente:', {
+            this.logger.debug('Sources sendo retornadas para o cliente:', {
                 requestId,
                 streamCount: streams.length,
-                urls: streams.map(s => ({
-                    url: s.url,
+                sources: streams.map(s => ({
+                    sources: s.sources,
                     title: s.title,
                     status: s.status
                 }))
             });
-            const mobileStreams = (0, stream_fix_1.convertStreamsToMobile)(streams);
-            return { streams: mobileStreams };
+            return { streams };
         }
         catch (error) {
             this.logger.error('Stream request processing failed', {
@@ -212,17 +209,15 @@ class StreamHandler {
         const filteredStreams = streams.filter(stream => {
             this.logger.debug('Mobile compatibility check', {
                 streamTitle: stream.title,
-                hasUrl: !!stream.url,
-                urlStartsWithHttp: stream.url?.startsWith('http'),
+                hasSources: !!stream.sources && stream.sources.length > 0,
                 status: stream.status,
                 name: stream.name,
                 quality: this.qualityDetector.extractQualityFromStreamName(stream.name),
                 isValidQuality: this.qualityDetector.isValidQuality(this.qualityDetector.extractQualityFromStreamName(stream.name))
             });
-            if (!stream.url || !stream.url.startsWith('http')) {
-                this.logger.debug('Stream filtered - invalid URL', {
-                    title: stream.title,
-                    url: stream.url
+            if (!stream.sources || stream.sources.length === 0) {
+                this.logger.debug('Stream filtered - no sources', {
+                    title: stream.title
                 });
                 return false;
             }
@@ -748,9 +743,9 @@ class StreamHandler {
             const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
             const stream = {
                 title: `${title} ${episodeTag}`,
-                url: streamLink,
                 name: `${title} ${episodeTag}`,
                 description: `${fileQuality.toUpperCase()} | Conteúdo via temporada completa | ${episodeTag}`,
+                sources: [streamLink],
                 behaviorHints: {
                     notWebReady: false,
                     bingeGroup: `br-season-${imdbId}-${season}`,

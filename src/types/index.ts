@@ -1,8 +1,8 @@
 export interface Stream {
   title: string;
-  url: string;
-  name?: string;
+  name: string;
   description?: string;
+  sources: string[];
   behaviorHints?: {
     notWebReady?: boolean;
     bingeGroup?: string;
@@ -10,10 +10,8 @@ export interface Stream {
   };
   status?: string;
   torrentId?: string;
-  // NOVAS PROPRIEDADES PARA LAZY LOADING
-  magnet?: string;           // Magnet link original
-  isPending?: boolean;       // Indica que precisa ser resolvido
-  fileIndex?: number;        // Índice do arquivo no torrent
+  infoHash?: string;
+  fileIdx?: number;
 }
 
 export interface RDTorrentInfo {
