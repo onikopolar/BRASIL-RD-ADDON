@@ -206,19 +206,49 @@ class StreamHandler {
         return this.sortStreamsByQuality(streams);
     }
     applyMobileCompatibilityFilter(streams) {
-        return streams.filter(stream => {
+        const filteredStreams = streams.filter(stream => {
+            this.logger.debug('Mobile compatibility check', {
+                streamTitle: stream.title,
+                hasUrl: !!stream.url,
+                urlStartsWithHttp: stream.url?.startsWith('http'),
+                status: stream.status,
+                name: stream.name,
+                quality: this.qualityDetector.extractQualityFromStreamName(stream.name),
+                isValidQuality: this.qualityDetector.isValidQuality(this.qualityDetector.extractQualityFromStreamName(stream.name))
+            });
             if (!stream.url || !stream.url.startsWith('http')) {
+                this.logger.debug('Stream filtered - invalid URL', {
+                    title: stream.title,
+                    url: stream.url
+                });
                 return false;
             }
             if (stream.status !== 'downloaded' && stream.status !== 'ready' && stream.status !== 'available') {
+                this.logger.debug('Stream filtered - invalid status', {
+                    title: stream.title,
+                    status: stream.status
+                });
                 return false;
             }
             const quality = this.qualityDetector.extractQualityFromStreamName(stream.name);
             if (!this.qualityDetector.isValidQuality(quality)) {
+                this.logger.debug('Stream filtered - invalid quality', {
+                    title: stream.title,
+                    quality: quality
+                });
                 return false;
             }
+            this.logger.debug('Stream PASSED mobile filter', {
+                title: stream.title
+            });
             return true;
-        }).map(stream => {
+        });
+        this.logger.debug('Mobile compatibility filter results', {
+            originalCount: streams.length,
+            filteredCount: filteredStreams.length,
+            removedCount: streams.length - filteredStreams.length
+        });
+        return filteredStreams.map(stream => {
             stream.behaviorHints = {
                 ...stream.behaviorHints,
                 notWebReady: false
