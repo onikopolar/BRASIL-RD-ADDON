@@ -1,4 +1,4 @@
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 export class CuratedMagnetService {
     constructor() {
         this.magnets = new Map();
@@ -11,7 +11,7 @@ export class CuratedMagnetService {
             const path = await import('path');
             const magnetsPath = path.join(process.cwd(), 'data/magnets.json');
             if (await fs.pathExists(magnetsPath)) {
-                const data = await fs.readJson(magnetsPath);
+                const data = await fs.readJSON(magnetsPath);
                 if (data.magnets && Array.isArray(data.magnets)) {
                     let loadedCount = 0;
                     data.magnets.forEach((magnet) => {

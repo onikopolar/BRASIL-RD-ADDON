@@ -1,5 +1,6 @@
-import { Logger } from '../utils/logger';
-import { CuratedMagnet, StreamRequest } from '../types/index';
+import { Logger } from '../utils/logger.js';
+import { CuratedMagnet, StreamRequest } from '../types/index.js';
+import fs from 'fs-extra';
 
 export class CuratedMagnetService {
   private magnets: Map<string, CuratedMagnet[]> = new Map();
@@ -20,7 +21,7 @@ export class CuratedMagnetService {
       const magnetsPath = path.join(process.cwd(), 'data/magnets.json');
       
       if (await fs.pathExists(magnetsPath)) {
-        const data = await fs.readJson(magnetsPath);
+        const data = await fs.readJSON(magnetsPath);
         
         if (data.magnets && Array.isArray(data.magnets)) {
           let loadedCount = 0;

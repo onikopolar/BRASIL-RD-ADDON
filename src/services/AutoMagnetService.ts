@@ -1,7 +1,7 @@
-import { getTorrent, createTorrent, createFile } from '../database/repository';
-import { RealDebridService } from './RealDebridService';
-import { ImdbScraperService } from './ImdbScraperService';
-import { Logger } from '../utils/logger';
+import { getTorrent, createTorrent, createFile } from '../database/repository.js';
+import { RealDebridService } from './RealDebridService.js';
+import { ImdbScraperService } from './ImdbScraperService.js';
+import { Logger } from '../utils/logger.js';
 import * as fs from 'fs-extra';
 import * as path from 'path';
 

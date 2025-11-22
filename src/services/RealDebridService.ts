@@ -1,7 +1,7 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
-import { config } from '../config/index';
-import { Logger } from '../utils/logger';
-import { RDTorrentInfo, RDFile } from '../types/index';
+import { config } from '../config/index.js';
+import { Logger } from '../utils/logger.js';
+import { RDTorrentInfo, RDFile } from '../types/index.js';
 
 interface RealDebridError {
   error?: string;

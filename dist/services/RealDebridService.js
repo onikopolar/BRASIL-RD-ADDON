@@ -1,6 +1,6 @@
 import axios from 'axios';
-import { config } from '../config/index';
-import { Logger } from '../utils/logger';
+import { config } from '../config/index.js';
+import { Logger } from '../utils/logger.js';
 export class RealDebridService {
     constructor() {
         this.maxRetries = 3;

@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { Torrent, File, Subtitle } from './models';
+import { sequelize, Torrent, File, Subtitle } from './models.js';
 
 // Funções de query baseadas no Torrentio
 export function getTorrent(infoHash: string) {
@@ -80,6 +80,11 @@ export async function createSubtitle(subtitleData: any) {
 
 // Função para sincronizar o banco (cria as tabelas)
 export async function syncDatabase() {
+  if (!sequelize) {
+    console.log('Banco de dados não configurado - pulando sincronização');
+    return;
+  }
+  
   await Torrent.sync();
   await File.sync(); 
   await Subtitle.sync();

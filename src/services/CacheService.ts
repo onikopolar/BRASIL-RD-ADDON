@@ -1,6 +1,5 @@
-import { Logger } from '../utils/logger';
-import { CacheData } from '../types/index';
-
+import { Logger } from '../utils/logger.js';
+import { CacheData } from '../types/index.js';
 export class CacheService {
   private cache: Map<string, CacheData<any>> = new Map();
   private logger: Logger;

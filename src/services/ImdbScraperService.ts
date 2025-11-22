@@ -1,4 +1,4 @@
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 

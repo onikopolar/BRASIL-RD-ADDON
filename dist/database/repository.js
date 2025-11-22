@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { Torrent, File, Subtitle } from './models';
+import { sequelize, Torrent, File, Subtitle } from './models.js';
 export function getTorrent(infoHash) {
     return Torrent.findOne({ where: { infoHash } });
 }
@@ -67,6 +67,10 @@ export async function createSubtitle(subtitleData) {
     return Subtitle.create(subtitleData);
 }
 export async function syncDatabase() {
+    if (!sequelize) {
+        console.log('Banco de dados não configurado - pulando sincronização');
+        return;
+    }
     await Torrent.sync();
     await File.sync();
     await Subtitle.sync();
