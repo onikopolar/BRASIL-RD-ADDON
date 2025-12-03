@@ -1,0 +1,204 @@
+import { Logger } from '../utils/logger';
+
+export class TitleFilter {
+  private readonly logger: Logger;
+
+  constructor() {
+    this.logger = new Logger('TitleFilter');
+  }
+
+  /**
+   * Normaliza um título para comparação
+   * - Remove acentos
+   * - Converte para minúsculas  
+   * - Remove pontuação
+   * - Mantém TODAS as palavras
+   */
+  normalizeForComparison(title: string): string {
+    return title
+      .toLowerCase()
+      .normalize('NFD') // separa acentos: "coração" → "coracão"
+      .replace(/[\u0300-\u036f]/g, '') // remove os acentos: "coracão" → "coracao"
+      .replace(/[^\w\s]/g, ' ') // remove pontuação, mantém letras, números e espaços
+      .replace(/\s+/g, ' ') // múltiplos espaços → um espaço
+      .trim();
+  }
+
+  /**
+   * Verifica se dois títulos combinam
+   * Usa a FRASE COMPLETA, não remove palavras
+   */
+  doTitlesMatch(torrentTitle: string, imdbTitle: string): boolean {
+    const normTorrent = this.normalizeForComparison(torrentTitle);
+    const normImdb = this.normalizeForComparison(imdbTitle);
+    
+    // DEBUG: Logar para análise
+    this.logger.debug('Title matching analysis', {
+      torrentTitle,
+      imdbTitle,
+      normTorrent,
+      normImdb
+    });
+
+    // CASO 1: Match exato após normalização
+    if (normTorrent === normImdb) {
+      this.logger.debug('✅ Match exato', { torrentTitle, imdbTitle });
+      return true;
+    }
+
+    // CASO 2: O título do torrent CONTÉM o título do IMDB
+    // Exemplo: "os incriveis 2 o filme completo" CONTÉM "os incriveis 2"
+    if (normTorrent.includes(normImdb)) {
+      this.logger.debug('✅ Torrent contém título IMDB', { 
+        torrentTitle, 
+        imdbTitle,
+        contains: true 
+      });
+      return true;
+    }
+
+    // CASO 3: O título do IMDB CONTÉM o título do torrent
+    // Exemplo: "os incriveis 2" CONTÉM "incriveis 2"
+    if (normImdb.includes(normTorrent)) {
+      this.logger.debug('✅ Título IMDB contém torrent', { 
+        torrentTitle, 
+        imdbTitle,
+        contained: true 
+      });
+      return true;
+    }
+
+    // CASO 4: Similaridade por sequência (para variações)
+    const similarity = this.calculateSequenceSimilarity(normTorrent, normImdb);
+    const matches = similarity >= 0.8; // 80% de similaridade
+    
+    this.logger.debug('Similaridade calculada', {
+      torrentTitle,
+      imdbTitle,
+      similarity: `${(similarity * 100).toFixed(1)}%`,
+      matches
+    });
+    
+    return matches;
+  }
+
+  /**
+   * Calcula similaridade baseada em SEQUÊNCIA de palavras
+   * Não remove palavras, compara a sequência completa
+   */
+  private calculateSequenceSimilarity(str1: string, str2: string): number {
+    const words1 = str1.split(' ').filter(w => w.length > 0);
+    const words2 = str2.split(' ').filter(w => w.length > 0);
+    
+    if (words1.length === 0 || words2.length === 0) return 0;
+    
+    // Encontrar a maior subsequência comum
+    let maxCommonLength = 0;
+    
+    // Verificar todas as possíveis subsequências
+    for (let i = 0; i < words1.length; i++) {
+      for (let j = 0; j < words2.length; j++) {
+        let common = 0;
+        let k = 0;
+        
+        // Contar palavras consecutivas em comum
+        while (i + k < words1.length && j + k < words2.length && 
+               words1[i + k] === words2[j + k]) {
+          common++;
+          k++;
+        }
+        
+        if (common > maxCommonLength) {
+          maxCommonLength = common;
+        }
+      }
+    }
+    
+    // Calcular similaridade baseada na maior subsequência comum
+    const maxLength = Math.max(words1.length, words2.length);
+    return maxCommonLength / maxLength;
+  }
+
+  /**
+   * Filtra torrents baseado no título do IMDB
+   * Mantém APENAS os que combinam com o título completo
+   */
+  applyTitleFilter(torrents: any[], imdbTitle: string, requestId: string): any[] {
+    const startTime = Date.now();
+    const results = {
+      included: [] as any[],
+      excluded: [] as any[],
+      reasons: [] as string[]
+    };
+    
+    this.logger.info('Aplicando filtro de título', {
+      requestId,
+      imdbTitle,
+      totalTorrents: torrents.length
+    });
+    
+    for (const torrent of torrents) {
+      const matches = this.doTitlesMatch(torrent.title, imdbTitle);
+      
+      if (matches) {
+        results.included.push(torrent);
+        results.reasons.push(`✅ Incluído: "${torrent.title}" → "${imdbTitle}"`);
+      } else {
+        results.excluded.push(torrent);
+        results.reasons.push(`❌ Excluído: "${torrent.title}" ≠ "${imdbTitle}"`);
+      }
+    }
+    
+    const processingTime = Date.now() - startTime;
+    
+    // Log detalhado dos resultados
+    this.logger.info('Resultado do filtro de título', {
+      requestId,
+      imdbTitle,
+      totalTorrents: torrents.length,
+      included: results.included.length,
+      excluded: results.excluded.length,
+      processingTime: `${processingTime}ms`,
+      inclusionRate: torrents.length > 0 ? 
+        `${((results.included.length / torrents.length) * 100).toFixed(1)}%` : '0%'
+    });
+    
+    // Log detalhado de cada decisão (em debug)
+    if (results.reasons.length > 0) {
+      this.logger.debug('Decisões do filtro', {
+        requestId,
+        reasons: results.reasons.slice(0, 10) // Primeiras 10 para não poluir
+      });
+    }
+    
+    return results.included;
+  }
+  
+  /**
+   * Método auxiliar para debug: testar um título específico
+   */
+  testTitleMatch(torrentTitle: string, imdbTitle: string): {
+    matches: boolean;
+    normalizedTorrent: string;
+    normalizedImdb: string;
+    contains: boolean;
+    contained: boolean;
+    similarity: number;
+  } {
+    const normTorrent = this.normalizeForComparison(torrentTitle);
+    const normImdb = this.normalizeForComparison(imdbTitle);
+    
+    const contains = normTorrent.includes(normImdb);
+    const contained = normImdb.includes(normTorrent);
+    const similarity = this.calculateSequenceSimilarity(normTorrent, normImdb);
+    
+    return {
+      matches: contains || contained || similarity >= 0.8,
+      normalizedTorrent: normTorrent,
+      normalizedImdb: normImdb,
+      contains,
+      contained,
+      similarity
+    };
+  }
+}

@@ -12,7 +12,9 @@
     "dev:stremio": "ts-node src/server.ts",
     "test": "jest",
     "clean": "rm -rf dist",
-    "rebuild": "npm run clean && npm run build"
+    "rebuild": "npm run clean && npm run build",
+    "add-magnet": "ts-node scripts/add-magnet.ts",
+    "add-magnet:dev": "ts-node --transpile-only scripts/add-magnet.ts"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

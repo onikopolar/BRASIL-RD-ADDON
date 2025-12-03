@@ -1,21 +1,31 @@
 import { Sequelize, DataTypes, Model, Optional } from 'sequelize';
+import dotenv from 'dotenv';
+
+dotenv.config();
 
 const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
-if (!DATABASE_URL) {
-  throw new Error('DATABASE_URL não configurada');
+// Em desenvolvimento, se não tiver DATABASE_URL, usar SQLite em memória
+if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
+  throw new Error('DATABASE_URL não configurada para produção');
 }
 
-const sequelize = new Sequelize(DATABASE_URL, { 
-  logging: false, 
-  pool: { max: 30, min: 5, idle: 20 * 60 * 1000 } 
-});
+const sequelize = DATABASE_URL 
+  ? new Sequelize(DATABASE_URL, { 
+      logging: false, 
+      pool: { max: 30, min: 5, idle: 20 * 60 * 1000 } 
+    })
+  : new Sequelize('sqlite::memory:', {
+      logging: false,
+      pool: { max: 30, min: 5, idle: 20 * 60 * 1000 }
+    });
 
 // Interface para Torrent
 interface TorrentAttributes {
   infoHash: string;
   provider: string;
   torrentId?: string;
+  magnetLink?: string;  // ✅ NOVO: magnet link completo
   title: string;
   size?: number;
   type: string;
@@ -30,6 +40,7 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public infoHash!: string;
   public provider!: string;
   public torrentId?: string;
+  public magnetLink?: string;  // ✅ NOVO: magnet link completo
   public title!: string;
   public size?: number;
   public type!: string;
@@ -85,22 +96,28 @@ class Subtitle extends Model<SubtitleAttributes> implements SubtitleAttributes {
 }
 
 // Definindo os modelos
-Torrent.init(
-  {
-    infoHash: { type: DataTypes.STRING(64), primaryKey: true },
-    provider: { type: DataTypes.STRING(32), allowNull: false },
-    torrentId: { type: DataTypes.STRING(128) },
-    title: { type: DataTypes.STRING(256), allowNull: false },
-    size: { type: DataTypes.BIGINT },
-    type: { type: DataTypes.STRING(16), allowNull: false },
-    uploadDate: { type: DataTypes.DATE, allowNull: false },
-    seeders: { type: DataTypes.SMALLINT },
-    trackers: { type: DataTypes.STRING(4096) },
-    languages: { type: DataTypes.STRING(4096) },
-    resolution: { type: DataTypes.STRING(16) }
-  },
-  { sequelize, modelName: 'torrent' }
-);
+  Torrent.init(
+    {
+      infoHash: { type: DataTypes.STRING(64), primaryKey: true },
+      provider: { type: DataTypes.STRING(100) },
+      torrentId: { type: DataTypes.STRING(100) },
+      magnetLink: { type: DataTypes.TEXT },  // ✅ NOVO: TEXT para magnet completo
+      title: { type: DataTypes.TEXT },
+      size: { type: DataTypes.BIGINT },
+      type: { type: DataTypes.STRING(20) },
+      uploadDate: { type: DataTypes.DATE },
+      seeders: { type: DataTypes.INTEGER },
+      trackers: { type: DataTypes.TEXT },
+      languages: { type: DataTypes.STRING(100) },
+      resolution: { type: DataTypes.STRING(20) }
+    },
+    {
+      sequelize,
+      modelName: 'Torrent',
+      tableName: 'torrents',
+      timestamps: false
+    }
+  );
 
 File.init(
   {

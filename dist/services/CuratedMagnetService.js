@@ -35,11 +35,37 @@ var __importStar = (this && this.__importStar) || (function () {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CuratedMagnetService = void 0;
 const logger_1 = require("../utils/logger");
+const episodeMatcher_1 = require("../lib/episodeMatcher");
 class CuratedMagnetService {
     constructor() {
         this.magnets = new Map();
+        this.isInitialized = false;
         this.logger = new logger_1.Logger('CuratedMagnetService');
-        this.initializeDefaultMagnets().catch(error => this.logger.error('Error initializing default magnets', { error: error.message }));
+        this.episodeMatcher = new episodeMatcher_1.EpisodeMatcher();
+        this.initializationPromise = this.initializeDefaultMagnets().catch(error => this.logger.error('Error initializing default magnets', { error: error.message }));
+        this.initializationPromise.then(() => {
+            this.isInitialized = true;
+            this.logger.info('CuratedMagnetService completamente inicializado', {
+                totalMagnets: this.getTotalMagnetsCount()
+            });
+        });
+    }
+    async waitForInitialization() {
+        if (this.isInitialized) {
+            return;
+        }
+        this.logger.debug('Aguardando inicialização do CuratedMagnetService...');
+        await this.initializationPromise;
+        this.logger.debug('CuratedMagnetService pronto para uso', {
+            totalMagnets: this.getTotalMagnetsCount()
+        });
+    }
+    getTotalMagnetsCount() {
+        let total = 0;
+        for (const magnets of this.magnets.values()) {
+            total += magnets.length;
+        }
+        return total;
     }
     async initializeDefaultMagnets() {
         try {
@@ -50,22 +76,34 @@ class CuratedMagnetService {
                 const data = await fs.readJson(magnetsPath);
                 if (data.magnets && Array.isArray(data.magnets)) {
                     let loadedCount = 0;
-                    data.magnets.forEach((magnet) => {
+                    let errorCount = 0;
+                    this.logger.debug('Iniciando carregamento de magnets do JSON...', {
+                        totalMagnets: data.magnets.length
+                    });
+                    for (const magnet of data.magnets) {
                         try {
-                            this.addMagnet({
+                            this.addMagnetInternal({
                                 ...magnet,
                                 addedAt: new Date(magnet.addedAt || Date.now())
                             });
                             loadedCount++;
                         }
                         catch (error) {
+                            errorCount++;
                             this.logger.warn('Skipping invalid magnet during initialization', {
-                                title: magnet.title,
+                                title: magnet.title?.substring(0, 50),
                                 error: error instanceof Error ? error.message : 'Unknown error'
                             });
                         }
+                    }
+                    this.logger.info('Default magnets initialized', {
+                        loadedCount,
+                        errorCount,
+                        totalMagnets: data.magnets.length,
+                        uniqueImdbIds: this.magnets.size
                     });
-                    this.logger.info('Default magnets initialized', { loadedCount, totalMagnets: data.magnets.length });
+                    const imdbIds = Array.from(this.magnets.keys());
+                    this.logger.debug('IMDb IDs carregados do JSON:', { imdbIds });
                 }
                 else {
                     this.logger.warn('Invalid magnets.json structure - magnets array not found');
@@ -79,6 +117,7 @@ class CuratedMagnetService {
             this.logger.error('Failed to initialize default magnets', {
                 error: error instanceof Error ? error.message : 'Unknown error'
             });
+            throw error;
         }
     }
     extractBaseImdbId(fullId) {
@@ -109,6 +148,83 @@ class CuratedMagnetService {
         }
         if (magnet.seeds < 0) {
             throw new Error('Seeds count cannot be negative');
+        }
+    }
+    doesMagnetMatchEpisode(magnetTitle, targetSeason, targetEpisode) {
+        const title = magnetTitle.toLowerCase();
+        const completeSeasonPatterns = [
+            /(\d+)\s*(?:ª|a|°|o)?\s*temporada\s*(?:completa|inteira)/i,
+            /temporada\s*(\d+)\s*(?:completa|inteira)/i,
+            /season\s*(\d+)\s*(?:complete|full)/i,
+            /s(\d+)\s*(?:complete|full)/i
+        ];
+        for (const pattern of completeSeasonPatterns) {
+            const match = title.match(pattern);
+            if (match) {
+                const seasonFromTitle = parseInt(match[1]);
+                if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
+                    return true;
+                }
+            }
+        }
+        const seasonOnlyPatterns = [
+            /(\d+)\s*(?:ª|a|°|o)?\s*temporada/i,
+            /temporada\s*(\d+)/i,
+            /season\s*(\d+)/i,
+            /s(\d+)\b(?!e\d)/i
+        ];
+        for (const pattern of seasonOnlyPatterns) {
+            const match = title.match(pattern);
+            if (match) {
+                const seasonFromTitle = parseInt(match[1]);
+                if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
+                    return true;
+                }
+            }
+        }
+        const magnetEpisodeInfo = this.episodeMatcher.extractEpisodeInfo(magnetTitle);
+        if (magnetEpisodeInfo.season !== targetSeason) {
+            return false;
+        }
+        if (magnetEpisodeInfo.episode !== 0) {
+            const rangeMatch = magnetTitle.match(/E(\d+)(?:-(\d+))?(?:-(\d+))?(?:-(\d+))?/i);
+            if (rangeMatch) {
+                const episodesInRange = [];
+                for (let i = 1; i < rangeMatch.length; i++) {
+                    if (rangeMatch[i]) {
+                        const ep = parseInt(rangeMatch[i]);
+                        if (!isNaN(ep)) {
+                            episodesInRange.push(ep);
+                        }
+                    }
+                }
+                if (episodesInRange.length > 0) {
+                    return episodesInRange.includes(targetEpisode);
+                }
+            }
+            return magnetEpisodeInfo.episode === targetEpisode;
+        }
+        return true;
+    }
+    addMagnetInternal(magnet) {
+        this.validateMagnet(magnet);
+        const baseImdbId = this.extractBaseImdbId(magnet.imdbId);
+        if (!this.magnets.has(baseImdbId)) {
+            this.magnets.set(baseImdbId, []);
+        }
+        const existingMagnets = this.magnets.get(baseImdbId);
+        const existingIndex = existingMagnets.findIndex(m => m.magnet === magnet.magnet);
+        if (existingIndex === -1) {
+            existingMagnets.push({
+                ...magnet,
+                imdbId: baseImdbId
+            });
+        }
+        else {
+            existingMagnets[existingIndex] = {
+                ...magnet,
+                imdbId: baseImdbId
+            };
         }
     }
     addMagnet(magnet) {
@@ -178,25 +294,87 @@ class CuratedMagnetService {
         return removed;
     }
     searchMagnets(request) {
-        const { id, title, imdbId } = request;
+        this.logger.debug('=== SEARCH MAGNETS START ===', {
+            requestId: request.id,
+            imdbId: request.imdbId,
+            type: request.type,
+            totalImdbIdsInCatalog: this.magnets.size,
+            totalMagnets: this.getTotalMagnetsCount()
+        });
+        const { id, title, imdbId, type } = request;
         let results = [];
         const searchId = imdbId || id;
         if (searchId) {
             const baseImdbId = this.extractBaseImdbId(searchId);
+            this.logger.debug('Procurando por IMDb ID:', {
+                originalId: searchId,
+                baseImdbId: baseImdbId,
+                hasInCatalog: this.magnets.has(baseImdbId)
+            });
             if (this.magnets.has(baseImdbId)) {
                 results = [...this.magnets.get(baseImdbId)];
                 this.logger.debug('Found magnets by IMDb ID', {
                     baseImdbId,
                     originalId: searchId,
-                    count: results.length
+                    count: results.length,
+                    titles: results.map(r => r.title.substring(0, 30))
                 });
+                if (type === 'series' && results.length > 0) {
+                    try {
+                        const extractedInfo = this.episodeMatcher.extractEpisodeFromRequest(searchId);
+                        let season = 0;
+                        let episode = 0;
+                        if (extractedInfo && typeof extractedInfo === 'object') {
+                            season = extractedInfo.season ||
+                                extractedInfo.seasonNumber ||
+                                0;
+                            episode = extractedInfo.episode ||
+                                extractedInfo.episodeNumber ||
+                                0;
+                            const isValid = season > 0 && episode > 0;
+                            if (isValid) {
+                                this.logger.debug('Filtrando por episódio específico', {
+                                    season,
+                                    episode,
+                                    totalAntes: results.length
+                                });
+                                const filteredResults = results.filter(magnet => this.doesMagnetMatchEpisode(magnet.title, season, episode));
+                                this.logger.debug('Resultados após filtro de episódio', {
+                                    antes: results.length,
+                                    depois: filteredResults.length,
+                                    episodiosEncontrados: filteredResults.map(r => r.title.substring(0, 30))
+                                });
+                                results = filteredResults;
+                                results = results.map(magnet => ({
+                                    ...magnet,
+                                    season,
+                                    episode
+                                }));
+                            }
+                        }
+                    }
+                    catch (error) {
+                        this.logger.warn('Erro ao extrair informações de episódio', {
+                            error: error instanceof Error ? error.message : String(error)
+                        });
+                    }
+                }
+            }
+            else {
+                this.logger.debug('IMDb ID não encontrado no catálogo', { baseImdbId });
             }
         }
         if (results.length === 0 && title) {
             this.logger.debug('Falling back to title search', { title });
-            for (const magnets of this.magnets.values()) {
+            for (const [imdbIdKey, magnets] of this.magnets.entries()) {
                 const matching = magnets.filter(magnet => magnet.title.toLowerCase().includes(title.toLowerCase()));
-                results.push(...matching);
+                if (matching.length > 0) {
+                    results.push(...matching);
+                    this.logger.debug('Found by title search', {
+                        imdbId: imdbIdKey,
+                        matches: matching.length
+                    });
+                }
             }
             if (results.length > 0) {
                 this.logger.debug('Found magnets by title search', {
@@ -209,7 +387,9 @@ class CuratedMagnetService {
             requestId: id,
             searchId,
             title,
-            resultsCount: results.length
+            resultsCount: results.length,
+            totalImdbIdsInCatalog: this.magnets.size,
+            hasSeasonEpisode: results.some(r => r.season !== undefined)
         });
         return this.sortByQualityAndSeeds(results);
     }

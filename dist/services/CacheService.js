@@ -6,56 +6,40 @@ class CacheService {
     constructor() {
         this.cache = new Map();
         this.logger = new logger_1.Logger('CacheService');
-        this.startCleanupInterval();
     }
-    set(key, data, ttl = 3600000) {
+    set(key, value, ttl = 3600000) {
         this.cache.set(key, {
-            data,
+            value,
             timestamp: Date.now(),
-            expiresIn: ttl
+            ttl
         });
-        this.logger.debug(`Cache set for key: ${key}`, { ttl });
+        this.logger.debug('Cache set', { key, ttl });
     }
     get(key) {
         const cached = this.cache.get(key);
         if (!cached) {
-            this.logger.debug(`Cache miss for key: ${key}`);
             return null;
         }
-        const isExpired = Date.now() - cached.timestamp > cached.expiresIn;
+        const now = Date.now();
+        const isExpired = (now - cached.timestamp) > cached.ttl;
         if (isExpired) {
             this.cache.delete(key);
-            this.logger.debug(`Cache expired for key: ${key}`);
+            this.logger.debug('Cache expired', { key });
             return null;
         }
-        this.logger.debug(`Cache hit for key: ${key}`);
-        return cached.data;
+        this.logger.debug('Cache hit', { key });
+        return cached.value;
     }
     delete(key) {
         const deleted = this.cache.delete(key);
         if (deleted) {
-            this.logger.debug(`Cache deleted for key: ${key}`);
+            this.logger.debug('Cache deleted', { key });
         }
         return deleted;
     }
     clear() {
         this.cache.clear();
         this.logger.info('Cache cleared');
-    }
-    startCleanupInterval() {
-        setInterval(() => {
-            const now = Date.now();
-            let cleanedCount = 0;
-            for (const [key, value] of this.cache.entries()) {
-                if (now - value.timestamp > value.expiresIn) {
-                    this.cache.delete(key);
-                    cleanedCount++;
-                }
-            }
-            if (cleanedCount > 0) {
-                this.logger.debug(`Cache cleanup completed`, { cleanedCount });
-            }
-        }, 300000);
     }
     getStats() {
         return {

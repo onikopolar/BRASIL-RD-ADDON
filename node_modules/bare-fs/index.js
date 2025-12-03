@@ -1866,8 +1866,8 @@ class Dir {
 }
 
 class Dirent {
-  constructor(path, name, type) {
-    this.path = path
+  constructor(parentPath, name, type) {
+    this.parentPath = parentPath
     this.name = name
     this.type = type
   }

@@ -38,8 +38,7 @@ interface Callback<A extends unknown[] = []> {
 }
 
 export interface Dir<T extends string | Buffer = string | Buffer>
-  extends Iterable<Dirent>,
-    AsyncIterable<Dirent> {
+  extends Iterable<Dirent>, AsyncIterable<Dirent> {
   readonly path: string
 
   read(): Promise<Dirent<T> | null>
@@ -172,7 +171,8 @@ export interface WatcherEvents<T extends string | Buffer = string | Buffer> exte
 }
 
 export interface Watcher<T extends string | Buffer = string | Buffer>
-  extends EventEmitter<WatcherEvents<T>>,
+  extends
+    EventEmitter<WatcherEvents<T>>,
     AsyncIterable<{ eventType: WatcherEventType; filename: T }> {
   close(): void
   ref(): void

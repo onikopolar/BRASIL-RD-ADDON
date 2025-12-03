@@ -1,7 +1,7 @@
 export interface Stream {
   title: string;
   name: string;
-  description?: string;
+  description: string;
   sources: string[];
   behaviorHints?: {
     notWebReady?: boolean;
@@ -12,41 +12,8 @@ export interface Stream {
   torrentId?: string;
   infoHash?: string;
   fileIdx?: number;
-}
-
-export interface RDTorrentInfo {
-  id: string;
-  filename: string;
-  original_filename: string;
-  hash: string;
-  bytes: number;
-  original_bytes: number;
-  host: string;
-  split: number;
-  progress: number;
-  status: string;
-  added: string;
-  files?: RDFile[];
-  links?: string[];
-}
-
-export interface RDFile {
-  id: number;
-  path: string;
-  bytes: number;
-  selected: number;
-}
-
-export interface CuratedMagnet {
-  imdbId: string;
-  title: string;
-  magnet: string;
-  quality: '4K' | '1080p' | '720p' | 'SD';
-  seeds: number;
-  size?: string;  // ← ADICIONAR ESTE CAMPO (opcional)
-  addedAt: Date;
-  category: string;
-  language: 'pt-BR' | 'pt' | 'en';
+  magnet?: string;
+  url?: string;
 }
 
 export interface StreamRequest {
@@ -60,7 +27,6 @@ export interface StreamRequest {
     language?: string;
     streamType?: string;
     maxResults?: string;
-    // Novas propriedades para otimização
     enableAggressiveSearch?: boolean;
     minSeeders?: number;
     requireExactMatch?: boolean;
@@ -68,8 +34,39 @@ export interface StreamRequest {
   };
 }
 
-export interface CacheData<T> {
-  data: T;
+export interface CuratedMagnet {
+  imdbId: string;
+  title: string;
+  magnet: string;
+  quality: string;
+  seeds: number;
+  size?: string;
+  category: string;
+  language: string;
+  addedAt: string;
+  season?: number;      // ✅ NOVO: Temporada (para séries)
+  episode?: number;     // ✅ NOVO: Episódio (para séries)
+}
+
+export interface RDFile {
+  id: number;
+  path: string;
+  bytes: number;
+  selected: number;
+}
+
+export interface CacheData<T = any> {
+  value: T;
   timestamp: number;
-  expiresIn: number;
+  ttl: number;
+}
+
+export interface RDTorrentInfo {
+  id: string;
+  filename: string;
+  status: string;
+  progress: number;
+  files: RDFile[];
+  links?: string[];
+  hash?: string;
 }

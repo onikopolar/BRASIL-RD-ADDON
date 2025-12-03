@@ -7,41 +7,41 @@ export class CacheService {
 
   constructor() {
     this.logger = new Logger('CacheService');
-    this.startCleanupInterval();
   }
 
-  set<T>(key: string, data: T, ttl: number = 3600000): void {
+  set<T>(key: string, value: T, ttl: number = 3600000): void {
     this.cache.set(key, {
-      data,
+      value,
       timestamp: Date.now(),
-      expiresIn: ttl
+      ttl
     });
-    this.logger.debug(`Cache set for key: ${key}`, { ttl });
+    this.logger.debug('Cache set', { key, ttl });
   }
 
   get<T>(key: string): T | null {
     const cached = this.cache.get(key);
-
+    
     if (!cached) {
-      this.logger.debug(`Cache miss for key: ${key}`);
       return null;
     }
 
-    const isExpired = Date.now() - cached.timestamp > cached.expiresIn;
+    const now = Date.now();
+    const isExpired = (now - cached.timestamp) > cached.ttl;
+
     if (isExpired) {
       this.cache.delete(key);
-      this.logger.debug(`Cache expired for key: ${key}`);
+      this.logger.debug('Cache expired', { key });
       return null;
     }
 
-    this.logger.debug(`Cache hit for key: ${key}`);
-    return cached.data;
+    this.logger.debug('Cache hit', { key });
+    return cached.value;
   }
 
   delete(key: string): boolean {
     const deleted = this.cache.delete(key);
     if (deleted) {
-      this.logger.debug(`Cache deleted for key: ${key}`);
+      this.logger.debug('Cache deleted', { key });
     }
     return deleted;
   }
@@ -49,25 +49,6 @@ export class CacheService {
   clear(): void {
     this.cache.clear();
     this.logger.info('Cache cleared');
-  }
-
-  private startCleanupInterval(): void {
-    // Limpa cache expirado a cada 5 minutos
-    setInterval(() => {
-      const now = Date.now();
-      let cleanedCount = 0;
-
-      for (const [key, value] of this.cache.entries()) {
-        if (now - value.timestamp > value.expiresIn) {
-          this.cache.delete(key);
-          cleanedCount++;
-        }
-      }
-
-      if (cleanedCount > 0) {
-        this.logger.debug(`Cache cleanup completed`, { cleanedCount });
-      }
-    }, 300000); // 5 minutos
   }
 
   getStats(): { size: number; keys: string[] } {
