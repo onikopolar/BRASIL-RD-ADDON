@@ -32,6 +32,16 @@ export const scraperProviders: ScraperProvider[] = [
         timeout: 10000,
         usesAPI: true,
         apiEndpoint: '/wp-json/wp/v2/posts'
+    },
+    {
+        name: 'Comando Torrents',
+        baseUrl: 'https://comando.la',
+        searchPath: '/?s=',
+        itemSelector: '.single-view, .blog-view',
+        titleSelector: 'h1.entry-title a, h2.entry-title a',
+        linkSelector: 'h1.entry-title a, h2.entry-title a',
+        priority: 3,
+        timeout: 8000
     }
 ];
 

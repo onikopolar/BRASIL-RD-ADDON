@@ -23,7 +23,7 @@ interface MagnetData {
   imdbEpisode?: number;
   imdbTitle?: string;
   matchedImdbTitle?: string;     // Qual título do IMDB que deu match
-  matchedLanguage?: 'original' | 'portuguese'; // Idioma do título que deu match
+  matchedLanguage?: 'original' | 'português'; // Idioma do título que deu match - CORRIGIDO
 }
 
 interface AutoMagnetResult {
@@ -36,7 +36,7 @@ interface AutoMagnetResult {
     seasonMatches?: boolean;
     episodeMatches?: boolean;
     matchedTitle?: string;
-    matchedLanguage?: 'original' | 'portuguese';
+    matchedLanguage?: 'original' | 'português'; // CORRIGIDO
     reason?: string;
   };
 }
@@ -176,7 +176,7 @@ export class AutoMagnetService {
 
       if (saved) {
         let validationMessage = '✅ Título validado com IMDB';
-        if (titleMatchResult.matchedLanguage === 'portuguese') {
+        if (titleMatchResult.matchedLanguage === 'português') { // CORRIGIDO
           validationMessage += ' (via título em português)';
         }
         
@@ -707,7 +707,7 @@ export class AutoMagnetService {
 
       if (valid) {
         reason = `✅ Título válido: "${torrentTitle}" → "${matchResult.matchedTitle}"`;
-        if (matchResult.matchedLanguage === 'portuguese') {
+        if (matchResult.matchedLanguage === 'português') { // CORRIGIDO
           reason += ' (via título em português)';
         }
         if (torrentMetadata.season) reason += ` S${torrentMetadata.season}`;

@@ -29,7 +29,8 @@ class StreamHandler {
             totalRequests: 0,
             servedFromDatabase: 0,
             servedFromCatalog: 0,
-            servedFromScraping: 0
+            servedFromScraping: 0,
+            duplicatesRemoved: 0
         };
         this.rdService = new RealDebridService_1.RealDebridService();
         this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
@@ -44,6 +45,56 @@ class StreamHandler {
         this.streamFormatter = new streamFormatter_1.StreamFormatter();
         this.catalogProvider = new catalogProvider_1.CatalogProvider(this.magnetService);
     }
+    deduplicateStreamsByInfoHash(streams) {
+        const seenHashes = new Set();
+        const uniqueStreams = [];
+        for (const stream of streams) {
+            let infoHash;
+            if (stream.infoHash) {
+                infoHash = stream.infoHash.toLowerCase();
+            }
+            else if (stream.sources && stream.sources[0]) {
+                const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
+                if (magnetMatch) {
+                    infoHash = magnetMatch[1].toLowerCase();
+                }
+            }
+            if (!infoHash) {
+                const fallbackKey = `${stream.title}|${stream.name}`.toLowerCase();
+                if (seenHashes.has(fallbackKey)) {
+                    this.logger.debug('Stream duplicado ignorado (fallback)', {
+                        title: stream.title,
+                        reason: 'Duplicata por título/qualidade'
+                    });
+                    this.stats.duplicatesRemoved++;
+                    continue;
+                }
+                seenHashes.add(fallbackKey);
+                uniqueStreams.push(stream);
+            }
+            else if (seenHashes.has(infoHash)) {
+                this.logger.debug('Stream duplicado ignorado', {
+                    title: stream.title,
+                    infoHash: infoHash.substring(0, 8) + '...',
+                    reason: 'Duplicata por infoHash'
+                });
+                this.stats.duplicatesRemoved++;
+                continue;
+            }
+            else {
+                seenHashes.add(infoHash);
+                uniqueStreams.push(stream);
+            }
+        }
+        if (streams.length !== uniqueStreams.length) {
+            this.logger.info('Deduplicação de streams concluída', {
+                antes: streams.length,
+                depois: uniqueStreams.length,
+                duplicatasRemovidas: streams.length - uniqueStreams.length
+            });
+        }
+        return uniqueStreams;
+    }
     async handleStreamRequest(request) {
         const requestId = request.id;
         const requestStartTime = Date.now();
@@ -56,22 +107,25 @@ class StreamHandler {
             const imdbId = this.extractImdbIdFromRequest(request);
             const dbResult = await this.getStreamsFromDatabase(request);
             if (dbResult.success && dbResult.streams.length > 0) {
+                const dedupedStreams = this.deduplicateStreamsByInfoHash(dbResult.streams);
                 this.stats.servedFromDatabase++;
-                return { streams: dbResult.streams };
+                return { streams: dedupedStreams };
             }
             const catalogResult = await this.getStreamsFromCatalog(request);
             if (catalogResult.success && catalogResult.streams.length > 0) {
+                const dedupedStreams = this.deduplicateStreamsByInfoHash(catalogResult.streams);
                 this.stats.servedFromCatalog++;
-                return { streams: catalogResult.streams };
+                return { streams: dedupedStreams };
             }
             const shouldScrape = await this.shouldAttemptScraping(request);
             if (!shouldScrape) {
                 return { streams: [] };
             }
             const scrapingResult = await this.processStreamRequest(request);
-            await this.updateScrapingCache(request, scrapingResult.length > 0);
-            this.stats.servedFromScraping += scrapingResult.length > 0 ? 1 : 0;
-            return { streams: scrapingResult };
+            const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
+            await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
+            this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
+            return { streams: dedupedScrapingResult };
         }
         catch (error) {
             this.logger.error('Falha no processamento de stream', {
@@ -298,7 +352,8 @@ class StreamHandler {
             if (torrentResults.length === 0) {
                 return [];
             }
-            const filteredTorrents = await this.filterAndValidateTorrents(torrentResults, imdbId, request, episodeInfo, imdbTitles);
+            const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+            const filteredTorrents = await this.filterAndValidateTorrents(deduplicatedTorrents, imdbId, request, episodeInfo, imdbTitles);
             if (filteredTorrents.valid.length === 0) {
                 return [];
             }
@@ -309,6 +364,27 @@ class StreamHandler {
         catch (error) {
             return [];
         }
+    }
+    deduplicateTorrentsByMagnet(torrents) {
+        const seenMagnets = new Set();
+        const uniqueTorrents = [];
+        for (const torrent of torrents) {
+            const magnetHash = (0, magnetHelper_1.extractHashFromMagnet)(torrent.magnet);
+            if (magnetHash) {
+                if (seenMagnets.has(magnetHash.toLowerCase())) {
+                    continue;
+                }
+                seenMagnets.add(magnetHash.toLowerCase());
+            }
+            uniqueTorrents.push(torrent);
+        }
+        if (torrents.length !== uniqueTorrents.length) {
+            this.logger.debug('Torrents deduplicados no scraping', {
+                antes: torrents.length,
+                depois: uniqueTorrents.length
+            });
+        }
+        return uniqueTorrents;
     }
     async filterAndValidateTorrents(torrents, imdbId, request, episodeInfo, imdbTitles = null) {
         const valid = [];
@@ -445,8 +521,9 @@ class StreamHandler {
             if (torrentResults.length === 0) {
                 return null;
             }
+            const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
             const episodeInfo = { season, episode, isValid: true };
-            const filteredTorrents = await this.filterAndValidateTorrents(torrentResults, imdbId, request, episodeInfo, imdbTitles);
+            const filteredTorrents = await this.filterAndValidateTorrents(deduplicatedTorrents, imdbId, request, episodeInfo, imdbTitles);
             if (filteredTorrents.valid.length === 0) {
                 return null;
             }
@@ -507,6 +584,7 @@ class StreamHandler {
             servedFromDatabase: this.stats.servedFromDatabase,
             servedFromCatalog: this.stats.servedFromCatalog,
             servedFromScraping: this.stats.servedFromScraping,
+            duplicatesRemoved: this.stats.duplicatesRemoved,
             scrapingCacheSize: this.scrapingCache.size
         };
     }

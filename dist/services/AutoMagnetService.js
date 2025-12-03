@@ -106,7 +106,7 @@ class AutoMagnetService {
             const saved = await this.saveToDatabase(magnetData, imdbTitles);
             if (saved) {
                 let validationMessage = '✅ Título validado com IMDB';
-                if (titleMatchResult.matchedLanguage === 'portuguese') {
+                if (titleMatchResult.matchedLanguage === 'português') {
                     validationMessage += ' (via título em português)';
                 }
                 if (type === 'series' && torrentSeason) {
@@ -504,7 +504,7 @@ class AutoMagnetService {
             const valid = matchResult.matches && seasonMatch && episodeMatch;
             if (valid) {
                 reason = `✅ Título válido: "${torrentTitle}" → "${matchResult.matchedTitle}"`;
-                if (matchResult.matchedLanguage === 'portuguese') {
+                if (matchResult.matchedLanguage === 'português') {
                     reason += ' (via título em português)';
                 }
                 if (torrentMetadata.season)

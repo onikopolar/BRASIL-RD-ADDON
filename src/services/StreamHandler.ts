@@ -76,7 +76,8 @@ export class StreamHandler {
     totalRequests: 0,
     servedFromDatabase: 0,
     servedFromCatalog: 0,
-    servedFromScraping: 0
+    servedFromScraping: 0,
+    duplicatesRemoved: 0
   };
 
   constructor() {
@@ -94,6 +95,70 @@ export class StreamHandler {
     this.titleFilter = new TitleFilter();
     this.streamFormatter = new StreamFormatter();
     this.catalogProvider = new CatalogProvider(this.magnetService);
+  }
+
+  // ==================== MÉTODO DE DEDUPLICAÇÃO ====================
+
+  /**
+   * Remove streams duplicados com base no infoHash
+   * @param streams Lista de streams a serem deduplicados
+   * @returns Lista de streams únicos
+   */
+  private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
+    const seenHashes = new Set<string>();
+    const uniqueStreams: Stream[] = [];
+    
+    for (const stream of streams) {
+      // Extrair infoHash do magnet link ou do campo infoHash
+      let infoHash: string | undefined;
+      
+      if (stream.infoHash) {
+        infoHash = stream.infoHash.toLowerCase();
+      } else if (stream.sources && stream.sources[0]) {
+        // Tentar extrair do magnet link no sources
+        const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
+        if (magnetMatch) {
+          infoHash = magnetMatch[1].toLowerCase();
+        }
+      }
+      
+      // Se não tem infoHash ou já vimos este, pular
+      if (!infoHash) {
+        // Se não temos infoHash, usamos título e qualidade como fallback
+        const fallbackKey = `${stream.title}|${stream.name}`.toLowerCase();
+        if (seenHashes.has(fallbackKey)) {
+          this.logger.debug('Stream duplicado ignorado (fallback)', {
+            title: stream.title,
+            reason: 'Duplicata por título/qualidade'
+          });
+          this.stats.duplicatesRemoved++;
+          continue;
+        }
+        seenHashes.add(fallbackKey);
+        uniqueStreams.push(stream);
+      } else if (seenHashes.has(infoHash)) {
+        this.logger.debug('Stream duplicado ignorado', {
+          title: stream.title,
+          infoHash: infoHash.substring(0, 8) + '...',
+          reason: 'Duplicata por infoHash'
+        });
+        this.stats.duplicatesRemoved++;
+        continue;
+      } else {
+        seenHashes.add(infoHash);
+        uniqueStreams.push(stream);
+      }
+    }
+    
+    if (streams.length !== uniqueStreams.length) {
+      this.logger.info('Deduplicação de streams concluída', {
+        antes: streams.length,
+        depois: uniqueStreams.length,
+        duplicatasRemovidas: streams.length - uniqueStreams.length
+      });
+    }
+    
+    return uniqueStreams;
   }
 
   // ==================== HANDLER PRINCIPAL ====================
@@ -116,15 +181,17 @@ export class StreamHandler {
       // 1. BANCO DE DADOS (PRIMEIRO)
       const dbResult = await this.getStreamsFromDatabase(request);
       if (dbResult.success && dbResult.streams.length > 0) {
+        const dedupedStreams = this.deduplicateStreamsByInfoHash(dbResult.streams);
         this.stats.servedFromDatabase++;
-        return { streams: dbResult.streams };
+        return { streams: dedupedStreams };
       }
 
       // 2. CATÁLOGO JSON (SEGUNDO)
       const catalogResult = await this.getStreamsFromCatalog(request);
       if (catalogResult.success && catalogResult.streams.length > 0) {
+        const dedupedStreams = this.deduplicateStreamsByInfoHash(catalogResult.streams);
         this.stats.servedFromCatalog++;
-        return { streams: catalogResult.streams };
+        return { streams: dedupedStreams };
       }
 
       // 3. SCRAPING (ÚLTIMO RECURSO)
@@ -134,13 +201,14 @@ export class StreamHandler {
       }
 
       const scrapingResult = await this.processStreamRequest(request);
+      const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
       
       // Atualizar cache de scraping
-      await this.updateScrapingCache(request, scrapingResult.length > 0);
+      await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
       
-      this.stats.servedFromScraping += scrapingResult.length > 0 ? 1 : 0;
+      this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
       
-      return { streams: scrapingResult };
+      return { streams: dedupedScrapingResult };
 
     } catch (error) {
       this.logger.error('Falha no processamento de stream', {
@@ -431,8 +499,11 @@ export class StreamHandler {
         return [];
       }
 
+      // FILTRO DE DEDUPLICAÇÃO NO SCRAPING (Nível 2)
+      const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+      
       const filteredTorrents = await this.filterAndValidateTorrents(
-        torrentResults,
+        deduplicatedTorrents,
         imdbId,
         request,
         episodeInfo,
@@ -461,6 +532,34 @@ export class StreamHandler {
     } catch (error) {
       return [];
     }
+  }
+
+  /**
+   * Deduplica torrents por magnet link (Nível 2 de deduplicação)
+   */
+  private deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): ScrapedTorrent[] {
+    const seenMagnets = new Set<string>();
+    const uniqueTorrents: ScrapedTorrent[] = [];
+    
+    for (const torrent of torrents) {
+      const magnetHash = extractHashFromMagnet(torrent.magnet);
+      if (magnetHash) {
+        if (seenMagnets.has(magnetHash.toLowerCase())) {
+          continue;
+        }
+        seenMagnets.add(magnetHash.toLowerCase());
+      }
+      uniqueTorrents.push(torrent);
+    }
+    
+    if (torrents.length !== uniqueTorrents.length) {
+      this.logger.debug('Torrents deduplicados no scraping', {
+        antes: torrents.length,
+        depois: uniqueTorrents.length
+      });
+    }
+    
+    return uniqueTorrents;
   }
 
   private async filterAndValidateTorrents(
@@ -676,9 +775,12 @@ export class StreamHandler {
         return null;
       }
 
+      // Aplicar deduplicação também aqui
+      const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+      
       const episodeInfo = { season, episode, isValid: true };
       const filteredTorrents = await this.filterAndValidateTorrents(
-        torrentResults,
+        deduplicatedTorrents,
         imdbId,
         request,
         episodeInfo,
@@ -759,6 +861,7 @@ export class StreamHandler {
       servedFromDatabase: this.stats.servedFromDatabase,
       servedFromCatalog: this.stats.servedFromCatalog,
       servedFromScraping: this.stats.servedFromScraping,
+      duplicatesRemoved: this.stats.duplicatesRemoved,
       scrapingCacheSize: this.scrapingCache.size
     };
   }
