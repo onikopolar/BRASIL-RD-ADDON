@@ -1,11 +1,14 @@
 import express from 'express';
 import cors from 'cors';
+import path from 'path';
 import { sequelize } from './database/models';
 import { manifest } from './arquivos-serverts/manifest';
 import { configureTemplate } from './arquivos-serverts/configureTemplate';
 import { createStremioBuilder, getStremioRouter } from './arquivos-serverts/streamHandlerBuilder';
 import { setupBasicRoutes } from './arquivos-serverts/basicRoutes';
 import { setupResolveRoutes } from './arquivos-serverts/resolveRoutes';
+import { setupStaticRoutes } from './arquivos-serverts/staticRoutes';
+import { setupDemoStaticRoutes } from './arquivos-serverts/demoStaticRoutes';
 import { createServer } from './arquivos-serverts/serverFunctions';
 import { CacheService } from './services/CacheService';
 import { Logger } from './utils/logger';
@@ -21,19 +24,24 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 horas
 app.use(cors());
 app.use(express.json());
 
-// Inicialização do Banco de Dados - CRÍTICO
+// Servir vídeos informativos da pasta src/videos
+const videosPath = path.join(__dirname, 'videos');
+app.use('/videos', express.static(videosPath));
+app.use('/static/videos', express.static(videosPath));
+
+logger.info('Servindo vídeos informativos', {
+  videoPath: videosPath,
+  endpoints: ['/videos/*.mp4', '/static/videos/*.mp4']
+});
+
+// Inicialização do Banco de Dados
 async function initializeDatabase() {
     try {
         logger.info('Iniciando sincronização do banco de dados...');
         
-        // Opções de sincronização:
-        // { force: true } - RECRIAR TABELAS (PERDE DADOS) - APENAS DESENVOLVIMENTO
-        // { alter: true } - ALTERAR TABELAS EXISTENTES (MANTÉM DADOS) - PRODUÇÃO
-        // {} - APENAS CRIA SE NÃO EXISTIR (MAIS SEGURO)
-        
         const syncOptions = process.env.NODE_ENV === 'development' 
-            ? { alter: true }  // Desenvolvimento: ajusta tabelas mantendo dados
-            : {};              // Produção: apenas cria se não existir (mais seguro)
+            ? { alter: true }
+            : {};
             
         await sequelize.sync(syncOptions);
         
@@ -43,7 +51,6 @@ async function initializeDatabase() {
             environment: process.env.NODE_ENV || 'production'
         });
         
-        // Verificação adicional de conexão
         await sequelize.authenticate();
         logger.info('Conexão com banco de dados estabelecida');
         
@@ -54,11 +61,9 @@ async function initializeDatabase() {
             action: 'Verifique as credenciais do banco e se o PostgreSQL está rodando'
         });
         
-        // Em produção, podemos continuar sem banco? Depende da sua arquitetura
         if (process.env.NODE_ENV === 'production') {
             logger.warn('Continuando sem banco de dados - funcionalidades limitadas');
         } else {
-            // Em desenvolvimento, é melhor falhar explicitamente
             throw error;
         }
     }
@@ -82,7 +87,7 @@ app.get('/configure', (req: any, res: any) => {
 // Função principal de inicialização
 async function startServer() {
     try {
-        // 1. Inicializar banco de dados (CRÍTICO)
+        // 1. Inicializar banco de dados
         await initializeDatabase();
         
         // 2. Configurar sistema Stremio
@@ -95,10 +100,30 @@ async function startServer() {
         // 4. Configurar rotas customizadas
         setupBasicRoutes(app, manifest);
         setupResolveRoutes(app);
+        setupStaticRoutes(app);
+        setupDemoStaticRoutes(app);
         
         // 5. Iniciar servidor HTTP/HTTPS
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
+        
+        logger.info('Servidor inicializado com sucesso', {
+            port,
+            features: [
+                'Stremio Addon',
+                'Real-Debrid Integration',
+                'Static Response System com Vídeos',
+                'Database Support',
+                'Caching System',
+                'Demo Interface'
+            ],
+            video_endpoints: [
+                '/videos/downloading_v2.mp4',
+                '/videos/download_failed_v2.mp4',
+                '/videos/failed_access_v2.mp4',
+                '/static/videos/*.mp4'
+            ]
+        });
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
@@ -107,7 +132,7 @@ async function startServer() {
             stack: error instanceof Error ? error.stack : undefined
         });
         
-        process.exit(1); // Encerra o processo com erro
+        process.exit(1);
     }
 }
 

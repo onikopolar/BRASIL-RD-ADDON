@@ -4,12 +4,43 @@ exports.setupResolveRoutes = void 0;
 const AutoMagnetService_1 = require("../services/AutoMagnetService");
 const RealDebridService_1 = require("../services/RealDebridService");
 const CacheService_1 = require("../services/CacheService");
+const StaticResponseService_1 = require("../services/StaticResponseService");
 const logger_1 = require("../utils/logger");
 const statusHelpers_1 = require("./statusHelpers");
 const logger = new logger_1.Logger('ResolveRoutes');
 const autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
 const cacheService = new CacheService_1.CacheService();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+function createStreamFromStaticResponse(staticResponseService, staticResponse, requestId, season, episode) {
+    const informativeStream = staticResponseService.createInformativeStream(staticResponse, requestId);
+    const infoHash = `info-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    let titleSuffix = '';
+    if (season !== undefined && episode !== undefined) {
+        titleSuffix = ` S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
+    }
+    const stream = {
+        title: `${informativeStream.title}${titleSuffix}`,
+        name: `${informativeStream.name}${titleSuffix}`,
+        description: informativeStream.description,
+        url: informativeStream.url,
+        behaviorHints: {
+            notWebReady: informativeStream.behaviorHints?.notWebReady || false,
+            bingeGroup: `br-info-${staticResponse}`
+        },
+        status: 'available',
+        infoHash: infoHash,
+        magnet: `brasilrd://info/${infoHash}`,
+        sources: [`brasilrd://info/${infoHash}`]
+    };
+    logger.info('Stream informativo criado (resolve)', {
+        staticResponse,
+        requestId,
+        videoUrl: stream.url,
+        notWebReady: stream.behaviorHints.notWebReady,
+        hasSeasonEpisode: season !== undefined
+    });
+    return stream;
+}
 const setupResolveRoutes = (app) => {
     app.get('/resolve/:magnet', async (req, res) => {
         const encodedMagnet = req.params.magnet;
@@ -86,24 +117,54 @@ const setupResolveRoutes = (app) => {
                 return res.redirect(302, rdResult.streamLink);
             }
             else if (rdResult.status === 'downloading' || rdResult.status === 'queued' || rdResult.status === 'magnet_conversion') {
-                logger.info('Conteúdo em processamento no Real-Debrid', {
+                logger.info('Retornando stream informativo - conteúdo em processamento', {
                     status: rdResult.status,
-                    message: rdResult.message,
                     season,
                     episode,
                     type,
-                    estimatedTime: isSeries ? '1-3 minutos' : '2-5 minutos'
+                    responseType: 'stream_informative_video'
                 });
-                return res.json({
-                    success: true,
+                const statusMap = {
+                    'downloading': StaticResponseService_1.StaticResponse.DOWNLOADING,
+                    'queued': StaticResponseService_1.StaticResponse.DOWNLOADING,
+                    'magnet_conversion': StaticResponseService_1.StaticResponse.DOWNLOADING,
+                    'uploading': StaticResponseService_1.StaticResponse.DOWNLOADING,
+                    'waiting_files_selection': StaticResponseService_1.StaticResponse.DOWNLOADING
+                };
+                const staticResponse = statusMap[rdResult.status] || StaticResponseService_1.StaticResponse.DOWNLOADING;
+                const requestId = `resolve-${Date.now()}`;
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+                const stream = createStreamFromStaticResponse(staticResponseService, staticResponse, requestId, season, episode);
+                stream.description += `\n\nStatus Real-Debrid: ${rdResult.status}`;
+                if (rdResult.message) {
+                    stream.description += `\nDetalhes: ${rdResult.message}`;
+                }
+                logger.info('Stream informativo criado (resolve endpoint)', {
+                    staticResponse,
+                    rdStatus: rdResult.status,
+                    title: stream.title,
+                    url: stream.url,
+                    baseUrl: baseUrl,
+                    notWebReady: stream.behaviorHints?.notWebReady,
+                    hasSeasonEpisode: season !== undefined
+                });
+                return res.json({ streams: [stream] });
+            }
+            else if (rdResult.status === 'error' || rdResult.status === 'dead') {
+                logger.warn('Erro no Real-Debrid - retornando stream informativo de erro', {
                     status: rdResult.status,
-                    message: rdResult.message || 'Conteúdo está sendo preparado...',
-                    action: 'refresh',
-                    estimatedTime: isSeries ? '1-3 minutos' : '2-5 minutos',
-                    isSeries,
-                    targetSeason: season,
-                    targetEpisode: episode
+                    message: rdResult.message
                 });
+                const staticResponse = StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD;
+                const requestId = `resolve-error-${Date.now()}`;
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+                const stream = createStreamFromStaticResponse(staticResponseService, staticResponse, requestId, season, episode);
+                if (rdResult.message) {
+                    stream.description += `\n\nDetalhes: ${rdResult.message}`;
+                }
+                return res.json({ streams: [stream] });
             }
             else {
                 logger.error('Status do Real-Debrid não reconhecido', {
@@ -113,7 +174,12 @@ const setupResolveRoutes = (app) => {
                     episode,
                     type
                 });
-                throw new Error(`Status do Real-Debrid não suportado: ${rdResult.status}`);
+                const requestId = `resolve-unknown-${Date.now()}`;
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+                const stream = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, requestId, season, episode);
+                stream.description += `\n\nStatus desconhecido: ${rdResult.status}`;
+                return res.json({ streams: [stream] });
             }
         }
         catch (error) {
@@ -124,14 +190,14 @@ const setupResolveRoutes = (app) => {
                 episode,
                 type
             });
-            res.status(500).json({
-                success: false,
-                error: 'Falha ao resolver o stream: ' + (error instanceof Error ? error.message : 'Unknown error'),
-                action: 'retry',
-                isSeries: season !== undefined,
-                targetSeason: season,
-                targetEpisode: episode
-            });
+            const requestId = `resolve-catch-${Date.now()}`;
+            const baseUrl = `${req.protocol}://${req.get('host')}`;
+            const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+            const stream = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, requestId, season, episode);
+            if (error instanceof Error) {
+                stream.description += `\n\nErro: ${error.message}`;
+            }
+            return res.json({ streams: [stream] });
         }
     });
     app.get('/resolve/:magnet/status', async (req, res) => {
@@ -197,6 +263,18 @@ const setupResolveRoutes = (app) => {
                 targetEpisode: episode
             });
         }
+    });
+    logger.info('Rotas de resolução configuradas', {
+        endpoints: [
+            'GET /resolve/{magnet}?apiKey={key}&[season]&[episode]&[type]',
+            'GET /resolve/{magnet}/status?apiKey={key}&[season]&[episode]'
+        ],
+        features: [
+            'Cache inteligente 24h',
+            'Streams informativos com vídeos reais (URL base dinâmica)',
+            'Suporte a filmes e séries',
+            'Verificação de status em tempo real'
+        ]
     });
 };
 exports.setupResolveRoutes = setupResolveRoutes;

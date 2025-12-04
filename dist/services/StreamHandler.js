@@ -17,8 +17,10 @@ const episodeMatcher_1 = require("../lib/episodeMatcher");
 const titleFilter_1 = require("../lib/titleFilter");
 const streamFormatter_1 = require("../lib/streamFormatter");
 const catalogProvider_1 = require("../providers/catalogProvider");
+const StaticResponseService_1 = require("./StaticResponseService");
+const StreamStatusException_1 = require("./StreamStatusException");
 class StreamHandler {
-    constructor() {
+    constructor(baseUrl) {
         this.processingConfig = {
             maxConcurrentTorrents: 3,
             delayBetweenTorrents: 800
@@ -30,20 +32,26 @@ class StreamHandler {
             servedFromDatabase: 0,
             servedFromCatalog: 0,
             servedFromScraping: 0,
-            duplicatesRemoved: 0
+            duplicatesRemoved: 0,
+            servedInformativeStreams: 0
         };
-        this.rdService = new RealDebridService_1.RealDebridService();
+        this.rdService = new RealDebridService_1.RealDebridService(baseUrl);
         this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
         this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
         this.cacheService = new CacheService_1.CacheService();
         this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.logger = new logger_1.Logger('StreamHandler');
+        this.staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.episodeMatcher = new episodeMatcher_1.EpisodeMatcher();
         this.titleFilter = new titleFilter_1.TitleFilter();
         this.streamFormatter = new streamFormatter_1.StreamFormatter();
         this.catalogProvider = new catalogProvider_1.CatalogProvider(this.magnetService);
+    }
+    setStaticResponseBaseUrl(baseUrl) {
+        this.staticResponseService.setBaseUrl(baseUrl);
+        this.rdService.setStaticResponseBaseUrl(baseUrl);
     }
     deduplicateStreamsByInfoHash(streams) {
         const seenHashes = new Set();
@@ -119,21 +127,80 @@ class StreamHandler {
             }
             const shouldScrape = await this.shouldAttemptScraping(request);
             if (!shouldScrape) {
+                const informativeStream = this.createInformativeStreamIfNoContent(request);
+                if (informativeStream) {
+                    return { streams: [informativeStream] };
+                }
                 return { streams: [] };
             }
-            const scrapingResult = await this.processStreamRequest(request);
-            const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
-            await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
-            this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
-            return { streams: dedupedScrapingResult };
+            try {
+                const scrapingResult = await this.processStreamRequest(request);
+                const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
+                await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
+                this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
+                return { streams: dedupedScrapingResult };
+            }
+            catch (error) {
+                if (error instanceof StreamStatusException_1.StreamStatusException) {
+                    this.logger.info('Capturando StreamStatusException', {
+                        requestId,
+                        staticResponse: error.staticResponse,
+                        rdStatus: error.rdStatus,
+                        progress: error.progress
+                    });
+                    const informativeStream = this.createInformativeStreamFromException(error, requestId);
+                    this.stats.servedInformativeStreams++;
+                    return { streams: [informativeStream] };
+                }
+                throw error;
+            }
         }
         catch (error) {
             this.logger.error('Falha no processamento de stream', {
                 requestId,
                 error: error instanceof Error ? error.message : 'Unknown error'
             });
-            return { streams: [] };
+            if (error instanceof StreamStatusException_1.StreamStatusException) {
+                const informativeStream = this.createInformativeStreamFromException(error, requestId);
+                this.stats.servedInformativeStreams++;
+                return { streams: [informativeStream] };
+            }
+            const errorStream = this.staticResponseService.createInformativeStream(StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, requestId);
+            return { streams: [this.convertToStreamFormat(errorStream)] };
         }
+    }
+    createInformativeStreamFromException(exception, requestId) {
+        const informativeStream = this.staticResponseService.createInformativeStream(exception.staticResponse, requestId);
+        return this.convertToStreamFormat(informativeStream);
+    }
+    createInformativeStreamIfNoContent(request) {
+        if (request.type === 'series') {
+            const episodeInfo = this.episodeMatcher.extractEpisodeFromMultipleSources(request.id);
+            if (episodeInfo.isValid) {
+                const informativeStream = this.staticResponseService.createInformativeStream(StaticResponseService_1.StaticResponse.DOWNLOADING, `S${episodeInfo.season}E${episodeInfo.episode}`);
+                return this.convertToStreamFormat(informativeStream);
+            }
+        }
+        const informativeStream = this.staticResponseService.createInformativeStream(StaticResponseService_1.StaticResponse.DOWNLOADING, request.id);
+        return this.convertToStreamFormat(informativeStream);
+    }
+    convertToStreamFormat(informativeStream) {
+        const infoHash = `info-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+        const stream = {
+            title: informativeStream.title || 'Brasil RD - Informação',
+            name: informativeStream.name || 'Brasil RD - Mensagem Informativa',
+            description: informativeStream.description || 'Mensagem informativa do addon Brasil RD',
+            url: informativeStream.url || 'data:text/plain,Brasil%20RD%20-%20Mensagem%20informativa',
+            behaviorHints: {
+                notWebReady: true,
+                bingeGroup: 'br-info'
+            },
+            status: 'available',
+            infoHash: infoHash,
+            magnet: `brasilrd://info/${infoHash}`,
+            sources: [`brasilrd://info/${infoHash}`]
+        };
+        return stream;
     }
     async getStreamsFromDatabase(request) {
         const startTime = Date.now();
@@ -302,6 +369,9 @@ class StreamHandler {
             return await this.performIntelligentScraping(imdbId, request);
         }
         catch (error) {
+            if (error instanceof StreamStatusException_1.StreamStatusException) {
+                throw error;
+            }
             return [];
         }
     }
@@ -326,6 +396,9 @@ class StreamHandler {
             return await this.performIntelligentScraping(imdbId, request);
         }
         catch (error) {
+            if (error instanceof StreamStatusException_1.StreamStatusException) {
+                throw error;
+            }
             return [];
         }
     }
@@ -362,6 +435,9 @@ class StreamHandler {
             return this.streamFormatter.sortStreamsByQuality(streams);
         }
         catch (error) {
+            if (error instanceof StreamStatusException_1.StreamStatusException) {
+                throw error;
+            }
             return [];
         }
     }
@@ -440,6 +516,9 @@ class StreamHandler {
                         : await this.createMovieStream(torrent, request);
                 }
                 catch (error) {
+                    if (error instanceof StreamStatusException_1.StreamStatusException) {
+                        throw error;
+                    }
                     return null;
                 }
             });
@@ -584,6 +663,7 @@ class StreamHandler {
             servedFromDatabase: this.stats.servedFromDatabase,
             servedFromCatalog: this.stats.servedFromCatalog,
             servedFromScraping: this.stats.servedFromScraping,
+            servedInformativeStreams: this.stats.servedInformativeStreams,
             duplicatesRemoved: this.stats.duplicatesRemoved,
             scrapingCacheSize: this.scrapingCache.size
         };

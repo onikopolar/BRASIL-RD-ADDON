@@ -5,12 +5,15 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
+const path_1 = __importDefault(require("path"));
 const models_1 = require("./database/models");
 const manifest_1 = require("./arquivos-serverts/manifest");
 const configureTemplate_1 = require("./arquivos-serverts/configureTemplate");
 const streamHandlerBuilder_1 = require("./arquivos-serverts/streamHandlerBuilder");
 const basicRoutes_1 = require("./arquivos-serverts/basicRoutes");
 const resolveRoutes_1 = require("./arquivos-serverts/resolveRoutes");
+const staticRoutes_1 = require("./arquivos-serverts/staticRoutes");
+const demoStaticRoutes_1 = require("./arquivos-serverts/demoStaticRoutes");
 const serverFunctions_1 = require("./arquivos-serverts/serverFunctions");
 const CacheService_1 = require("./services/CacheService");
 const logger_1 = require("./utils/logger");
@@ -20,6 +23,13 @@ const app = (0, express_1.default)();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
+const videosPath = path_1.default.join(__dirname, 'videos');
+app.use('/videos', express_1.default.static(videosPath));
+app.use('/static/videos', express_1.default.static(videosPath));
+logger.info('Servindo vídeos informativos', {
+    videoPath: videosPath,
+    endpoints: ['/videos/*.mp4', '/static/videos/*.mp4']
+});
 async function initializeDatabase() {
     try {
         logger.info('Iniciando sincronização do banco de dados...');
@@ -68,8 +78,27 @@ async function startServer() {
         app.use(stremioRouter);
         (0, basicRoutes_1.setupBasicRoutes)(app, manifest_1.manifest);
         (0, resolveRoutes_1.setupResolveRoutes)(app);
+        (0, staticRoutes_1.setupStaticRoutes)(app);
+        (0, demoStaticRoutes_1.setupDemoStaticRoutes)(app);
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_1.createServer)(app, port);
+        logger.info('Servidor inicializado com sucesso', {
+            port,
+            features: [
+                'Stremio Addon',
+                'Real-Debrid Integration',
+                'Static Response System com Vídeos',
+                'Database Support',
+                'Caching System',
+                'Demo Interface'
+            ],
+            video_endpoints: [
+                '/videos/downloading_v2.mp4',
+                '/videos/download_failed_v2.mp4',
+                '/videos/failed_access_v2.mp4',
+                '/static/videos/*.mp4'
+            ]
+        });
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';

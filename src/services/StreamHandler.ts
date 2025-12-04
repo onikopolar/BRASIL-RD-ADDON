@@ -15,6 +15,8 @@ import { EpisodeMatcher } from '../lib/episodeMatcher';
 import { TitleFilter } from '../lib/titleFilter';
 import { StreamFormatter } from '../lib/streamFormatter';
 import { CatalogProvider } from '../providers/catalogProvider';
+import { StaticResponseService, StaticResponse } from './StaticResponseService';
+import { StreamStatusException } from './StreamStatusException';
 
 interface ScrapedTorrent {
   title: string;
@@ -53,6 +55,7 @@ export class StreamHandler {
   private readonly torrentScraper: TorrentScraperService;
   private readonly imdbScraper: ImdbScraperService;
   private readonly logger: Logger;
+  private staticResponseService: StaticResponseService;
 
   // Módulos utilitários
   private readonly qualityDetector: QualityDetector;
@@ -77,17 +80,19 @@ export class StreamHandler {
     servedFromDatabase: 0,
     servedFromCatalog: 0,
     servedFromScraping: 0,
-    duplicatesRemoved: 0
+    duplicatesRemoved: 0,
+    servedInformativeStreams: 0
   };
 
-  constructor() {
-    this.rdService = new RealDebridService();
+  constructor(baseUrl?: string) {
+    this.rdService = new RealDebridService(baseUrl);
     this.magnetService = new CuratedMagnetService();
     this.autoMagnetService = new AutoMagnetService();
     this.cacheService = new CacheService();
     this.torrentScraper = new TorrentScraperService();
     this.imdbScraper = new ImdbScraperService();
     this.logger = new Logger('StreamHandler');
+    this.staticResponseService = new StaticResponseService(baseUrl);
 
     // Inicializar módulos utilitários
     this.qualityDetector = new QualityDetector();
@@ -95,6 +100,14 @@ export class StreamHandler {
     this.titleFilter = new TitleFilter();
     this.streamFormatter = new StreamFormatter();
     this.catalogProvider = new CatalogProvider(this.magnetService);
+  }
+
+  /**
+   * Atualiza a URL base do StaticResponseService
+   */
+  public setStaticResponseBaseUrl(baseUrl: string): void {
+    this.staticResponseService.setBaseUrl(baseUrl);
+    this.rdService.setStaticResponseBaseUrl(baseUrl);
   }
 
   // ==================== MÉTODO DE DEDUPLICAÇÃO ====================
@@ -197,30 +210,130 @@ export class StreamHandler {
       // 3. SCRAPING (ÚLTIMO RECURSO)
       const shouldScrape = await this.shouldAttemptScraping(request);
       if (!shouldScrape) {
+        // Se não deve fazer scraping, verifica se pode adicionar stream informativo
+        const informativeStream = this.createInformativeStreamIfNoContent(request);
+        if (informativeStream) {
+          return { streams: [informativeStream] };
+        }
         return { streams: [] };
       }
 
-      const scrapingResult = await this.processStreamRequest(request);
-      const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
-      
-      // Atualizar cache de scraping
-      await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
-      
-      this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
-      
-      return { streams: dedupedScrapingResult };
+      try {
+        const scrapingResult = await this.processStreamRequest(request);
+        const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
+        
+        // Atualizar cache de scraping
+        await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
+        
+        this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
+        
+        return { streams: dedupedScrapingResult };
+        
+      } catch (error) {
+        // Capturar StreamStatusException e criar stream informativo
+        if (error instanceof StreamStatusException) {
+          this.logger.info('Capturando StreamStatusException', {
+            requestId,
+            staticResponse: error.staticResponse,
+            rdStatus: error.rdStatus,
+            progress: error.progress
+          });
+          
+          const informativeStream = this.createInformativeStreamFromException(error, requestId);
+          this.stats.servedInformativeStreams++;
+          return { streams: [informativeStream] };
+        }
+        
+        // Outros erros, retornar vazio
+        throw error;
+      }
 
     } catch (error) {
       this.logger.error('Falha no processamento de stream', {
         requestId,
         error: error instanceof Error ? error.message : 'Unknown error'
       });
-      return { streams: [] };
+      
+      // Tentar criar stream informativo mesmo em caso de erro geral
+      if (error instanceof StreamStatusException) {
+        const informativeStream = this.createInformativeStreamFromException(error, requestId);
+        this.stats.servedInformativeStreams++;
+        return { streams: [informativeStream] };
+      }
+      
+      // Stream informativo genérico para erro
+      const errorStream = this.staticResponseService.createInformativeStream(
+        StaticResponse.FAILED_UNEXPECTED,
+        requestId
+      );
+      
+      return { streams: [this.convertToStreamFormat(errorStream)] };
     }
   }
 
-  // ==================== BANCO DE DADOS ====================
+  // ==================== STREAMS INFORMATIVOS ====================
 
+  // Cria stream informativo baseado em uma exceção de status
+  private createInformativeStreamFromException(
+    exception: StreamStatusException,
+    requestId: string
+  ): Stream {
+    const informativeStream = this.staticResponseService.createInformativeStream(
+      exception.staticResponse,
+      requestId
+    );
+    
+    return this.convertToStreamFormat(informativeStream);
+  }
+
+  // Cria stream informativo quando não há conteúdo disponível
+  private createInformativeStreamIfNoContent(request: StreamRequest): Stream | null {
+    // Para séries com episódio específico, criar stream de "download em andamento"
+    if (request.type === 'series') {
+      const episodeInfo = this.episodeMatcher.extractEpisodeFromMultipleSources(request.id);
+      if (episodeInfo.isValid) {
+        const informativeStream = this.staticResponseService.createInformativeStream(
+          StaticResponse.DOWNLOADING,
+          `S${episodeInfo.season}E${episodeInfo.episode}`
+        );
+        
+        return this.convertToStreamFormat(informativeStream);
+      }
+    }
+    
+    // Para filmes ou séries sem episódio específico
+    const informativeStream = this.staticResponseService.createInformativeStream(
+      StaticResponse.DOWNLOADING,
+      request.id
+    );
+    
+    return this.convertToStreamFormat(informativeStream);
+  }
+
+  /* Converte um stream informativo do StaticResponseService para o formato Stream do Stremio*/
+  private convertToStreamFormat(informativeStream: any): Stream {
+    const infoHash = `info-${Date.now()}-${Math.random().toString(36).substring(7)}`;
+    
+    // Criar o objeto Stream apenas com propriedades válidas
+    const stream: Stream = {
+      title: informativeStream.title || 'Brasil RD - Informação',
+      name: informativeStream.name || 'Brasil RD - Mensagem Informativa',
+      description: informativeStream.description || 'Mensagem informativa do addon Brasil RD',
+      url: informativeStream.url || 'data:text/plain,Brasil%20RD%20-%20Mensagem%20informativa',
+      behaviorHints: {
+        notWebReady: true, // Sempre true para streams informativos
+        bingeGroup: 'br-info'
+      },
+      status: 'available',
+      infoHash: infoHash,
+      magnet: `brasilrd://info/${infoHash}`,
+      sources: [`brasilrd://info/${infoHash}`]
+    };
+    
+    return stream;
+  }
+
+  // ==================== BANCO DE DADOS ====================
   private async getStreamsFromDatabase(request: StreamRequest): Promise<DatabaseStreamResult> {
     const startTime = Date.now();
 
@@ -423,6 +536,10 @@ export class StreamHandler {
       const imdbId = this.extractImdbIdFromRequest(request);
       return await this.performIntelligentScraping(imdbId, request);
     } catch (error) {
+      // Capturar StreamStatusException aqui também
+      if (error instanceof StreamStatusException) {
+        throw error; // Relançar para ser capturado no handleStreamRequest
+      }
       return [];
     }
   }
@@ -456,6 +573,10 @@ export class StreamHandler {
       return await this.performIntelligentScraping(imdbId, request);
 
     } catch (error) {
+      // Capturar StreamStatusException aqui também
+      if (error instanceof StreamStatusException) {
+        throw error; // Relançar para ser capturado no handleStreamRequest
+      }
       return [];
     }
   }
@@ -530,13 +651,15 @@ export class StreamHandler {
       return this.streamFormatter.sortStreamsByQuality(streams);
 
     } catch (error) {
+      // Capturar StreamStatusException aqui também
+      if (error instanceof StreamStatusException) {
+        throw error; // Relançar para ser capturado no handleStreamRequest
+      }
       return [];
     }
   }
 
-  /**
-   * Deduplica torrents por magnet link (Nível 2 de deduplicação)
-   */
+  // Deduplica torrents por magnet link (Nível 2 de deduplicação)
   private deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): ScrapedTorrent[] {
     const seenMagnets = new Set<string>();
     const uniqueTorrents: ScrapedTorrent[] = [];
@@ -664,6 +787,10 @@ export class StreamHandler {
             ? await this.createSeriesStream(torrent, request, episodeInfo)
             : await this.createMovieStream(torrent, request);
         } catch (error) {
+          // Capturar StreamStatusException aqui também
+          if (error instanceof StreamStatusException) {
+            throw error; // Relançar para ser capturado no handleStreamRequest
+          }
           return null;
         }
       });
@@ -861,6 +988,7 @@ export class StreamHandler {
       servedFromDatabase: this.stats.servedFromDatabase,
       servedFromCatalog: this.stats.servedFromCatalog,
       servedFromScraping: this.stats.servedFromScraping,
+      servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
       scrapingCacheSize: this.scrapingCache.size
     };

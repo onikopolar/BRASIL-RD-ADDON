@@ -2,6 +2,8 @@ import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import { config } from '../config/index';
 import { Logger } from '../utils/logger';
 import { RDTorrentInfo, RDFile } from '../types/index';
+import { StaticResponseService, StaticResponse } from './StaticResponseService';
+import { StreamStatusException } from './StreamStatusException';
 
 interface RealDebridError {
   error?: string;
@@ -26,9 +28,18 @@ export class RealDebridService {
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
     '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
   ];
+  private staticResponseService: StaticResponseService;
 
-  constructor() {
+  constructor(baseUrl?: string) {
     this.logger = new Logger('RealDebridService');
+    this.staticResponseService = new StaticResponseService(baseUrl);
+  }
+
+  /**
+   * Atualiza a URL base do StaticResponseService
+   */
+  public setStaticResponseBaseUrl(baseUrl: string): void {
+    this.staticResponseService.setBaseUrl(baseUrl);
   }
 
   private createHttpClient(apiKey: string): AxiosInstance {
@@ -229,6 +240,17 @@ export class RealDebridService {
     try {
       const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
 
+      // Verificar se o torrent está em estado de download
+      const staticResponse = this.staticResponseService.getResponseForRealDebridStatus(torrentInfo.status);
+      if (staticResponse && staticResponse === StaticResponse.DOWNLOADING) {
+        throw new StreamStatusException(
+          staticResponse,
+          torrentInfo.status,
+          torrentInfo.progress,
+          `Torrent está em estado: ${torrentInfo.status}`
+        );
+      }
+
       if (torrentInfo.status !== 'downloaded') {
         return null;
       }
@@ -260,21 +282,18 @@ export class RealDebridService {
   }
 
   /**
-   * ✅ MÉTODO CORRIGIDO: Agora aceita season/episode para seleção específica
-   * Se season/episode forem fornecidos, tenta encontrar o episódio exato
-   * Caso contrário, usa a lógica inteligente padrão
+   * Método principal: Agora lança StreamStatusException quando o torrent está downloading
    */
   async getStreamLinkForTorrent(
     torrentId: string, 
     apiKey: string,
-    targetSeason?: number,    // ✅ NOVO: Temporada desejada (opcional)
-    targetEpisode?: number    // ✅ NOVO: Episódio desejado (opcional)
+    targetSeason?: number,
+    targetEpisode?: number
   ): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
     try {
-      // 🔍 DEBUG 1: Obter informações do torrent
-      this.logger.info('🔍 [DEBUG CRÍTICO] Iniciando seleção de arquivo', { 
+      this.logger.info('Iniciando seleção de arquivo', { 
         torrentId,
         targetSeason,
         targetEpisode 
@@ -282,8 +301,26 @@ export class RealDebridService {
       
       const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
       
+      // Lançar exceção quando precisa de resposta estática
+      const staticResponse = this.staticResponseService.getResponseForRealDebridStatus(torrentInfo.status);
+      if (staticResponse) {
+        this.logger.info('Lançando StreamStatusException', {
+          torrentId,
+          rdStatus: torrentInfo.status,
+          staticResponse,
+          progress: torrentInfo.progress
+        });
+        
+        throw new StreamStatusException(
+          staticResponse,
+          torrentInfo.status,
+          torrentInfo.progress,
+          `Torrent está em estado: ${torrentInfo.status}`
+        );
+      }
+
       if (torrentInfo.status !== 'downloaded') {
-        this.logger.warn('❌ [DEBUG CRÍTICO] Torrent não está baixado', {
+        this.logger.warn('Torrent não está baixado', {
           torrentId,
           status: torrentInfo.status
         });
@@ -291,226 +328,174 @@ export class RealDebridService {
       }
 
       if (!torrentInfo.links || torrentInfo.links.length === 0) {
-        this.logger.warn('❌ [DEBUG CRÍTICO] Nenhum link disponível', { torrentId });
+        this.logger.warn('Nenhum link disponível', { torrentId });
         return null;
       }
 
-      // 🔍 DEBUG 2: Listar todos os arquivos
+      // Lógica de seleção de arquivos
       const files = torrentInfo.files || [];
       const selectedFiles = files.filter(file => file.selected === 1);
       
-      this.logger.info('📊 [DEBUG CRÍTICO] Arquivos no torrent', {
-        torrentId,
-        totalFiles: files.length,
-        selectedFiles: selectedFiles.length
-      });
-
       if (selectedFiles.length === 0) {
-        this.logger.warn('❌ [DEBUG CRÍTICO] Nenhum arquivo selecionado', { torrentId });
+        this.logger.warn('Nenhum arquivo selecionado', { torrentId });
         return null;
       }
 
-      // 🔍 DEBUG 3: FILTRO INTELIGENTE - Lógica melhorada
+      // Encontrar melhor arquivo
       let bestFileIndex = -1;
       let bestScore = 0;
-      const candidateFiles: Array<{index: number, path: string, bytes: number, reason: string}> = [];
-
-      // Palavras-chave de propaganda PURA (arquivos que são APENAS propaganda)
-      const purePromoKeywords = [
-        '1xbet', 'betano', 'blaze', 'estrela bet', 'betway', 'pixbet',
-        'promo', 'propaganda', 'publicidade', 'advertisement', 'sample'
-      ];
-
-      // Palavras-chave que podem estar em nomes legítimos (mas verificar contexto)
-      const toleratedKeywords = [
-        'bludv.tv', 'torrentdosfilmes', 'www.', '.tv', 'acesso'
-      ];
 
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
         const fileName = file.path.toLowerCase();
-        const fileNameUpper = file.path.toUpperCase();
         
-        // REGRA 1: Ignorar arquivos MUITO pequenos (< 100MB não é episódio)
-        if (file.bytes < 100 * 1024 * 1024) {
-          candidateFiles.push({
-            index: i,
-            path: file.path,
-            bytes: file.bytes,
-            reason: `REJEITADO: Muito pequeno (${(file.bytes / (1024*1024)).toFixed(1)}MB)`
-          });
-          continue;
-        }
-        
-        // REGRA 2: Verificar se é arquivo de vídeo
+        // Verificar se é arquivo de vídeo
         const isVideo = this.videoExtensions.some(ext => fileName.endsWith(ext));
-        if (!isVideo) {
-          candidateFiles.push({
-            index: i,
-            path: file.path,
-            bytes: file.bytes,
-            reason: 'REJEITADO: Não é arquivo de vídeo'
-          });
-          continue;
-        }
+        if (!isVideo) continue;
         
-        // REGRA 3: Verificar se é propaganda PURA
-        let isPurePromo = false;
-        for (const keyword of purePromoKeywords) {
-          if (fileName.includes(keyword) && !this.hasEpisodeIndicators(fileName)) {
-            isPurePromo = true;
-            candidateFiles.push({
-              index: i,
-              path: file.path,
-              bytes: file.bytes,
-              reason: `REJEITADO: Propaganda pura (${keyword})`
-            });
-            break;
-          }
-        }
-        if (isPurePromo) continue;
+        // Calcular score
+        let score = file.bytes;
         
-        // REGRA 4: Verificar se parece ser um episódio/série
-        const hasEpisodeIndicators = this.hasEpisodeIndicators(fileName);
-        if (!hasEpisodeIndicators) {
-          candidateFiles.push({
-            index: i,
-            path: file.path,
-            bytes: file.bytes,
-            reason: 'REJEITADO: Sem indicadores de episódio'
-          });
-          continue;
-        }
-        
-        // ✅ ARQUIVO VÁLIDO - Calcular SCORE
-        let score = file.bytes; // Base: tamanho (maior = melhor)
-        
-        // ✅ BÔNUS GIGANTE se for o episódio EXATO solicitado
+        // Bônus para episódio exato
         if (targetSeason !== undefined && targetEpisode !== undefined) {
           const fileSeason = this.extractSeasonFromFileName(file.path);
           const fileEpisode = this.extractEpisodeFromFileName(file.path);
           
           if (fileSeason === targetSeason && fileEpisode === targetEpisode) {
-            // PRIORIDADE MÁXIMA para o episódio exato solicitado!
-            score += 10000000000; // +10GB "virtuais"
-            candidateFiles.push({
-              index: i,
-              path: file.path,
-              bytes: file.bytes,
-              reason: `🎯 EPISÓDIO EXATO! S${targetSeason}E${targetEpisode} - Score=${(score/1000000000).toFixed(2)}GB`
-            });
-            
-            // Seleciona imediatamente e pula o resto da análise
-            bestFileIndex = i;
-            bestScore = score;
-            break; // Para o loop, encontramos o episódio exato!
+            score += 10000000000;
           }
         }
         
-        // Bônus por qualidade
-        if (fileName.includes('1080p') || fileName.includes('4k') || fileName.includes('2160p')) {
-          score += 200000000; // +200MB "virtuais"
-        } else if (fileName.includes('720p')) {
-          score += 100000000; // +100MB "virtuais"
-        }
-        
-        // Bônus por áudio dublado/dual
-        if (fileName.includes('dual') || fileName.includes('dublado') || fileName.includes('dub')) {
-          score += 150000000; // +150MB "virtuais"
-        }
-        
-        // Bônus por ser MKV (geralmente melhor qualidade)
-        if (fileName.endsWith('.mkv')) {
-          score += 50000000; // +50MB "virtuais"
-        }
-        
-        // Penalidade por ter domínio no nome (mas ainda aceita)
-        for (const keyword of toleratedKeywords) {
-          if (fileName.includes(keyword)) {
-            score -= 10000000; // -10MB "virtuais"
-            break;
-          }
-        }
-        
-        candidateFiles.push({
-          index: i,
-          path: file.path,
-          bytes: file.bytes,
-          reason: `CANDIDATO: Score=${(score/1000000000).toFixed(2)}GB`
-        });
-
         if (score > bestScore) {
           bestScore = score;
           bestFileIndex = i;
         }
       }
 
-      // 🔍 DEBUG 4: Mostrar análise dos arquivos
-      this.logger.info('📋 [DEBUG CRÍTICO] Análise dos arquivos', {
-        torrentId,
-        bestFileIndex,
-        bestFileScore: bestScore,
-        bestFileName: bestFileIndex >= 0 ? selectedFiles[bestFileIndex]?.path : 'Nenhum',
-        targetSeason,
-        targetEpisode,
-        totalCandidates: candidateFiles.filter(c => c.reason.includes('CANDIDATO')).length,
-        candidateFiles: candidateFiles
-      });
-
       if (bestFileIndex === -1) {
-        this.logger.warn('⚠️ [DEBUG CRÍTICO] Nenhum arquivo de vídeo válido encontrado. Usando primeiro arquivo como fallback.');
         bestFileIndex = 0;
       }
 
-      // Verificar se o índice está dentro dos limites
       if (bestFileIndex >= torrentInfo.links.length) {
-        this.logger.warn('⚠️ [DEBUG CRÍTICO] Índice fora do range. Corrigindo para primeiro link.');
         bestFileIndex = 0;
       }
 
-      // 🔍 DEBUG 5: Obter link final
+      // Obter link final
       const selectedLink = torrentInfo.links[bestFileIndex];
-      const selectedFile = selectedFiles[bestFileIndex];
-      
-      this.logger.info('🎯 [DEBUG CRÍTICO] Arquivo selecionado para streaming', {
-        torrentId,
-        fileIndex: bestFileIndex,
-        fileName: selectedFile?.path || 'Desconhecido',
-        fileSizeMB: selectedFile ? Math.round(selectedFile.bytes / (1024*1024)) : 0,
-        fileSizeGB: selectedFile ? (selectedFile.bytes / (1024*1024*1024)).toFixed(2) : '0',
-        score: bestScore,
-        linkIndex: bestFileIndex,
-        totalLinks: torrentInfo.links.length,
-        targetSeason,
-        targetEpisode,
-        isExactMatch: (targetSeason !== undefined && targetEpisode !== undefined) ? 
-          `S${targetSeason}E${targetEpisode}` : 'Não especificado'
-      });
-
       const directLink = await this.unrestrictLink(selectedLink, apiKey);
       
-      this.logger.info('✅ [DEBUG CRÍTICO] Stream link obtido com sucesso', {
+      this.logger.info('Stream link obtido com sucesso', {
         torrentId,
-        directLink: this.sanitizeLink(directLink),
-        fileName: selectedFile?.path || 'Desconhecido',
-        fileType: this.getFileType(selectedFile?.path || ''),
-        estimatedQuality: this.estimateQuality(selectedFile?.path || ''),
-        targetSeason: targetSeason !== undefined ? `S${targetSeason}` : 'Não especificado',
-        targetEpisode: targetEpisode !== undefined ? `E${targetEpisode}` : 'Não especificado',
-        isExactMatch: this.isExactMatch(selectedFile?.path || '', targetSeason, targetEpisode)
+        fileName: selectedFiles[bestFileIndex]?.path || 'Desconhecido'
       });
       
       return directLink;
 
     } catch (error) {
-      this.logger.error('❌ [DEBUG CRÍTICO] Falha ao obter stream link', {
+      // Se já é uma StreamStatusException, relançar
+      if (error instanceof StreamStatusException) {
+        throw error;
+      }
+      
+      const axiosError = error as AxiosError<RealDebridError>;
+      const errorData = axiosError.response?.data;
+      const errorCode = errorData?.error_code;
+      
+      const staticResponse = this.staticResponseService.getResponseForRealDebridStatus('error', errorCode);
+      
+      if (staticResponse) {
+        throw new StreamStatusException(
+          staticResponse,
+          'error',
+          undefined,
+          `Erro Real-Debrid: ${this.getErrorMessage(error)}`
+        );
+      }
+
+      this.logger.error('Falha ao obter stream link', {
         torrentId,
-        targetSeason,
-        targetEpisode,
         error: this.getErrorMessage(error)
       });
       return null;
     }
+  }
+
+  /**
+   * Método para obter stream link com tratamento de status
+   */
+  async getStreamLinkWithStatus(
+    torrentId: string,
+    apiKey: string,
+    targetSeason?: number,
+    targetEpisode?: number
+  ): Promise<{
+    url: string | null;
+    status: 'downloaded' | 'downloading' | 'error' | 'waiting' | 'unknown';
+    staticResponse?: StaticResponse;
+    progress?: number;
+  }> {
+    try {
+      const torrentInfo = await this.getTorrentInfo(torrentId, apiKey);
+      
+      const staticResponse = this.staticResponseService.getResponseForRealDebridStatus(torrentInfo.status);
+      if (staticResponse) {
+        return {
+          url: null,
+          status: this.mapRdStatusToStreamStatus(torrentInfo.status),
+          staticResponse,
+          progress: torrentInfo.progress
+        };
+      }
+
+      if (torrentInfo.status === 'downloaded' && torrentInfo.links && torrentInfo.links.length > 0) {
+        const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode);
+        return {
+          url: link,
+          status: 'downloaded',
+          progress: 100
+        };
+      }
+
+      return {
+        url: null,
+        status: this.mapRdStatusToStreamStatus(torrentInfo.status),
+        progress: torrentInfo.progress
+      };
+
+    } catch (error: any) {
+      if (error instanceof StreamStatusException) {
+        return {
+          url: null,
+          status: 'downloading',
+          staticResponse: error.staticResponse,
+          progress: error.progress
+        };
+      }
+      
+      return {
+        url: null,
+        status: 'error'
+      };
+    }
+  }
+
+  /**
+   * Mapeia status do Real-Debrid para status de stream
+   */
+  private mapRdStatusToStreamStatus(rdStatus: string): 'downloaded' | 'downloading' | 'error' | 'waiting' | 'unknown' {
+    const statusMap: Record<string, 'downloaded' | 'downloading' | 'error' | 'waiting' | 'unknown'> = {
+      'downloaded': 'downloaded',
+      'dead': 'downloaded',
+      'downloading': 'downloading',
+      'uploading': 'downloading',
+      'queued': 'downloading',
+      'magnet_conversion': 'downloading',
+      'waiting_files_selection': 'waiting',
+      'error': 'error',
+      'magnet_error': 'error'
+    };
+
+    return statusMap[rdStatus] || 'unknown';
   }
 
   /**
@@ -519,25 +504,17 @@ export class RealDebridService {
   private extractSeasonFromFileName(fileName: string): number | undefined {
     const lowerName = fileName.toLowerCase();
     
-    // Padrão S03E08
-    const sPattern = /s(\d+)e\d+/i;
-    const sMatch = lowerName.match(sPattern);
-    if (sMatch && sMatch[1]) {
-      return parseInt(sMatch[1], 10);
-    }
+    const patterns = [
+      /s(\d+)e\d+/i,           // S03E08
+      /season\s*(\d+)\s*episode/i, // Season 3 Episode 8
+      /(\d+)x\d+/i             // 3x08
+    ];
     
-    // Padrão Season 3 Episode 8
-    const seasonPattern = /season\s*(\d+)\s*episode/i;
-    const seasonMatch = lowerName.match(seasonPattern);
-    if (seasonMatch && seasonMatch[1]) {
-      return parseInt(seasonMatch[1], 10);
-    }
-    
-    // Padrão 3x08
-    const xPattern = /(\d+)x\d+/i;
-    const xMatch = lowerName.match(xPattern);
-    if (xMatch && xMatch[1]) {
-      return parseInt(xMatch[1], 10);
+    for (const pattern of patterns) {
+      const match = lowerName.match(pattern);
+      if (match && match[1]) {
+        return parseInt(match[1], 10);
+      }
     }
     
     return undefined;
@@ -549,139 +526,21 @@ export class RealDebridService {
   private extractEpisodeFromFileName(fileName: string): number | undefined {
     const lowerName = fileName.toLowerCase();
     
-    // Padrão S03E08
-    const ePattern = /s\d+e(\d+)/i;
-    const eMatch = lowerName.match(ePattern);
-    if (eMatch && eMatch[1]) {
-      return parseInt(eMatch[1], 10);
-    }
+    const patterns = [
+      /s\d+e(\d+)/i,                // S03E08
+      /season\s*\d+\s*episode\s*(\d+)/i, // Season 3 Episode 8
+      /\d+x(\d+)/i,                 // 3x08
+      /ep\s*(\d+)/i                 // Ep 08
+    ];
     
-    // Padrão Season 3 Episode 8
-    const episodePattern = /season\s*\d+\s*episode\s*(\d+)/i;
-    const episodeMatch = lowerName.match(episodePattern);
-    if (episodeMatch && episodeMatch[1]) {
-      return parseInt(episodeMatch[1], 10);
-    }
-    
-    // Padrão 3x08
-    const xPattern = /\d+x(\d+)/i;
-    const xMatch = lowerName.match(xPattern);
-    if (xMatch && xMatch[1]) {
-      return parseInt(xMatch[1], 10);
-    }
-    
-    // Padrão Ep 08
-    const epPattern = /ep\s*(\d+)/i;
-    const epMatch = lowerName.match(epPattern);
-    if (epMatch && epMatch[1]) {
-      return parseInt(epMatch[1], 10);
+    for (const pattern of patterns) {
+      const match = lowerName.match(pattern);
+      if (match && match[1]) {
+        return parseInt(match[1], 10);
+      }
     }
     
     return undefined;
-  }
-
-  /**
-   * Verifica se é uma correspondência exata
-   */
-  private isExactMatch(fileName: string, targetSeason?: number, targetEpisode?: number): string {
-    if (targetSeason === undefined || targetEpisode === undefined) {
-      return 'Não aplicável';
-    }
-    
-    const fileSeason = this.extractSeasonFromFileName(fileName);
-    const fileEpisode = this.extractEpisodeFromFileName(fileName);
-    
-    if (fileSeason === targetSeason && fileEpisode === targetEpisode) {
-      return `✅ EXATO! S${targetSeason}E${targetEpisode}`;
-    } else if (fileSeason === targetSeason) {
-      return `⚠️ Temporada correta (S${targetSeason}), mas episódio ${fileEpisode || '?'} vs ${targetEpisode}`;
-    } else if (fileEpisode === targetEpisode) {
-      return `⚠️ Episódio correto (E${targetEpisode}), mas temporada ${fileSeason || '?'} vs ${targetSeason}`;
-    } else {
-      return `❌ Diferente: S${fileSeason || '?'}E${fileEpisode || '?'} vs S${targetSeason}E${targetEpisode}`;
-    }
-  }
-
-  /**
-   * Verifica se o nome do arquivo contém indicadores de episódio
-   */
-  private hasEpisodeIndicators(fileName: string): boolean {
-    const lowerName = fileName.toLowerCase();
-    
-    // Padrões de episódio de série
-    const episodePatterns = [
-      /s\d+e\d+/i,           // S03E08
-      /season\s*\d+\s*episode\s*\d+/i, // Season 3 Episode 8
-      /episode\s*\d+/i,      // Episode 8
-      /\d+x\d+/i,            // 3x08
-      /ep\s*\d+/i,           // Ep 08
-      /part\s*\d+/i,         // Part 1
-      /pt\.\s*\d+/i,         // Pt.1
-      /\s+\d+\s+of\s+\d+/i,  // 1 of 10
-    ];
-    
-    // Verificar padrões
-    for (const pattern of episodePatterns) {
-      if (pattern.test(lowerName)) {
-        return true;
-      }
-    }
-    
-    // Verificar nomes comuns de filmes/séries
-    const commonIndicators = [
-      'stranger things',
-      'game of thrones',
-      'breaking bad',
-      'the walking dead',
-      'friends',
-      'the office',
-      'completa',
-      'temporada',
-      'complete',
-      'season'
-    ];
-    
-    for (const indicator of commonIndicators) {
-      if (lowerName.includes(indicator)) {
-        return true;
-      }
-    }
-    
-    return false;
-  }
-
-  /**
-   * Estima a qualidade baseada no nome do arquivo
-   */
-  private estimateQuality(fileName: string): string {
-    const lowerName = fileName.toLowerCase();
-    
-    if (lowerName.includes('4k') || lowerName.includes('2160p') || lowerName.includes('uhd')) {
-      return '4K';
-    } else if (lowerName.includes('1080p') || lowerName.includes('fhd')) {
-      return '1080p';
-    } else if (lowerName.includes('720p') || lowerName.includes('hd')) {
-      return '720p';
-    } else if (lowerName.includes('480p') || lowerName.includes('sd')) {
-      return '480p';
-    }
-    
-    return 'Desconhecida';
-  }
-
-  /**
-   * Obtém tipo de arquivo baseado na extensão
-   */
-  private getFileType(fileName: string): string {
-    const lowerName = fileName.toLowerCase();
-    
-    if (lowerName.endsWith('.mkv')) return 'MKV';
-    if (lowerName.endsWith('.mp4')) return 'MP4';
-    if (lowerName.endsWith('.avi')) return 'AVI';
-    if (lowerName.endsWith('.mov')) return 'MOV';
-    if (lowerName.endsWith('.webm')) return 'WebM';
-    
-    return 'Outro';
   }
 
   async getTorrentFiles(torrentId: string, apiKey: string): Promise<RDFile[]> {
