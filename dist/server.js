@@ -13,7 +13,6 @@ const streamHandlerBuilder_1 = require("./arquivos-serverts/streamHandlerBuilder
 const basicRoutes_1 = require("./arquivos-serverts/basicRoutes");
 const resolveRoutes_1 = require("./arquivos-serverts/resolveRoutes");
 const staticRoutes_1 = require("./arquivos-serverts/staticRoutes");
-const demoStaticRoutes_1 = require("./arquivos-serverts/demoStaticRoutes");
 const serverFunctions_1 = require("./arquivos-serverts/serverFunctions");
 const CacheService_1 = require("./services/CacheService");
 const logger_1 = require("./utils/logger");
@@ -79,7 +78,6 @@ async function startServer() {
         (0, basicRoutes_1.setupBasicRoutes)(app, manifest_1.manifest);
         (0, resolveRoutes_1.setupResolveRoutes)(app);
         (0, staticRoutes_1.setupStaticRoutes)(app);
-        (0, demoStaticRoutes_1.setupDemoStaticRoutes)(app);
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_1.createServer)(app, port);
         logger.info('Servidor inicializado com sucesso', {
@@ -89,8 +87,7 @@ async function startServer() {
                 'Real-Debrid Integration',
                 'Static Response System com Vídeos',
                 'Database Support',
-                'Caching System',
-                'Demo Interface'
+                'Caching System'
             ],
             video_endpoints: [
                 '/videos/downloading_v2.mp4',

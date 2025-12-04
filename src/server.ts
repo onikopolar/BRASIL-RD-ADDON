@@ -8,7 +8,6 @@ import { createStremioBuilder, getStremioRouter } from './arquivos-serverts/stre
 import { setupBasicRoutes } from './arquivos-serverts/basicRoutes';
 import { setupResolveRoutes } from './arquivos-serverts/resolveRoutes';
 import { setupStaticRoutes } from './arquivos-serverts/staticRoutes';
-import { setupDemoStaticRoutes } from './arquivos-serverts/demoStaticRoutes';
 import { createServer } from './arquivos-serverts/serverFunctions';
 import { CacheService } from './services/CacheService';
 import { Logger } from './utils/logger';
@@ -101,7 +100,7 @@ async function startServer() {
         setupBasicRoutes(app, manifest);
         setupResolveRoutes(app);
         setupStaticRoutes(app);
-        setupDemoStaticRoutes(app);
+        // Removido: setupDemoStaticRoutes(app);
         
         // 5. Iniciar servidor HTTP/HTTPS
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
@@ -114,8 +113,8 @@ async function startServer() {
                 'Real-Debrid Integration',
                 'Static Response System com Vídeos',
                 'Database Support',
-                'Caching System',
-                'Demo Interface'
+                'Caching System'
+                // Removido: 'Demo Interface'
             ],
             video_endpoints: [
                 '/videos/downloading_v2.mp4',
