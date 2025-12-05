@@ -1,9 +1,3 @@
-/**
- * Serviço para criar streams informativos (ao invés de vídeos)
- * Mensagens curtas e diretas em português BR
- * Agora com URLs absolutas de vídeo para o Stremio
- */
-
 import { Logger } from '../utils/logger';
 
 export enum StaticResponse {
@@ -33,47 +27,28 @@ export class StaticResponseService {
   
   constructor(baseUrl?: string) {
     this.logger = new Logger('StaticResponseService');
-    // URL base absoluta para o Stremio - usa a lógica do serverFunctions.ts
     this.baseUrl = baseUrl || this.getBaseUrl();
   }
 
-  /**
-   * Determina a URL base dinamicamente, seguindo a mesma lógica do serverFunctions.ts
-   */
   private getBaseUrl(): string {
-    // Primeiro verifica se há uma URL base fornecida por variável de ambiente
-    if (process.env.BASE_URL) {
-      return process.env.BASE_URL;
-    }
+    if (process.env.BASE_URL) return process.env.BASE_URL;
 
-    // Verifica RAILWAY_STATIC_URL (usado no Railway)
     if (process.env.RAILWAY_STATIC_URL) {
       const railwayUrl = process.env.RAILWAY_STATIC_URL;
-      if (railwayUrl.startsWith('http')) {
-        return railwayUrl;
-      }
+      if (railwayUrl.startsWith('http')) return railwayUrl;
       return `https://${railwayUrl}`;
     }
 
-    // Para desenvolvimento local
     const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
     return `http://localhost:${port}`;
   }
 
-  /**
-   * Atualiza a URL base (útil quando o serviço é criado antes do servidor iniciar)
-   */
   public setBaseUrl(baseUrl: string): void {
     this.baseUrl = baseUrl;
     this.logger.info('URL base atualizada', { baseUrl });
   }
 
-  /**
-   * Obtém informações para uma resposta estática
-   * Agora com URLs de vídeo absolutas para o Stremio
-   */
   getResponseInfo(response: StaticResponse): StaticResponseInfo {
-    // Mapear respostas estáticas para arquivos de vídeo
     const videoFileMap: Record<StaticResponse, string> = {
       [StaticResponse.DOWNLOADING]: 'downloading_v2.mp4',
       [StaticResponse.FAILED_DOWNLOAD]: 'download_failed_v2.mp4',
@@ -87,7 +62,6 @@ export class StaticResponseService {
       [StaticResponse.BLOCKED_ACCESS]: 'blocked_access_v1.mp4'
     };
 
-    // URL absoluta para o Stremio
     const videoFileName = videoFileMap[response];
     const videoUrl = videoFileName ? `${this.baseUrl}/videos/${videoFileName}` : `${this.baseUrl}/videos/downloading_v2.mp4`;
     
@@ -167,10 +141,7 @@ export class StaticResponseService {
     return responses[response];
   }
 
-  /**
-   * Cria um stream informativo para o Stremio
-   * Agora com URL de vídeo absoluta para reprodução
-   */
+  // FIX: Mudar notWebReady: true para false - vídeos MP4 podem ser reproduzidos diretamente
   createInformativeStream(response: StaticResponse, requestId?: string): any {
     const info = this.getResponseInfo(response);
     
@@ -180,7 +151,7 @@ export class StaticResponseService {
       description: `${info.description}${requestId ? `\nID: ${requestId}` : ''}`,
       url: info.url,
       behaviorHints: {
-        notWebReady: true
+        notWebReady: false  // FIX: Vídeos MP4 podem ser reproduzidos diretamente
       }
     };
 
@@ -193,9 +164,6 @@ export class StaticResponseService {
     return stream;
   }
 
-  /**
-   * Cria um stream informativo com status do Real-Debrid
-   */
   createInformativeStreamWithStatus(
     response: StaticResponse, 
     rdStatus?: string, 
@@ -205,15 +173,9 @@ export class StaticResponseService {
     const info = this.getResponseInfo(response);
     
     let description = info.description;
-    if (rdStatus) {
-      description += `\nStatus Real-Debrid: ${rdStatus}`;
-    }
-    if (progress !== undefined) {
-      description += `\nProgresso: ${progress}%`;
-    }
-    if (requestId) {
-      description += `\nID: ${requestId}`;
-    }
+    if (rdStatus) description += `\nStatus Real-Debrid: ${rdStatus}`;
+    if (progress !== undefined) description += `\nProgresso: ${progress}%`;
+    if (requestId) description += `\nID: ${requestId}`;
     
     const stream = {
       title: info.title,
@@ -221,7 +183,7 @@ export class StaticResponseService {
       description: description,
       url: info.url,
       behaviorHints: {
-        notWebReady: true
+        notWebReady: false  // FIX: Vídeos MP4 podem ser reproduzidos diretamente
       }
     };
 
@@ -235,9 +197,6 @@ export class StaticResponseService {
     return stream;
   }
 
-  /**
-   * Determina a resposta estática apropriada baseada no status do Real-Debrid
-   */
   getResponseForRealDebridStatus(rdStatus: string, errorCode?: number): StaticResponse | null {
     if (errorCode !== undefined) {
       const errorMap: Record<number, StaticResponse> = {
@@ -252,9 +211,7 @@ export class StaticResponseService {
         36: StaticResponse.LIMITS_EXCEEDED
       };
 
-      if (errorMap[errorCode]) {
-        return errorMap[errorCode];
-      }
+      if (errorMap[errorCode]) return errorMap[errorCode];
     }
 
     const statusMap: Record<string, StaticResponse> = {
@@ -271,9 +228,6 @@ export class StaticResponseService {
     return statusMap[rdStatus] || null;
   }
 
-  /**
-   * Verifica se um objeto de stream é informativo
-   */
   isInformativeStream(stream: any): boolean {
     if (!stream?.url) return false;
     
@@ -286,17 +240,11 @@ export class StaticResponseService {
     );
   }
 
-  /**
-   * Obtém a URL do vídeo para uma resposta estática
-   */
   getVideoUrlForResponse(response: StaticResponse): string {
     const info = this.getResponseInfo(response);
     return info.url;
   }
 
-  /**
-   * Lista todas as respostas disponíveis com seus vídeos
-   */
   listAllResponses(): Array<{response: StaticResponse, name: string, videoUrl: string}> {
     return Object.values(StaticResponse).map(response => {
       const info = this.getResponseInfo(response);

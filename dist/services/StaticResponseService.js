@@ -21,14 +21,12 @@ class StaticResponseService {
         this.baseUrl = baseUrl || this.getBaseUrl();
     }
     getBaseUrl() {
-        if (process.env.BASE_URL) {
+        if (process.env.BASE_URL)
             return process.env.BASE_URL;
-        }
         if (process.env.RAILWAY_STATIC_URL) {
             const railwayUrl = process.env.RAILWAY_STATIC_URL;
-            if (railwayUrl.startsWith('http')) {
+            if (railwayUrl.startsWith('http'))
                 return railwayUrl;
-            }
             return `https://${railwayUrl}`;
         }
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
@@ -135,7 +133,7 @@ class StaticResponseService {
             description: `${info.description}${requestId ? `\nID: ${requestId}` : ''}`,
             url: info.url,
             behaviorHints: {
-                notWebReady: true
+                notWebReady: false
             }
         };
         this.logger.info(`Stream informativo criado: ${info.name}`, {
@@ -149,22 +147,19 @@ class StaticResponseService {
     createInformativeStreamWithStatus(response, rdStatus, progress, requestId) {
         const info = this.getResponseInfo(response);
         let description = info.description;
-        if (rdStatus) {
+        if (rdStatus)
             description += `\nStatus Real-Debrid: ${rdStatus}`;
-        }
-        if (progress !== undefined) {
+        if (progress !== undefined)
             description += `\nProgresso: ${progress}%`;
-        }
-        if (requestId) {
+        if (requestId)
             description += `\nID: ${requestId}`;
-        }
         const stream = {
             title: info.title,
             name: `Brasil RD - ${info.name}`,
             description: description,
             url: info.url,
             behaviorHints: {
-                notWebReady: true
+                notWebReady: false
             }
         };
         this.logger.info(`Stream informativo com status criado: ${info.name}`, {
@@ -189,9 +184,8 @@ class StaticResponseService {
                 35: StaticResponse.FAILED_INFRINGEMENT,
                 36: StaticResponse.LIMITS_EXCEEDED
             };
-            if (errorMap[errorCode]) {
+            if (errorMap[errorCode])
                 return errorMap[errorCode];
-            }
         }
         const statusMap = {
             'downloading': StaticResponse.DOWNLOADING,

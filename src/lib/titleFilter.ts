@@ -31,7 +31,7 @@ export class TitleFilter {
 
   constructor() {
     this.logger = new Logger('TitleFilter');
-    this.logger.info('TitleFilter v2.0 inicializado');
+    this.logger.info('TitleFilter v2.1.0 inicializado (fix: validação de ano rigorosa)');
     this.imdbScraper = new ImdbScraperService();
     
     this.titleCleaner = new TitleCleaner();
@@ -112,11 +112,7 @@ export class TitleFilter {
     }
     
     if (duplicatesRemoved > 0) {
-      this.logger.info('Deduplicação concluída', {
-        totalAntes: torrents.length,
-        totalDepois: uniqueTorrents.length,
-        duplicatasRemovidas: duplicatesRemoved
-      });
+      this.logger.info(`Deduplicação: ${duplicatesRemoved} removidos`);
     }
     
     return uniqueTorrents;
@@ -158,10 +154,10 @@ export class TitleFilter {
         this.cacheManager.saveImdbTitlesToCache(imdbId, titles);
         return titles;
       } else {
-        this.logger.warn('Nenhum título encontrado no IMDB', { imdbId });
+        this.logger.warn('IMDB: sem títulos', { imdbId });
       }
     } catch (error) {
-      this.logger.error('Erro ao obter títulos do IMDB', {
+      this.logger.error('Erro IMDB', {
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
@@ -176,7 +172,6 @@ export class TitleFilter {
     torrentMetadata?: { year?: number }
   ): Promise<SmartTitleMatch> {
     const torrentYear = torrentMetadata?.year || this.extractTorrentYear(torrentTitle);
-    
     return await this.similarityCalculator.smartTitleContainsCheck(
       torrentTitle,
       imdbId,
@@ -191,13 +186,13 @@ export class TitleFilter {
     targetEpisode?: number
   ): Promise<TitleMatchResult> {
     try {
-      // 1. Verificação de português
+      // 1. Valida português
       const isPortuguese = this.isPortugueseContent(torrentTitle);
       
       if (!isPortuguese) {
         const metadata = this.extractSeriesMetadata(torrentTitle);
-        this.logger.warn('Conteúdo rejeitado - não está em português', {
-          torrentTitle: torrentTitle.substring(0, 80)
+        this.logger.warn('Rejeitado: não português', {
+          title: torrentTitle.substring(0, 60)
         });
         return {
           matches: false,
@@ -211,9 +206,9 @@ export class TitleFilter {
       const imdbTitles = await this.getImdbTitlesWithCache(imdbId);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         const metadata = this.extractSeriesMetadata(torrentTitle);
-        this.logger.warn('Nenhum título encontrado no IMDB', {
+        this.logger.warn('IMDB: sem dados', {
           imdbId,
-          torrentTitle: torrentTitle.substring(0, 80)
+          title: torrentTitle.substring(0, 60)
         });
         return {
           matches: false,
@@ -223,35 +218,33 @@ export class TitleFilter {
         };
       }
 
-      // 3. Validação de série
+      // 3. Validações
       const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
       const torrentYear = this.extractTorrentYear(torrentTitle);
       
-      // Validação de ano
+      // VALIDAÇÃO DE ANO CRÍTICA: deve ser exato para filmes
       if (imdbTitles.year && torrentYear) {
-        const yearDifference = Math.abs(imdbTitles.year - torrentYear);
-        if (yearDifference > 2) {
-          this.logger.warn('ANOS DIFERENTES! Possível filme diferente', {
-            requestedYear: imdbTitles.year,
-            torrentYear,
-            difference: yearDifference
+        if (imdbTitles.year !== torrentYear) {
+          this.logger.warn('Ano diferente - filme errado', {
+            requested: imdbTitles.year,
+            torrent: torrentYear,
+            difference: Math.abs(imdbTitles.year - torrentYear)
           });
           
           return {
             matches: false,
             similarity: 0.3,
             torrentMetadata,
-            reason: `Possível filme diferente: Ano solicitado ${imdbTitles.year} ≠ Ano do torrent ${torrentYear}`
+            reason: `Ano errado: solicitado ${imdbTitles.year} ≠ torrent ${torrentYear}`
           };
         }
       }
 
-      // Validação de episódios/temporadas
+      // Valida temporada/episódio
       if (targetSeason !== undefined) {
-        // Verificar temporada
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
           this.logger.warn('Temporada diferente', {
-            torrentTitle: torrentTitle.substring(0, 80),
+            title: torrentTitle.substring(0, 60),
             torrentSeason: torrentMetadata.season,
             targetSeason
           });
@@ -263,11 +256,10 @@ export class TitleFilter {
           };
         }
         
-        // Verificar episódio se buscando específico
         if (targetEpisode !== undefined) {
           if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
             this.logger.warn('Episódio diferente', {
-              torrentTitle: torrentTitle.substring(0, 80),
+              title: torrentTitle.substring(0, 60),
               torrentEpisode: torrentMetadata.episode,
               targetEpisode
             });
@@ -279,12 +271,11 @@ export class TitleFilter {
             };
           }
           
-          // Se torrent não especifica episódio, verificar se é package
           if (!torrentMetadata.episode && !torrentMetadata.isCompleteSeason) {
             const isPackage = this.metadataExtractor.isPackageTitle(torrentTitle.toLowerCase());
             if (!isPackage) {
-              this.logger.warn('Torrent não especifica episódio', {
-                torrentTitle: torrentTitle.substring(0, 80),
+              this.logger.warn('Sem episódio específico', {
+                title: torrentTitle.substring(0, 60),
                 targetEpisode
               });
               return {
@@ -298,14 +289,14 @@ export class TitleFilter {
         }
       }
 
-      // 4. Usa SimilarityCalculator com IMDB ID
+      // 4. Similaridade
       const smartMatch = await this.smartTitleContainsCheck(
         torrentTitle,
         imdbId,
         { year: torrentYear }
       );
 
-      // 5. Resultado final
+      // 5. Resultado
       const result = {
         matches: smartMatch.matches,
         matchedTitle: imdbTitles.portugueseTitle || imdbTitles.originalTitle,
@@ -318,7 +309,7 @@ export class TitleFilter {
       return result;
 
     } catch (error) {
-      this.logger.error('Erro ao comparar títulos', {
+      this.logger.error('Erro comparação', {
         torrentTitle,
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -328,7 +319,7 @@ export class TitleFilter {
         matches: false,
         similarity: 0,
         torrentMetadata: this.extractSeriesMetadata(torrentTitle),
-        reason: `Erro ao processar: ${error instanceof Error ? error.message : 'Erro desconhecido'}`
+        reason: `Erro: ${error instanceof Error ? error.message : 'Erro desconhecido'}`
       };
     }
   }
@@ -382,12 +373,12 @@ export class TitleFilter {
   ): Promise<any[]> {
     const startTime = Date.now();
     
-    this.logger.info('Aplicando filtro de título', {
+    this.logger.info('Filtro iniciado', {
       requestId,
       imdbId,
-      targetSeason,
-      targetEpisode,
-      totalTorrents: torrents.length
+      season: targetSeason,
+      episode: targetEpisode,
+      total: torrents.length
     });
 
     // 1. Deduplicação
@@ -400,7 +391,7 @@ export class TitleFilter {
       duplicatesRemoved: torrents.length - uniqueTorrents.length
     };
 
-    // 2. Filtro de português COM CACHE DE PROCESSAMENTO
+    // 2. Filtro português
     const portugueseTorrents = uniqueTorrents.filter(torrent => {
       if (this.isAlreadyProcessed(torrent)) {
         results.excluded.push(torrent);
@@ -415,24 +406,24 @@ export class TitleFilter {
     });
 
     if (portugueseTorrents.length === 0) {
-      this.logger.warn('Nenhum torrent em português encontrado', {
+      this.logger.warn('Sem portugueses', {
         requestId,
         imdbId,
-        totalTorrents: uniqueTorrents.length
+        total: uniqueTorrents.length
       });
       return [];
     }
 
-    // 3. Obtém títulos do IMDB
+    // 3. Obtém IMDB
     let imdbTitles: ImdbTitles | null;
     try {
       imdbTitles = await this.getImdbTitlesWithCache(imdbId);
       if (!imdbTitles) {
-        this.logger.error('Não foi possível obter títulos do IMDB', { imdbId });
+        this.logger.error('IMDB falhou', { imdbId });
         return [];
       }
     } catch (error) {
-      this.logger.error('Erro ao obter títulos do IMDB', {
+      this.logger.error('Erro IMDB', {
         requestId,
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -440,23 +431,21 @@ export class TitleFilter {
       return [];
     }
 
-    // 4. Processa cada torrent
+    // 4. Processa torrents
     for (const torrent of portugueseTorrents) {
       const torrentMetadata = this.extractSeriesMetadata(torrent.title);
       const torrentYear = this.extractTorrentYear(torrent.title);
       
-      // Validação de ano
+      // VALIDAÇÃO DE ANO: deve ser exato
       let yearCheckPassed = true;
       if (imdbTitles.year && torrentYear) {
-        const yearDifference = Math.abs(imdbTitles.year - torrentYear);
-        if (yearDifference > 2) {
+        if (imdbTitles.year !== torrentYear) {
           yearCheckPassed = false;
           
-          this.logger.debug('Torrent rejeitado por ano diferente', {
-            torrentTitle: torrent.title.substring(0, 60),
-            requestedYear: imdbTitles.year,
-            torrentYear,
-            difference: yearDifference
+          this.logger.debug('Rejeitado: ano diferente', {
+            title: torrent.title.substring(0, 50),
+            requested: imdbTitles.year,
+            torrent: torrentYear
           });
         }
       }
@@ -466,7 +455,7 @@ export class TitleFilter {
         continue;
       }
 
-      // Validação de temporada/episódio
+      // Valida temporada/episódio
       if (targetSeason !== undefined) {
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
           results.excluded.push(torrent);
@@ -479,7 +468,6 @@ export class TitleFilter {
             continue;
           }
           
-          // Se não tem episódio, verificar se é package
           if (!torrentMetadata.episode && !torrentMetadata.isCompleteSeason) {
             const isPackage = this.metadataExtractor.isPackageTitle(torrent.title.toLowerCase());
             if (!isPackage) {
@@ -490,7 +478,7 @@ export class TitleFilter {
         }
       }
 
-      // Usa SimilarityCalculator com IMDB ID
+      // Similaridade
       const match = await this.smartTitleContainsCheck(
         torrent.title,
         imdbId,
@@ -506,16 +494,16 @@ export class TitleFilter {
 
     const processingTime = Date.now() - startTime;
 
-    this.logger.info('Resultado do filtro', {
+    this.logger.info('Filtro finalizado', {
       requestId,
       imdbId,
-      filmYear: imdbTitles.year || 'Desconhecido',
+      anoFilme: imdbTitles.year || '?',
       totalOriginal: torrents.length,
-      duplicatasRemovidas: results.duplicatesRemoved,
+      duplicatas: results.duplicatesRemoved,
       portugueses: portugueseTorrents.length,
       incluidos: results.included.length,
       excluidos: results.excluded.length,
-      processingTime: `${processingTime}ms`
+      tempo: `${processingTime}ms`
     });
 
     return results.included;
@@ -530,9 +518,9 @@ export class TitleFilter {
   ): any[] {
     const startTime = Date.now();
     
-    this.logger.info('Aplicando filtro de título (sync)', {
+    this.logger.info('Filtro sync iniciado', {
       requestId,
-      totalTorrents: torrents.length
+      total: torrents.length
     });
     
     const uniqueTorrents = this.deduplicateTorrents(torrents);
@@ -565,12 +553,12 @@ export class TitleFilter {
 
     const processingTime = Date.now() - startTime;
 
-    this.logger.info('Resultado filtro sync', {
+    this.logger.info('Filtro sync finalizado', {
       requestId,
       totalOriginal: torrents.length,
-      duplicatasRemovidas: results.duplicatesRemoved,
+      duplicatas: results.duplicatesRemoved,
       incluidos: results.included.length,
-      processingTime: `${processingTime}ms`
+      tempo: `${processingTime}ms`
     });
 
     return results.included;
@@ -582,11 +570,11 @@ export class TitleFilter {
     targetSeason?: number,
     targetEpisode?: number
   ): Promise<TitleMatchResult> {
-    this.logger.info('Teste de título', {
+    this.logger.info('Teste título', {
       torrentTitle,
       imdbId,
-      targetSeason,
-      targetEpisode
+      season: targetSeason,
+      episode: targetEpisode
     });
     
     return await this.doTitlesMatch(torrentTitle, imdbId, targetSeason, targetEpisode);
@@ -647,7 +635,7 @@ export class TitleFilter {
 
   clearAllCaches(): void {
     this.cacheManager.clearAllCaches();
-    this.logger.info('Todos os caches do TitleFilter foram limpos');
+    this.logger.info('Caches limpos');
   }
 
   getCacheStats(): {

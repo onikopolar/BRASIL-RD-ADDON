@@ -56,47 +56,101 @@ class LanguageDetector {
             }
         ];
         this.logger = new logger_1.Logger('LanguageDetector');
+        this.logger.info('LanguageDetector v2.1.0 iniciado (aceita mais títulos)');
     }
     isPortugueseContent(torrentTitle) {
-        this.logger.debug('🔍 Verificando se conteúdo está em português', {
+        const titleLower = torrentTitle.toLowerCase();
+        this.logger.debug('Verificando português', {
             title: torrentTitle.substring(0, 80)
         });
-        const titleLower = torrentTitle.toLowerCase();
+        if (this.isMovieTitle(titleLower)) {
+            this.logger.debug('✅ ACEITO - Título de filme', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Título contém "filme" ou é nome de filme'
+            });
+            return true;
+        }
         const isDualAudio = this.isExplicitDualAudio(titleLower);
         if (isDualAudio) {
-            this.logAcceptance('Dual áudio explícito detectado', torrentTitle);
+            this.logger.debug('✅ ACEITO - Dual áudio', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Dual áudio detectado'
+            });
             return true;
         }
         const hasEnglishOnly = this.hasEnglishOnlyIndicator(titleLower);
         if (hasEnglishOnly) {
-            this.logRejection('Inglês puro detectado', torrentTitle);
+            this.logger.debug('❌ REJEITADO - Inglês puro', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Inglês puro detectado'
+            });
             return false;
         }
         const hasPortuguese = this.hasPortugueseIndicator(titleLower);
         if (hasPortuguese) {
-            this.logAcceptance('Português detectado', torrentTitle);
+            this.logger.debug('✅ ACEITO - Português', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Português detectado'
+            });
             return true;
         }
         if (this.endsWithEnglishIndicator(titleLower)) {
-            this.logRejection('Termina com indicador de inglês', torrentTitle);
+            this.logger.debug('❌ REJEITADO - Termina com eng', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Termina com indicador de inglês'
+            });
             return false;
         }
         if (this.isInternationalEnglishOnly(titleLower)) {
-            this.logRejection('Grupo internacional sem português', torrentTitle);
+            this.logger.debug('❌ REJEITADO - Grupo internacional', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Grupo internacional sem português'
+            });
             return false;
         }
         const hasBRPatterns = this.hasBRPatterns(titleLower);
         if (hasBRPatterns) {
-            this.logAcceptance('Benefício da dúvida (padrão BR)', torrentTitle);
+            this.logger.debug('✅ ACEITO - Padrão BR', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Padrão BR detectado'
+            });
             return true;
         }
         const hasRelevantKeywords = this.hasRelevantKeywords(titleLower);
         if (hasRelevantKeywords) {
-            this.logAcceptance('Benefício da dúvida (palavras-chave)', torrentTitle);
+            this.logger.debug('✅ ACEITO - Palavras-chave', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Palavras-chave relevantes'
+            });
             return true;
         }
-        this.logRejection('Título irrelevante', torrentTitle);
+        if (this.isShortTitle(torrentTitle)) {
+            this.logger.debug('✅ ACEITO - Título curto', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                reason: 'Título curto - benefício da dúvida'
+            });
+            return true;
+        }
+        this.logger.debug('❌ REJEITADO - Sem indicadores', {
+            torrentTitle: torrentTitle.substring(0, 80),
+            reason: 'Sem indicadores claros de português'
+        });
         return false;
+    }
+    isMovieTitle(titleLower) {
+        if (titleLower.includes('filme') || titleLower.includes('movie')) {
+            return true;
+        }
+        const brazilianMovies = [
+            '',
+            '',
+            '',
+            '',
+            '',
+            '',
+            ''
+        ];
+        return brazilianMovies.some(movie => titleLower.includes(movie));
     }
     isExplicitDualAudio(titleLower) {
         const dualAudioCombinations = [
@@ -119,24 +173,16 @@ class LanguageDetector {
         ];
         for (const combination of dualAudioCombinations) {
             if (titleLower.includes(combination)) {
-                if ((combination === 'dual audio' || combination === 'dual áudio')) {
+                if (combination === 'dual audio' || combination === 'dual áudio') {
                     const hasPortuguese = titleLower.includes('português') ||
                         titleLower.includes('portugues') ||
                         titleLower.includes('pt') ||
                         titleLower.includes('pt-br');
                     if (hasPortuguese) {
-                        this.logger.debug('🔥 Dual áudio com português detectado', {
-                            title: titleLower.substring(0, 80),
-                            combination
-                        });
                         return true;
                     }
                 }
                 else {
-                    this.logger.debug('🔥 Dual áudio detectado (combinação exata)', {
-                        title: titleLower.substring(0, 80),
-                        combination
-                    });
                     return true;
                 }
             }
@@ -176,27 +222,18 @@ class LanguageDetector {
     hasRelevantKeywords(titleLower) {
         for (const check of this.KEYWORD_CHECKS) {
             if (check.keywords.some(keyword => titleLower.includes(keyword))) {
-                this.logger.debug('✅ Palavras-chave relevantes encontradas', {
-                    title: titleLower.substring(0, 80),
-                    keywords: check.keywords,
-                    description: check.description
-                });
                 return true;
             }
         }
         return false;
     }
-    logAcceptance(reason, torrentTitle) {
-        this.logger.debug(`✅ ACEITO - ${reason}`, {
-            torrentTitle: torrentTitle.substring(0, 80),
-            reason: reason
-        });
-    }
-    logRejection(reason, torrentTitle) {
-        this.logger.debug(`❌ REJEITADO - ${reason}`, {
-            torrentTitle: torrentTitle.substring(0, 80),
-            reason: reason
-        });
+    isShortTitle(torrentTitle) {
+        const cleanTitle = torrentTitle
+            .replace(/[^\w\s]|_/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+        const words = cleanTitle.split(' ').filter(w => w.length > 0);
+        return words.length <= 5;
     }
     addPortugueseIndicator(indicator) {
         this.PORTUGUES_INDICATORS.push(indicator.toLowerCase());

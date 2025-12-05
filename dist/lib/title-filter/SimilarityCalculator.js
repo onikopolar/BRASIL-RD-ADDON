@@ -22,14 +22,17 @@ class SimilarityCalculator {
             'complete', 'uncensored', 'uncut', 'limited', 'special', 'edition',
             'directors.cut', 'theatrical', 'unrated', 'imax', '3d',
             'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'amzn', 'nf', 'hulu',
-            'm2ts', 'iso', 'bdmv', 'mpls', 'playlist', 'chapter'
+            'm2ts', 'iso', 'bdmv', 'mpls', 'playlist', 'chapter',
+            'movie', 'the movie', 'cinema', 'cinematográfico', 'cinematografico',
+            'brasileiro', 'brasileira', 'nacional', 'nacionais',
+            'versão', 'versao', 'version', 'edição', 'edicao', 'edition',
+            'completo', 'completa', 'complete', 'torrent', 'download', 'baixar', 'assistir'
         ];
         this.logger = new logger_1.Logger('SimilarityCalculator');
-        this.logger.info('SimilarityCalculator v2.4.0 inicializado');
+        this.logger.info('SimilarityCalculator v6.0.0 iniciado - Match Exato Rigoroso');
         this.titleCleaner = titleCleaner;
         if (useTmdbScraper) {
             this.tmdbScraper = new ImdbScraperService_1.ImdbScraperService();
-            this.logger.debug('TMDB Scraper integrado com cache');
         }
         else {
             this.tmdbScraper = null;
@@ -42,9 +45,8 @@ class SimilarityCalculator {
     }
     async smartTitleContainsCheck(torrentTitle, imdbId, torrentMetadata) {
         this.logger.debug('Verificando título', {
-            torrentTitle: torrentTitle.substring(0, 100),
-            imdbId,
-            hasMetadata: !!torrentMetadata
+            torrentTitle: torrentTitle.substring(0, 80),
+            imdbId
         });
         let movieInfo = null;
         if (this.tmdbScraper) {
@@ -53,7 +55,7 @@ class SimilarityCalculator {
                 const cached = this.tmdbCache.get(cacheKey);
                 let tmdbData;
                 if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
-                    this.logger.debug('Usando cache do TMDB', { imdbId });
+                    this.logger.debug('Cache TMDB usado', { imdbId });
                     tmdbData = cached.data;
                 }
                 else {
@@ -65,13 +67,13 @@ class SimilarityCalculator {
                 }
                 movieInfo = {
                     portugueseTitle: tmdbData.portugueseTitle,
-                    englishTitle: tmdbData.originalTitle,
+                    originalTitle: tmdbData.originalTitle,
                     year: tmdbData.year,
                     allTitles: tmdbData.allTitles
                 };
             }
             catch (error) {
-                this.logger.error('Erro ao obter dados do TMDB', {
+                this.logger.error('Erro TMDB', {
                     imdbId,
                     error: error instanceof Error ? error.message : 'Erro desconhecido'
                 });
@@ -81,195 +83,271 @@ class SimilarityCalculator {
             return {
                 matches: false,
                 similarity: 0,
-                reason: 'Não foi possível obter informações do filme do TMDB'
+                reason: 'Sem dados TMDB'
             };
         }
         const torrentYear = torrentMetadata?.year || this.extractYearFromTitle(torrentTitle);
         const torrentClean = this.normalizeForComparison(torrentTitle);
-        this.logger.debug('Dados extraídos', {
-            torrentClean: torrentClean.substring(0, 80),
-            torrentYear,
-            movieYear: movieInfo.year
+        this.logger.debug('Dados TMDB vs Torrent', {
+            tmdbPortugues: movieInfo.portugueseTitle,
+            tmdbOriginal: movieInfo.originalTitle,
+            tmdbAno: movieInfo.year,
+            torrentAno: torrentYear,
+            torrentClean: torrentClean.substring(0, 60)
         });
         if (movieInfo.year && torrentYear) {
-            const yearDifference = Math.abs(movieInfo.year - torrentYear);
-            if (yearDifference > 2) {
-                this.logger.warn('Anos diferentes detectados', {
-                    requestedYear: movieInfo.year,
-                    torrentYear: torrentYear,
-                    difference: yearDifference
+            if (movieInfo.year !== torrentYear) {
+                this.logger.warn('Ano diferente - rejeitado', {
+                    solicitado: movieInfo.year,
+                    torrent: torrentYear
                 });
                 return {
                     matches: false,
                     similarity: 0.3,
-                    reason: `Anos diferentes demais: ${movieInfo.year} ≠ ${torrentYear}`
+                    reason: `Ano errado: ${movieInfo.year} ≠ ${torrentYear}`
                 };
             }
         }
-        const validationResult = this.validateWithHierarchy(torrentClean, movieInfo.englishTitle, movieInfo.portugueseTitle, movieInfo.year, torrentYear);
-        if (validationResult.matches) {
-            this.logger.info('Match válido encontrado', {
-                similarity: validationResult.similarity,
-                reason: validationResult.reason,
-                validationType: validationResult.validationType
-            });
-        }
-        return validationResult;
-    }
-    validateWithHierarchy(torrentClean, englishTitle, portugueseTitle, movieYear, torrentYear) {
-        this.logger.debug('Iniciando validação hierárquica', {
-            englishTitle,
-            hasPortugueseTitle: !!portugueseTitle
-        });
-        const englishMatch = this.checkTitleMatch(this.normalizeForComparison(englishTitle), englishTitle, torrentClean);
-        if (englishMatch.matches && englishMatch.similarity >= 0.5) {
-            this.logger.debug('Match com título inglês encontrado', {
-                title: englishTitle,
-                similarity: englishMatch.similarity
+        if (this.isSeriesTitle(torrentTitle)) {
+            this.logger.warn('Torrent é série, busca é filme - rejeitado', {
+                torrentTitle: torrentTitle.substring(0, 80),
+                imdbId
             });
             return {
-                ...englishMatch,
-                validationType: 'primary_english'
+                matches: false,
+                similarity: 0.2,
+                reason: 'Torrent é série (tem temporada/episódio) mas busca é filme'
             };
         }
-        this.logger.debug('Match com título inglês insuficiente', {
-            title: englishTitle,
-            similarity: englishMatch.similarity,
-            threshold: '50%'
+        const matchResult = this.findExactTmdbMatch(torrentClean, torrentTitle, movieInfo.portugueseTitle, movieInfo.originalTitle, movieInfo.allTitles);
+        if (matchResult.matches) {
+            this.logger.info('Match TMDB encontrado', {
+                similaridade: matchResult.similarity,
+                tituloTmdb: matchResult.matchedTmdbTitle || movieInfo.portugueseTitle || movieInfo.originalTitle
+            });
+        }
+        return matchResult;
+    }
+    isSeriesTitle(torrentTitle) {
+        const seriesPatterns = [
+            /s\d{1,2}e\d{1,2}/i,
+            /season\s*\d+/i,
+            /temporada\s*\d+/i,
+            /\d+x\d+/i,
+            /epis[oó]dio\s*\d+/i,
+            /\d+\s*ª?\s*temporada/i,
+            /completa\s*\d+\s*temporada/i
+        ];
+        return seriesPatterns.some(pattern => pattern.test(torrentTitle));
+    }
+    findExactTmdbMatch(torrentClean, originalTorrentTitle, portugueseTitle, originalTitle, allTmdbTitles) {
+        const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
+        const torrentNonTechWords = torrentWords.filter(w => !this.TECHNICAL_WORDS.includes(w));
+        const torrentCore = torrentNonTechWords.join(' ');
+        this.logger.debug('Análise TMDB iniciada', {
+            torrentCore,
+            torrentOriginal: originalTorrentTitle.substring(0, 60),
+            tmdbTitulos: allTmdbTitles.length
         });
-        if (portugueseTitle) {
-            const portugueseMatch = this.checkTitleMatch(this.normalizeForComparison(portugueseTitle), portugueseTitle, torrentClean);
-            if (portugueseMatch.matches) {
-                const adjustedSimilarity = Math.max(portugueseMatch.similarity, 0.7);
-                this.logger.debug('Match com título português (TMDB) encontrado', {
-                    title: portugueseTitle,
-                    similarity: portugueseMatch.similarity,
-                    adjustedSimilarity
+        for (const tmdbTitle of allTmdbTitles) {
+            const tmdbClean = this.normalizeForComparison(tmdbTitle);
+            const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
+            const tmdbNonTechWords = tmdbWords.filter(w => !this.TECHNICAL_WORDS.includes(w));
+            const tmdbCore = tmdbNonTechWords.join(' ');
+            if (tmdbCore.length === 0)
+                continue;
+            if (torrentCore === tmdbCore) {
+                this.logger.debug('Match exato core TMDB', {
+                    torrentCore,
+                    tmdbCore,
+                    tmdbTitle
                 });
                 return {
                     matches: true,
-                    similarity: adjustedSimilarity,
-                    reason: `Título português (TMDB): "${portugueseTitle}"`,
-                    validationType: 'tmdb_portuguese'
-                };
-            }
-        }
-        this.logger.debug('Nenhum match encontrado na hierarquia', {
-            triedEnglish: true,
-            triedPortuguese: !!portugueseTitle
-        });
-        return {
-            matches: false,
-            similarity: Math.max(englishMatch.similarity, portugueseTitle ?
-                this.checkTitleMatch(this.normalizeForComparison(portugueseTitle), portugueseTitle, torrentClean).similarity : 0),
-            reason: 'Nenhuma correspondência encontrada',
-            validationType: 'no_match'
-        };
-    }
-    checkTitleMatch(knownClean, knownOriginalTitle, torrentClean) {
-        const knownWords = knownClean.split(' ').filter(w => w.length >= 3);
-        if (knownWords.length === 1) {
-            return this.checkSingleWordTitle(knownClean, knownOriginalTitle, torrentClean);
-        }
-        return this.checkMultiWordTitle(knownClean, knownOriginalTitle, torrentClean);
-    }
-    checkSingleWordTitle(knownClean, knownOriginalTitle, torrentClean) {
-        const torrentWords = torrentClean.split(' ').filter(w => w.length >= 2);
-        if (torrentWords.length === 0) {
-            return {
-                matches: false,
-                similarity: 0,
-                reason: 'Título do torrent vazio após normalização'
-            };
-        }
-        const firstNonTechnicalWord = this.getFirstNonTechnicalWord(torrentWords);
-        if (firstNonTechnicalWord === knownClean) {
-            return {
-                matches: true,
-                similarity: 0.95,
-                reason: `"${knownOriginalTitle}" como primeira palavra relevante do título`
-            };
-        }
-        if (torrentWords.length <= 4) {
-            const exactMatch = torrentWords.find(word => word === knownClean);
-            if (exactMatch) {
-                return {
-                    matches: true,
                     similarity: 0.95,
-                    reason: `"${knownOriginalTitle}" em título curto (${torrentWords.length} palavras)`
+                    reason: `Título TMDB exato: "${tmdbTitle}"`,
+                    matchedTmdbTitle: tmdbTitle
                 };
             }
-        }
-        const containsMatch = torrentClean.includes(knownClean);
-        if (containsMatch) {
-            const position = torrentClean.indexOf(knownClean);
-            if (position > 0) {
-                const textBefore = torrentClean.substring(0, position).trim();
-                const wordsBefore = textBefore.split(' ').filter(w => w.length >= 2);
-                const nonTechnicalWordsBefore = wordsBefore.filter(word => !this.TECHNICAL_WORDS.includes(word));
-                if (nonTechnicalWordsBefore.length >= 1) {
-                    return {
-                        matches: false,
-                        similarity: 0.3,
-                        reason: `"${knownOriginalTitle}" não é termo principal (tem "${nonTechnicalWordsBefore[0]}" antes)`
-                    };
+            if (this.isIsolatedSubstring(torrentClean, tmdbClean) && tmdbClean.length >= 3) {
+                this.logger.debug('Torrent contém título TMDB isolado', {
+                    torrent: torrentClean,
+                    tmdbTitle: tmdbClean,
+                    tmdbOriginal: tmdbTitle
+                });
+                if (tmdbNonTechWords.length === 1) {
+                    const tmdbWord = tmdbNonTechWords[0];
+                    if (torrentNonTechWords.length > 1) {
+                        const torrentIndex = torrentNonTechWords.indexOf(tmdbWord);
+                        if (torrentIndex !== -1) {
+                            const adjacentWords = [];
+                            if (torrentIndex > 0)
+                                adjacentWords.push(torrentNonTechWords[torrentIndex - 1]);
+                            if (torrentIndex < torrentNonTechWords.length - 1)
+                                adjacentWords.push(torrentNonTechWords[torrentIndex + 1]);
+                            if (adjacentWords.length > 0) {
+                                const formsDifferentExpression = this.formsDifferentExpression(tmdbWord, adjacentWords);
+                                if (formsDifferentExpression) {
+                                    this.logger.debug('Título 1 palavra forma expressão diferente', {
+                                        palavraTmdb: tmdbWord,
+                                        palavrasAdjacentes: adjacentWords,
+                                        expressaoPossivel: [...adjacentWords, tmdbWord].join(' ')
+                                    });
+                                    return {
+                                        matches: false,
+                                        similarity: 0.3,
+                                        reason: `"${tmdbWord}" forma expressão diferente com "${adjacentWords.join(' ')}"`
+                                    };
+                                }
+                            }
+                        }
+                    }
                 }
-            }
-            const beforeChar = position > 0 ? torrentClean[position - 1] : ' ';
-            const afterChar = torrentClean[position + knownClean.length];
-            const isIsolated = (beforeChar === ' ' || beforeChar === '(' || beforeChar === '[') &&
-                (afterChar === ' ' || afterChar === ')' || afterChar === ']' || afterChar === undefined);
-            if (isIsolated) {
                 return {
                     matches: true,
                     similarity: 0.9,
-                    reason: `"${knownOriginalTitle}" isolado no título`
+                    reason: `Contém título TMDB: "${tmdbTitle}"`,
+                    matchedTmdbTitle: tmdbTitle
+                };
+            }
+            if (tmdbCore.includes(torrentCore) && torrentCore.length >= 3) {
+                this.logger.debug('TMDB contém torrent core', {
+                    torrentCore,
+                    tmdbCore,
+                    tmdbTitle
+                });
+                return {
+                    matches: true,
+                    similarity: 0.85,
+                    reason: `TMDB contém: "${tmdbTitle}"`,
+                    matchedTmdbTitle: tmdbTitle
                 };
             }
         }
-        const similarity = this.calculateWordSimilarity(torrentClean, knownClean);
-        if (similarity >= 0.8) {
-            return {
-                matches: true,
-                similarity,
-                reason: `Similaridade alta: ${(similarity * 100).toFixed(1)}%`
-            };
-        }
-        return {
-            matches: false,
-            similarity,
-            reason: `Similaridade insuficiente: ${(similarity * 100).toFixed(1)}%`
-        };
-    }
-    getFirstNonTechnicalWord(words) {
-        for (const word of words) {
-            if (!this.TECHNICAL_WORDS.includes(word)) {
-                return word;
+        const targetTitle = portugueseTitle || originalTitle;
+        const targetClean = this.normalizeForComparison(targetTitle);
+        const targetWords = targetClean.split(' ').filter(w => w.length > 0);
+        const targetNonTechWords = targetWords.filter(w => !this.TECHNICAL_WORDS.includes(w));
+        const targetCore = targetNonTechWords.join(' ');
+        if (targetNonTechWords.length === 1) {
+            const singleWord = targetNonTechWords[0];
+            const hasOnlyTargetWord = torrentNonTechWords.length === 1 &&
+                torrentNonTechWords[0] === singleWord;
+            const hasTargetWordWithYear = torrentNonTechWords.length === 2 &&
+                torrentNonTechWords[0] === singleWord &&
+                /^\d{4}$/.test(torrentNonTechWords[1]);
+            if (hasOnlyTargetWord || hasTargetWordWithYear) {
+                this.logger.debug('Título 1 palavra TMDB aceito', {
+                    palavra: singleWord,
+                    torrentNonTech: torrentNonTechWords,
+                    tmdbTitle: targetTitle
+                });
+                return {
+                    matches: true,
+                    similarity: 0.9,
+                    reason: `Título TMDB de 1 palavra: "${targetTitle}"`,
+                    matchedTmdbTitle: targetTitle
+                };
+            }
+            if (torrentNonTechWords.includes(singleWord) && torrentNonTechWords.length > 1) {
+                this.logger.debug('Título 1 palavra em contexto maior - rejeitado', {
+                    palavraTmdb: singleWord,
+                    contexto: torrentNonTechWords.join(' '),
+                    tmdbTitle: targetTitle
+                });
+                return {
+                    matches: false,
+                    similarity: 0.3,
+                    reason: `"${torrentNonTechWords.join(' ')}" ≠ "${targetTitle}" (contexto diferente)`
+                };
             }
         }
-        return null;
-    }
-    checkMultiWordTitle(knownClean, knownOriginalTitle, torrentClean) {
-        if (torrentClean.includes(knownClean)) {
+        let bestMatch = { similarity: 0, title: '', reason: '' };
+        for (const tmdbTitle of allTmdbTitles) {
+            const tmdbClean = this.normalizeForComparison(tmdbTitle);
+            const similarity = this.calculateEnhancedSimilarity(torrentClean, tmdbClean);
+            if (similarity > bestMatch.similarity) {
+                bestMatch = {
+                    similarity,
+                    title: tmdbTitle,
+                    reason: `Similaridade com "${tmdbTitle}": ${(similarity * 100).toFixed(1)}%`
+                };
+            }
+        }
+        const isBrazilianMovie = this.isBrazilianMovieTitle(originalTitle, portugueseTitle);
+        const threshold = isBrazilianMovie ? 0.4 : 0.5;
+        if (bestMatch.similarity >= threshold) {
+            this.logger.debug('Match por similaridade TMDB', {
+                tituloTmdb: bestMatch.title,
+                similaridade: bestMatch.similarity,
+                threshold
+            });
             return {
                 matches: true,
-                similarity: 0.95,
-                reason: `Título "${knownOriginalTitle}" encontrado no torrent`
+                similarity: bestMatch.similarity,
+                reason: bestMatch.reason,
+                matchedTmdbTitle: bestMatch.title
             };
         }
-        const similarity = this.calculateWordSimilarity(torrentClean, knownClean);
-        if (similarity >= 0.5) {
-            return {
-                matches: true,
-                similarity,
-                reason: `Similaridade: ${(similarity * 100).toFixed(1)}%`
-            };
-        }
+        this.logger.debug('Nenhum match TMDB suficiente', {
+            melhorSimilaridade: bestMatch.similarity,
+            threshold,
+            torrentCore
+        });
         return {
             matches: false,
-            similarity,
-            reason: `Similaridade insuficiente: ${(similarity * 100).toFixed(1)}%`
+            similarity: bestMatch.similarity,
+            reason: `Melhor similaridade TMDB: ${(bestMatch.similarity * 100).toFixed(1)}% < ${threshold * 100}%`
         };
+    }
+    isIsolatedSubstring(torrentClean, substring) {
+        if (substring.length === 0)
+            return false;
+        const pattern = new RegExp(`(^|\\s)${substring}(\\s|$)`);
+        return pattern.test(torrentClean);
+    }
+    formsDifferentExpression(baseWord, adjacentWords) {
+        const expressionFormingWords = [
+            'doce', 'grande', 'negro', 'bravo', 'janeiro', 'hudson',
+            'aberto', 'fechado', 'calmo', 'revolto', 'morto', 'vivo',
+            'novo', 'velho', 'alto', 'baixo', 'longo', 'curto',
+            'quente', 'frio', 'doce', 'salgado', 'amargo'
+        ];
+        for (const adjacentWord of adjacentWords) {
+            if (expressionFormingWords.includes(adjacentWord)) {
+                return true;
+            }
+            const connectingWords = ['de', 'da', 'do', 'das', 'dos', 'em', 'no', 'na'];
+            if (connectingWords.includes(adjacentWord)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    calculateEnhancedSimilarity(str1, str2) {
+        const words1 = str1.split(' ').filter(w => w.length > 0);
+        const words2 = str2.split(' ').filter(w => w.length > 0);
+        if (words1.length === 0 || words2.length === 0)
+            return 0;
+        const wordSet1 = new Set(words1);
+        const commonWords = words2.filter(word => wordSet1.has(word));
+        const wordSimilarity = commonWords.length / Math.max(words1.length, words2.length);
+        let orderPenalty = 0;
+        if (commonWords.length >= 2) {
+            const str1Order = words1.filter(w => commonWords.includes(w));
+            const str2Order = words2.filter(w => commonWords.includes(w));
+            for (let i = 0; i < Math.min(str1Order.length, str2Order.length); i++) {
+                if (str1Order[i] !== str2Order[i]) {
+                    orderPenalty += 0.1;
+                }
+            }
+        }
+        return Math.max(0, wordSimilarity - orderPenalty);
+    }
+    isBrazilianMovieTitle(originalTitle, portugueseTitle) {
+        const titleToCheck = (portugueseTitle || originalTitle).toLowerCase();
+        const brazilianKeywords = ['brasil', 'brasileiro', 'nacional'];
+        return brazilianKeywords.some(keyword => titleToCheck.includes(keyword));
     }
     extractYearFromTitle(title) {
         const yearMatch = title.match(/\b(19|20)\d{2}\b/);
@@ -279,7 +357,17 @@ class SimilarityCalculator {
         return null;
     }
     normalizeForComparison(title) {
-        return title
+        const decodedTitle = title
+            .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
+            .replace(/&ndash;/g, '–')
+            .replace(/&mdash;/g, '—')
+            .replace(/&amp;/g, '&')
+            .replace(/&lt;/g, '<')
+            .replace(/&gt;/g, '>')
+            .replace(/&quot;/g, '"')
+            .replace(/&#039;/g, "'")
+            .replace(/&apos;/g, "'");
+        return decodedTitle
             .toLowerCase()
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
@@ -299,11 +387,20 @@ class SimilarityCalculator {
     smartTitleContainsCheckSync(torrentTitle, imdbTitle) {
         const normTorrent = this.normalizeForComparison(torrentTitle);
         const normImdb = this.normalizeForComparison(imdbTitle);
-        const imdbWords = normImdb.split(' ').filter(w => w.length >= 3);
-        if (imdbWords.length === 1) {
-            return this.checkSingleWordTitle(normImdb, imdbTitle, normTorrent);
+        const similarity = this.calculateWordSimilarity(normTorrent, normImdb);
+        const threshold = 0.5;
+        if (similarity >= threshold) {
+            return {
+                matches: true,
+                similarity,
+                reason: `Similaridade: ${(similarity * 100).toFixed(1)}%`
+            };
         }
-        return this.checkMultiWordTitle(normImdb, imdbTitle, normTorrent);
+        return {
+            matches: false,
+            similarity,
+            reason: `Similaridade insuficiente: ${(similarity * 100).toFixed(1)}%`
+        };
     }
     detectConfusingSeries(torrentTitle, imdbTitle) {
         const torrentLower = torrentTitle.toLowerCase();
@@ -339,13 +436,13 @@ class SimilarityCalculator {
     }
     getStats() {
         return {
+            version: '6.0.0',
+            feature: 'Match Exato Rigoroso - Rejeita "Rio Doce" para "Rio"',
             confusingSeriesCount: this.confusingSeries.length,
             tmdbScraperAvailable: !!this.tmdbScraper,
             cacheSize: this.tmdbCache.size,
-            strategy: 'Hierarquia inglês (primário) / TMDB português (confiável) - v2.4.0',
             technicalWordsCount: this.TECHNICAL_WORDS.length,
-            version: '2.4.0',
-            feature: 'TMDB com cache - otimizado para performance'
+            strategy: 'Substring isolada + análise contexto para 1 palavra'
         };
     }
 }
