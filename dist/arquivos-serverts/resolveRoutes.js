@@ -112,14 +112,20 @@ const setupResolveRoutes = (app) => {
                 return res.redirect(302, rdResult.streamLink);
             }
             else if (rdResult.status === 'downloading' || rdResult.status === 'queued' || rdResult.status === 'magnet_conversion') {
-                logger.info('TESTE: Retornando REDIRECT direto para vídeo', {
+                logger.info('Retornando stream informativo (download em progresso)', {
                     status: rdResult.status,
                     season,
                     episode,
                     type
                 });
-                const testVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
-                return res.redirect(302, testVideoUrl);
+                const requestId = `resolve-downloading-${Date.now()}`;
+                const baseUrl = `${req.protocol}://${req.get('host')}`;
+                const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+                const staticResponse = staticResponseService.getResponseForRealDebridStatus(rdResult.status);
+                const responseToUse = staticResponse || StaticResponseService_1.StaticResponse.DOWNLOADING;
+                const stream = createStreamFromStaticResponse(staticResponseService, responseToUse, requestId, season, episode);
+                stream.description += `\nStatus: ${rdResult.status}`;
+                return res.json({ streams: [stream] });
             }
             else if (rdResult.status === 'error' || rdResult.status === 'dead') {
                 logger.warn('Erro no Real-Debrid', {
@@ -234,15 +240,13 @@ const setupResolveRoutes = (app) => {
             });
         }
     });
-    logger.info('Rotas configuradas', {
-        endpoints: [
-            'GET /resolve/{magnet}?apiKey={key}&[season]&[episode]&[type]',
-            'GET /resolve/{magnet}/status?apiKey={key}&[season]&[episode]'
-        ],
+    logger.info('ResolveRoutes v1.0.0 - Streams informativos otimizados', {
         features: [
-            'Cache 24h',
-            'Suporte a filmes e séries',
-            'Status em tempo real'
+            'Vídeos locais src/videos/ para status downloading/queued',
+            'Cache 24h para links prontos',
+            'Streams no formato Stremio',
+            'Status em tempo real',
+            'Suporte a filmes e séries'
         ]
     });
 };

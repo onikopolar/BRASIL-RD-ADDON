@@ -134,18 +134,35 @@ export const setupResolveRoutes = (app: any) => {
                 cacheService.set(cacheKey, rdResult.streamLink, CACHE_TTL);
                 return res.redirect(302, rdResult.streamLink);
 
-            } else if (rdResult.status === 'downloading' || rdResult.status === 'queued' || rdResult.status === 'magnet_conversion') {
-                logger.info('TESTE: Retornando REDIRECT direto para vídeo', {
-                    status: rdResult.status,
-                    season,
-                    episode,
-                    type
-                });
+} else if (rdResult.status === 'downloading' || rdResult.status === 'queued' || rdResult.status === 'magnet_conversion') {
+    logger.info('Retornando stream informativo (download em progresso)', {
+        status: rdResult.status,
+        season,
+        episode,
+        type
+    });
 
-                // TESTE: URL do vídeo público
-                const testVideoUrl = 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/BigBuckBunny.mp4';
+    // CORRETO: Usar StaticResponseService para vídeo local
+    const requestId = `resolve-downloading-${Date.now()}`;
+    const baseUrl = `${req.protocol}://${req.get('host')}`;
+    const staticResponseService = new StaticResponseService(baseUrl);
+    
+    // Obter o StaticResponse correto para o status
+    const staticResponse = staticResponseService.getResponseForRealDebridStatus(rdResult.status);
+    const responseToUse = staticResponse || StaticResponse.DOWNLOADING;
+    
+    // Criar stream no formato Stremio
+    const stream = createStreamFromStaticResponse(
+        staticResponseService,
+        responseToUse,
+        requestId,
+        season,
+        episode
+    );
+    
+    stream.description += `\nStatus: ${rdResult.status}`;
 
-                return res.redirect(302, testVideoUrl);
+    return res.json({ streams: [stream] });
 
             } else if (rdResult.status === 'error' || rdResult.status === 'dead') {
                 logger.warn('Erro no Real-Debrid', {
@@ -299,15 +316,13 @@ export const setupResolveRoutes = (app: any) => {
         }
     });
 
-    logger.info('Rotas configuradas', {
-        endpoints: [
-            'GET /resolve/{magnet}?apiKey={key}&[season]&[episode]&[type]',
-            'GET /resolve/{magnet}/status?apiKey={key}&[season]&[episode]'
-        ],
+    logger.info('ResolveRoutes v1.0.0 - Streams informativos otimizados', {
         features: [
-            'Cache 24h',
-            'Suporte a filmes e séries',
-            'Status em tempo real'
+            'Vídeos locais src/videos/ para status downloading/queued',
+            'Cache 24h para links prontos',
+            'Streams no formato Stremio',
+            'Status em tempo real',
+            'Suporte a filmes e séries'
         ]
     });
 };
