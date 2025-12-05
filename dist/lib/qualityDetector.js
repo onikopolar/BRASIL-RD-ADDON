@@ -33,33 +33,84 @@ class QualityDetector {
             { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
             { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
         ];
-        this.exactPatterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' }
-        ];
         this.allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
+        this.qualityOrder = ['2160p', '1080p', '720p', 'HD'];
     }
-    extractQuality(title) {
+    extractAllQualities(title) {
         const cleanTitle = title.toLowerCase();
-        for (const { pattern, quality, confidence } of this.qualityPatterns) {
-            if (pattern.test(cleanTitle) && confidence >= 95) {
-                return quality;
-            }
-        }
-        for (const { pattern, quality } of this.exactPatterns) {
-            if (pattern.test(cleanTitle)) {
-                return quality;
-            }
-        }
+        const foundQualities = new Set();
         for (const { pattern, quality, confidence } of this.qualityPatterns) {
             if (pattern.test(cleanTitle) && confidence >= 80) {
-                return quality;
+                foundQualities.add(quality);
             }
         }
-        return this.inferQualityFromContext(cleanTitle);
+        if (foundQualities.size === 0) {
+            const inferred = this.inferQualityFromContext(cleanTitle);
+            foundQualities.add(inferred);
+        }
+        return Array.from(foundQualities)
+            .filter(quality => this.allowedQualities.has(quality))
+            .sort((a, b) => {
+            const indexA = this.qualityOrder.indexOf(a);
+            const indexB = this.qualityOrder.indexOf(b);
+            return indexA - indexB;
+        });
+    }
+    extractBestQuality(title) {
+        const allQualities = this.extractAllQualities(title);
+        if (allQualities.length > 0) {
+            return allQualities[0];
+        }
+        return this.inferQualityFromContext(title.toLowerCase());
+    }
+    extractWorstQuality(title) {
+        const allQualities = this.extractAllQualities(title);
+        if (allQualities.length > 0) {
+            return allQualities[allQualities.length - 1];
+        }
+        return 'HD';
+    }
+    hasMultipleQualities(title) {
+        const qualities = this.extractAllQualities(title);
+        return qualities.length > 1;
+    }
+    expandQualityRange(title) {
+        const cleanTitle = title.toLowerCase();
+        const qualities = new Set();
+        const rangePatterns = [
+            /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,
+            /(\d{3,4}p)\s*\|\s*(\d{3,4}p)/gi,
+            /(\d{3,4}p)\s*&\s*(\d{3,4}p)/gi,
+            /(\d{3,4}p)\s*\+\s*(\d{3,4}p)/gi
+        ];
+        for (const pattern of rangePatterns) {
+            const matches = cleanTitle.match(pattern);
+            if (matches) {
+                matches.forEach(match => {
+                    const numberMatches = match.match(/\d{3,4}p/gi);
+                    if (numberMatches) {
+                        numberMatches.forEach(num => {
+                            if (num.includes('2160') || num.includes('4k')) {
+                                qualities.add('2160p');
+                            }
+                            else if (num.includes('1080')) {
+                                qualities.add('1080p');
+                            }
+                            else if (num.includes('720')) {
+                                qualities.add('720p');
+                            }
+                        });
+                    }
+                });
+            }
+        }
+        if (qualities.size > 0) {
+            return Array.from(qualities).sort((a, b) => this.qualityOrder.indexOf(a) - this.qualityOrder.indexOf(b));
+        }
+        return this.extractAllQualities(title);
+    }
+    extractQuality(title) {
+        return this.extractBestQuality(title);
     }
     inferQualityFromContext(titleLower) {
         if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
@@ -74,15 +125,23 @@ class QualityDetector {
         return 'HD';
     }
     extractQualityFromFilename(filename) {
-        return this.extractQuality(filename);
+        return this.extractBestQuality(filename);
     }
     extractQualityFromStreamName(name) {
         if (!name)
             return 'HD';
-        return this.extractQuality(name);
+        return this.extractBestQuality(name);
     }
     isValidQuality(quality) {
         return this.allowedQualities.has(quality);
+    }
+    hasQuality(title, quality) {
+        const qualities = this.extractAllQualities(title);
+        return qualities.includes(quality);
+    }
+    getQualityOrder(quality) {
+        const index = this.qualityOrder.indexOf(quality);
+        return index !== -1 ? index : this.qualityOrder.length;
     }
 }
 exports.QualityDetector = QualityDetector;

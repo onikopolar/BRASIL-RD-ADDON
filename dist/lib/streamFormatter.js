@@ -2,19 +2,24 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StreamFormatter = void 0;
 const magnetHelper_1 = require("../lib/magnetHelper");
+const qualityDetector_1 = require("../lib/qualityDetector");
 const logger_1 = require("../utils/logger");
+const MetadataExtractor_1 = require("../lib/title-filter/MetadataExtractor");
 class StreamFormatter {
     constructor() {
         this.logger = new logger_1.Logger('StreamFormatter');
+        this.qualityDetector = new qualityDetector_1.QualityDetector();
+        this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
+        this.logger.info('StreamFormatter v1.0.6 inicializado');
     }
-    createDirectStream(title, name, description, directLink, quality, type, season, episode, behaviorHints) {
+    createDirectStream(title, name, description, directLink, quality, type, season, episode, behaviorHints, metadata) {
         this.logger.debug('Criando stream DIRETO', {
             title,
             quality,
             type,
             season,
             episode,
-            directLinkLength: directLink.length
+            hasMetadata: !!metadata
         });
         let finalName = name;
         let finalTitle = title;
@@ -29,10 +34,23 @@ class StreamFormatter {
                 finalTitle = title + episodeTag;
             }
         }
+        let finalDescription = description;
+        if (metadata) {
+            if (metadata.isCompleteSeason) {
+                finalDescription += ' | ✅ Temporada Completa';
+            }
+            if (metadata.hasMultiEpisode) {
+                finalDescription += ' | 📺 Múltiplos Episódios';
+            }
+            if (metadata.language && metadata.language !== 'unknown') {
+                finalDescription += ` | 🌐 ${metadata.language}`;
+            }
+        }
+        finalDescription += ' | INSTANTÂNEO';
         return {
             title: finalTitle,
             name: finalName,
-            description: description + ' | ✅ INSTANTÂNEO',
+            description: finalDescription,
             sources: [directLink],
             behaviorHints: {
                 notWebReady: false,
@@ -44,14 +62,15 @@ class StreamFormatter {
             url: directLink
         };
     }
-    createLazyStream(title, name, description, magnet, apiKey, quality, type, season, episode, behaviorHints) {
+    createLazyStream(title, name, description, magnet, apiKey, quality, type, season, episode, behaviorHints, metadata) {
         this.logger.debug('Criando stream LAZY', {
             title,
             quality,
             type,
             season,
             episode,
-            hasApiKey: !!apiKey
+            hasApiKey: !!apiKey,
+            hasMetadata: !!metadata
         });
         const magnetHash = (0, magnetHelper_1.extractHashFromMagnet)(magnet);
         const sources = magnetHash ? [`dht:${magnetHash}`] : [];
@@ -70,10 +89,27 @@ class StreamFormatter {
             }
         }
         let finalDescription = description;
+        if (metadata) {
+            if (metadata.isCompleteSeason) {
+                finalDescription += ' | ✅ Temporada Completa';
+            }
+            if (metadata.isPackage) {
+                finalDescription += ' | 📦 Pacote';
+            }
+            if (metadata.hasMultiEpisode) {
+                finalDescription += ' | 📺 Múltiplos Episódios';
+            }
+            if (metadata.language && metadata.language !== 'unknown') {
+                finalDescription += ` | 🌐 ${metadata.language}`;
+            }
+            if (metadata.source && metadata.source !== 'unknown') {
+                finalDescription += ` | 🎞️ ${metadata.source}`;
+            }
+        }
         if (type === 'series') {
             finalDescription += ' | ⏳ Aguardando processamento...';
         }
-        return {
+        const stream = {
             title: finalTitle,
             name: finalName,
             description: finalDescription,
@@ -89,20 +125,162 @@ class StreamFormatter {
             infoHash: magnetHash || undefined,
             url: resolveUrl
         };
+        if (metadata?.isPackage && stream.behaviorHints) {
+            stream.behaviorHints.packageContent = true;
+        }
+        return stream;
+    }
+    createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false) {
+        const episodeTag = type === 'series' && season && episode
+            ? `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`
+            : '';
+        const allQualities = this.extractAllQualities(torrent.title);
+        this.logger.debug('Criando múltiplos streams por qualidade', {
+            torrentTitle: torrent.title,
+            allQualities,
+            type,
+            episodeTag,
+            hasMultipleQualities: allQualities.length > 1
+        });
+        if (allQualities.length <= 1) {
+            const quality = allQualities[0] || this.qualityDetector.extractBestQuality(torrent.title);
+            if (type === 'series') {
+                return [this.createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD)];
+            }
+            else {
+                return [this.createMovieStream(torrent, request, directLink, isAvailableOnRD)];
+            }
+        }
+        const streams = [];
+        const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
+        this.logger.debug('Metadados para múltiplas qualidades', {
+            title: torrent.title.substring(0, 60),
+            quality: metadata.quality,
+            isPackage: metadata.isPackage,
+            hasMultiEpisode: metadata.hasMultiEpisode
+        });
+        for (const quality of allQualities) {
+            const baseTitle = this.extractCleanMovieTitle(torrent.title);
+            const qualitySuffix = ` (${quality})`;
+            let description = `${baseTitle}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)}`;
+            if (episodeTag) {
+                description += ` | ${episodeTag}`;
+            }
+            if (isAvailableOnRD && directLink) {
+                streams.push(this.createDirectStream(`Brasil RD${qualitySuffix}`, `Brasil RD${qualitySuffix}`, description, directLink, quality, type, season, episode, {
+                    bingeGroup: `br-${request.id}-${quality}`,
+                    filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+                }, metadata));
+            }
+            else {
+                streams.push(this.createLazyStream(`Brasil RD${qualitySuffix}`, `Brasil RD${qualitySuffix}`, description, torrent.magnet, request.apiKey, quality, type, season, episode, {
+                    bingeGroup: `br-${request.id}-${quality}`,
+                    filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+                }, metadata));
+            }
+        }
+        this.logger.info(`Criados ${streams.length} streams para múltiplas qualidades`, {
+            torrentTitle: torrent.title,
+            qualities: allQualities,
+            type
+        });
+        return streams;
+    }
+    extractAllQualities(title) {
+        const qualityPatterns = [
+            /\b(2160p|4k|uhd)\b/gi,
+            /\b(1080p|fullhd|full hd)\b/gi,
+            /\b(720p|hd|high definition)\b/gi,
+            /\b(480p|sd|standard definition)\b/gi,
+            /\b(360p|low)\b/gi
+        ];
+        const foundQualities = [];
+        const titleLower = title.toLowerCase();
+        for (const pattern of qualityPatterns) {
+            const matches = titleLower.match(pattern);
+            if (matches) {
+                for (const match of matches) {
+                    let normalizedQuality = match;
+                    if (match.includes('4k') || match.includes('2160p') || match.includes('uhd')) {
+                        normalizedQuality = '2160p';
+                    }
+                    else if (match.includes('1080p') || match.includes('fullhd') || match.includes('full hd')) {
+                        normalizedQuality = '1080p';
+                    }
+                    else if (match.includes('720p') || match.includes('hd') || match.includes('high definition')) {
+                        normalizedQuality = '720p';
+                    }
+                    else if (match.includes('480p') || match.includes('sd') || match.includes('standard definition')) {
+                        normalizedQuality = 'SD';
+                    }
+                    else if (match.includes('360p') || match.includes('low')) {
+                        normalizedQuality = 'SD';
+                    }
+                    if (!foundQualities.includes(normalizedQuality)) {
+                        foundQualities.push(normalizedQuality);
+                    }
+                }
+            }
+        }
+        if (foundQualities.length === 0) {
+            const defaultQuality = this.qualityDetector.extractBestQuality(title);
+            if (defaultQuality && defaultQuality !== 'unknown') {
+                foundQualities.push(defaultQuality);
+            }
+        }
+        const qualityOrder = ['2160p', '1080p', '720p', 'HD', 'SD'];
+        foundQualities.sort((a, b) => {
+            const indexA = qualityOrder.indexOf(a);
+            const indexB = qualityOrder.indexOf(b);
+            return indexA - indexB;
+        });
+        this.logger.debug('Qualidades extraídas do título', {
+            title: title.substring(0, 60),
+            foundQualities,
+            total: foundQualities.length
+        });
+        return foundQualities;
     }
     createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false) {
         const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
-        const quality = this.extractQualityFromFilename(torrent.title);
+        const quality = this.qualityDetector.extractBestQuality(torrent.title);
+        const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
+        this.logger.debug('Metadados para série', {
+            title: torrent.title.substring(0, 60),
+            season: metadata.season,
+            isCompleteSeason: metadata.isCompleteSeason,
+            isPackage: metadata.isPackage
+        });
         if (isAvailableOnRD && directLink) {
             return this.createDirectStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)} | ${episodeTag}`, directLink, quality, 'series', season, episode, {
                 bingeGroup: `br-${request.id}-${season}`,
                 filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
-            });
+            }, metadata);
         }
         return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)} | ${episodeTag}`, torrent.magnet, request.apiKey, quality, 'series', season, episode, {
             bingeGroup: `br-${request.id}-${season}`,
             filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+        }, metadata);
+    }
+    createMovieStream(torrent, request, directLink, isAvailableOnRD = false) {
+        const quality = this.qualityDetector.extractBestQuality(torrent.title);
+        const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
+        this.logger.debug('Metadados para filme', {
+            title: torrent.title.substring(0, 60),
+            quality: metadata.quality,
+            year: metadata.year,
+            mediaType: metadata.mediaType
         });
+        if (isAvailableOnRD && directLink) {
+            return this.createDirectStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)}`, directLink, quality, 'movie', undefined, undefined, {
+                bingeGroup: `br-${request.id}`,
+                filename: this.sanitizeFilename(torrent.title)
+            }, metadata);
+        }
+        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, `${this.extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'Tamanho não especificado'} | ${this.formatLanguage(torrent.language)}`, torrent.magnet, request.apiKey, quality, 'movie', undefined, undefined, {
+            bingeGroup: `br-${request.id}`,
+            filename: this.sanitizeFilename(torrent.title)
+        }, metadata);
     }
     sortStreamsByQuality(streams) {
         const qualityPriority = {
@@ -136,7 +314,7 @@ class StreamFormatter {
     calculateQualityScore(name) {
         if (!name)
             return 0;
-        const quality = this.extractQualityFromStreamName(name);
+        const quality = this.qualityDetector.extractBestQuality(name);
         const qualityPriority = {
             '2160p': 5,
             '1080p': 4,
@@ -145,26 +323,6 @@ class StreamFormatter {
             'SD': 1
         };
         return qualityPriority[quality] || 0;
-    }
-    extractQualityFromStreamName(name) {
-        const patterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' },
-            { pattern: /\bsd\b/i, quality: 'SD' }
-        ];
-        const cleanName = name.toLowerCase();
-        for (const { pattern, quality } of patterns) {
-            if (pattern.test(cleanName)) {
-                return quality;
-            }
-        }
-        return 'HD';
-    }
-    extractQualityFromFilename(filename) {
-        return this.extractQualityFromStreamName(filename);
     }
     extractCleanMovieTitle(fullTitle) {
         const cleanTitle = fullTitle
@@ -217,6 +375,13 @@ class StreamFormatter {
     }
     buildResolveUrl(magnet, apiKey, type, season, episode) {
         return this.generateLazyResolveUrl(magnet, apiKey, type, season, episode);
+    }
+    getStats() {
+        return {
+            version: '1.0.6',
+            feature: 'Integração completa com MetadataExtractor',
+            method: 'Metadados enriquecidos em todos os streams'
+        };
     }
 }
 exports.StreamFormatter = StreamFormatter;

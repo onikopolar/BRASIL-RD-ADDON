@@ -1,9 +1,15 @@
 import axios from 'axios';
 import { TorrentResult, TorrentIndexerResult } from './torrentTypes';
+import { QualityDetector } from '../../lib/qualityDetector';
 
 export class TorrentIndexerService {
     private readonly baseUrl = 'https://torrent-indexer.darklyn.org';
     private readonly timeout = 15000;
+    private readonly qualityDetector: QualityDetector;
+
+    constructor() {
+        this.qualityDetector = new QualityDetector();
+    }
 
     async search(
         query: string,
@@ -59,9 +65,9 @@ export class TorrentIndexerService {
             return null;
         }
 
-        const quality = this.extractQuality(indexerResult.title);
+        const quality = this.qualityDetector.extractQualityFromFilename(indexerResult.title);
         
-        if (!this.isAllowedQuality(quality)) {
+        if (!this.qualityDetector.isValidQuality(quality)) {
             return null;
         }
 
@@ -85,42 +91,6 @@ export class TorrentIndexerService {
         };
     }
 
-    private extractQuality(title: string): string {
-        const qualityPatterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' }
-        ];
-
-        const cleanTitle = title.toLowerCase();
-        
-        for (const { pattern, quality } of qualityPatterns) {
-            if (pattern.test(cleanTitle)) {
-                return quality;
-            }
-        }
-
-        return this.inferQualityFromContext(cleanTitle);
-    }
-
-    private inferQualityFromContext(titleLower: string): string {
-        if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
-            return '1080p';
-        }
-        
-        if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
-            return '1080p';
-        }
-        
-        if (titleLower.includes('hdtv')) {
-            return '720p';
-        }
-        
-        return 'HD';
-    }
-
     private extractSeasonNumber(text: string): number | null {
         const patterns = [
             /temporada\s*(\d+)/i,
@@ -142,11 +112,6 @@ export class TorrentIndexerService {
         return null;
     }
 
-    private isAllowedQuality(quality: string): boolean {
-        const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
-        return allowedQualities.has(quality);
-    }
-
     private cleanTitle(title: string): string {
         return title
             .replace(/\s+/g, ' ')
@@ -164,7 +129,7 @@ export class TorrentIndexerService {
 
     private calculateSizeInBytes(sizeStr: string): number {
         if (!sizeStr || sizeStr === 'Size not specified') {
-            return 1.5 * 1024 * 1024 * 1024; // 1.5 GB default
+            return 1.5 * 1024 * 1024 * 1024;
         }
         
         const match = sizeStr.match(/(\d+\.?\d*)\s*(GB|MB|G|M)/i);

@@ -5,10 +5,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorrentIndexerService = void 0;
 const axios_1 = __importDefault(require("axios"));
+const qualityDetector_1 = require("../../lib/qualityDetector");
 class TorrentIndexerService {
     constructor() {
         this.baseUrl = 'https://torrent-indexer.darklyn.org';
         this.timeout = 15000;
+        this.qualityDetector = new qualityDetector_1.QualityDetector();
     }
     async search(query, type, targetSeason) {
         if (!query || query.trim().length === 0) {
@@ -45,8 +47,8 @@ class TorrentIndexerService {
         if (!indexerResult.title || !indexerResult.magnet_link) {
             return null;
         }
-        const quality = this.extractQuality(indexerResult.title);
-        if (!this.isAllowedQuality(quality)) {
+        const quality = this.qualityDetector.extractQualityFromFilename(indexerResult.title);
+        if (!this.qualityDetector.isValidQuality(quality)) {
             return null;
         }
         const seasonNumber = this.extractSeasonNumber(indexerResult.title);
@@ -67,34 +69,6 @@ class TorrentIndexerService {
             confidence: 0.5
         };
     }
-    extractQuality(title) {
-        const qualityPatterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' }
-        ];
-        const cleanTitle = title.toLowerCase();
-        for (const { pattern, quality } of qualityPatterns) {
-            if (pattern.test(cleanTitle)) {
-                return quality;
-            }
-        }
-        return this.inferQualityFromContext(cleanTitle);
-    }
-    inferQualityFromContext(titleLower) {
-        if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
-            return '1080p';
-        }
-        if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
-            return '1080p';
-        }
-        if (titleLower.includes('hdtv')) {
-            return '720p';
-        }
-        return 'HD';
-    }
     extractSeasonNumber(text) {
         const patterns = [
             /temporada\s*(\d+)/i,
@@ -113,10 +87,6 @@ class TorrentIndexerService {
             }
         }
         return null;
-    }
-    isAllowedQuality(quality) {
-        const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
-        return allowedQualities.has(quality);
     }
     cleanTitle(title) {
         return title

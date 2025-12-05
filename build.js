@@ -39,31 +39,6 @@ function buildTypeScript() {
     const fsExtra = require('fs-extra');
     const ts = require('typescript');
 
-    // 1. Copiar pasta de vídeos ANTES de compilar
-    console.log('Copiando vídeos informativos...');
-    const videosSource = path.join(__dirname, 'src', 'videos');
-    const videosDest = path.join(__dirname, 'dist', 'videos');
-    
-    if (fs.existsSync(videosSource)) {
-        try {
-            fsExtra.copySync(videosSource, videosDest);
-            console.log(`Vídeos copiados: ${videosSource} -> ${videosDest}`);
-            
-            // Listar vídeos copiados
-            const videoFiles = fs.readdirSync(videosSource);
-            console.log(`Vídeos encontrados: ${videoFiles.length}`);
-            videoFiles.forEach(file => {
-                if (file.endsWith('.mp4')) {
-                    console.log(`  - ${file}`);
-                }
-            });
-        } catch (error) {
-            console.error(`Erro ao copiar vídeos: ${error.message}`);
-        }
-    } else {
-        console.warn(`Pasta de vídeos não encontrada: ${videosSource}`);
-    }
-
     // 2. Garantir que a pasta dist existe
     const distPath = path.join(__dirname, 'dist');
     if (!fs.existsSync(distPath)) {
@@ -139,19 +114,6 @@ function buildTypeScript() {
         missingFiles.forEach(file => console.error(`- ${file}`));
         console.error('Build incompleto - alguns arquivos não foram gerados');
         process.exit(1);
-    }
-
-    // 5. Verificar se vídeos foram copiados
-    if (fs.existsSync(videosDest)) {
-        const copiedVideos = fs.readdirSync(videosDest);
-        console.log(`Vídeos disponíveis em dist/videos/: ${copiedVideos.length} arquivos`);
-        copiedVideos.forEach(file => {
-            const filePath = path.join(videosDest, file);
-            const stats = fs.statSync(filePath);
-            console.log(`  - ${file} (${Math.round(stats.size / 1024)} KB)`);
-        });
-    } else {
-        console.warn('Pasta dist/videos/ não foi criada');
     }
 
     console.log('\nBuild concluído com sucesso!');

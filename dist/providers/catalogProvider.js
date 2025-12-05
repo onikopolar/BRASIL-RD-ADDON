@@ -6,6 +6,7 @@ const streamFormatter_1 = require("../lib/streamFormatter");
 const magnetHelper_1 = require("../lib/magnetHelper");
 const logger_1 = require("../utils/logger");
 const RealDebridService_1 = require("../services/RealDebridService");
+const MetadataExtractor_1 = require("../lib/title-filter/MetadataExtractor");
 class CatalogProvider {
     constructor(magnetService) {
         this.magnetService = magnetService;
@@ -13,6 +14,7 @@ class CatalogProvider {
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.streamFormatter = new streamFormatter_1.StreamFormatter();
         this.rdService = new RealDebridService_1.RealDebridService();
+        this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
         this.logger.info('CatalogProvider inicializado com verificação Real-Debrid');
     }
     async getStreamsFromCatalog(request) {
@@ -35,25 +37,19 @@ class CatalogProvider {
             });
             return [];
         }
-        const qualityGroups = this.groupMagnetsByQuality(curatedMagnets);
-        const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
         const streams = [];
-        const streamPromises = bestMagnets.map(async (magnet) => {
+        for (const magnet of curatedMagnets) {
             try {
-                return await this.processMagnetWithRDCache(magnet, request);
+                const stream = await this.processMagnetWithRDCache(magnet, request);
+                if (stream) {
+                    streams.push(stream);
+                }
             }
             catch (error) {
                 this.logger.error('Erro ao processar magnet com RD cache', {
                     title: magnet.title,
                     error: error instanceof Error ? error.message : 'Unknown error'
                 });
-                return null;
-            }
-        });
-        const streamResults = await Promise.all(streamPromises);
-        for (const stream of streamResults) {
-            if (stream) {
-                streams.push(stream);
             }
         }
         const sortedStreams = this.streamFormatter.sortStreamsByQuality(streams);
@@ -73,11 +69,24 @@ class CatalogProvider {
                 this.logger.warn('Magnet sem hash válido', { title: magnet.title });
                 return null;
             }
-            const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+            const enhancedMetadata = this.metadataExtractor.extractEnhancedMetadata(magnet.title);
+            this.logger.debug('Metadados extraídos do magnet:', {
+                title: magnet.title.substring(0, 60),
+                season: enhancedMetadata.season,
+                episode: enhancedMetadata.episode,
+                isCompleteSeason: enhancedMetadata.isCompleteSeason,
+                isPackage: enhancedMetadata.isPackage,
+                quality: enhancedMetadata.quality,
+                mediaType: enhancedMetadata.mediaType,
+                hasMultiEpisode: enhancedMetadata.hasMultiEpisode
+            });
+            const extractedQuality = enhancedMetadata.quality !== 'unknown' ? enhancedMetadata.quality :
+                this.qualityDetector.extractQualityFromFilename(magnet.title);
+            const quality = extractedQuality || 'HD';
             const cleanTitle = this.extractCleanMovieTitle(magnet.title);
-            const season = magnet.season;
-            const episode = magnet.episode;
-            const isSeries = request.type === 'series';
+            const season = enhancedMetadata.season || magnet.season;
+            const episode = enhancedMetadata.episode || magnet.episode;
+            const isSeries = request.type === 'series' || enhancedMetadata.mediaType === 'series';
             let name = `Brasil RD (${quality})`;
             let description = `${cleanTitle}\n${magnet.seeds || 0} seeds | ${magnet.size || 'Tamanho não especificado'} | ${this.formatLanguage(magnet.language)}`;
             if (isSeries && season !== undefined && episode !== undefined) {
@@ -86,6 +95,24 @@ class CatalogProvider {
                 name += ` S${seasonStr}E${episodeStr}`;
                 description += ` | S${seasonStr}E${episodeStr}`;
             }
+            if (enhancedMetadata.isPackage) {
+                description += ' | 📦 Pacote/Temporada';
+            }
+            if (enhancedMetadata.isCompleteSeason) {
+                description += ' | ✅ Temporada Completa';
+            }
+            if (enhancedMetadata.hasMultiEpisode) {
+                description += ' | 📺 Múltiplos Episódios';
+            }
+            if (enhancedMetadata.language && enhancedMetadata.language !== 'unknown') {
+                description += ` | 🌐 ${enhancedMetadata.language}`;
+            }
+            if (enhancedMetadata.source && enhancedMetadata.source !== 'unknown') {
+                description += ` | 🎞️ ${enhancedMetadata.source}`;
+            }
+            if (enhancedMetadata.codec && enhancedMetadata.codec !== 'unknown') {
+                description += ` | 🔧 ${enhancedMetadata.codec}`;
+            }
             const apiKey = request.apiKey;
             if (apiKey) {
                 try {
@@ -93,7 +120,9 @@ class CatalogProvider {
                         hash: magnetHash,
                         season,
                         episode,
-                        isSeries
+                        isSeries,
+                        isPackage: enhancedMetadata.isPackage,
+                        isCompleteSeason: enhancedMetadata.isCompleteSeason
                     });
                     const existingTorrent = await this.rdService.findExistingTorrent(magnetHash, apiKey);
                     if (existingTorrent) {
@@ -111,12 +140,14 @@ class CatalogProvider {
                                     quality,
                                     season,
                                     episode,
+                                    isPackage: enhancedMetadata.isPackage,
+                                    isCompleteSeason: enhancedMetadata.isCompleteSeason,
                                     streamLinkLength: streamLink.length
                                 });
                                 return this.streamFormatter.createDirectStream(name, name, description, streamLink, quality, isSeries ? 'series' : 'movie', season, episode, {
                                     bingeGroup: `brasil-rd-${isSeries ? 'series' : 'movie'}-${quality}`,
                                     filename: this.sanitizeFilename(name)
-                                });
+                                }, enhancedMetadata);
                             }
                         }
                         else if (torrentInfo.status === 'downloading' || torrentInfo.status === 'queued') {
@@ -132,10 +163,11 @@ class CatalogProvider {
                     });
                 }
             }
-            return this.streamFormatter.createLazyStream(name, name, description, magnet.magnet, apiKey || '', quality, isSeries ? 'series' : 'movie', season, episode, {
+            const lazyStream = this.streamFormatter.createLazyStream(name, name, description, magnet.magnet, apiKey || '', quality, isSeries ? 'series' : 'movie', season, episode, {
                 bingeGroup: `brasil-rd-${isSeries ? 'series' : 'movie'}-${quality}`,
                 filename: this.sanitizeFilename(name)
-            });
+            }, enhancedMetadata);
+            return lazyStream;
         }
         catch (error) {
             this.logger.error('Erro ao processar magnet com RD cache', {
@@ -144,40 +176,6 @@ class CatalogProvider {
             });
             return null;
         }
-    }
-    groupMagnetsByQuality(magnets) {
-        const groups = new Map();
-        const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
-        for (const quality of allowedQualities) {
-            groups.set(quality, []);
-        }
-        for (const magnet of magnets) {
-            const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
-            if (allowedQualities.has(quality)) {
-                groups.get(quality).push(magnet);
-            }
-            else {
-                groups.get('HD').push(magnet);
-            }
-        }
-        return groups;
-    }
-    selectBestFromEachQualityGroup(qualityGroups) {
-        const bestMagnets = [];
-        const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
-        for (const quality of qualityOrder) {
-            const group = qualityGroups.get(quality);
-            if (group && group.length > 0) {
-                const bestInQuality = group.sort((a, b) => {
-                    if (b.seeds !== a.seeds) {
-                        return b.seeds - a.seeds;
-                    }
-                    return b.title.length - a.title.length;
-                })[0];
-                bestMagnets.push(bestInQuality);
-            }
-        }
-        return bestMagnets;
     }
     extractCleanMovieTitle(fullTitle) {
         return fullTitle

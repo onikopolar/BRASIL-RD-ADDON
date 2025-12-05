@@ -1,185 +1,175 @@
 import { Logger } from '../utils/logger';
 import axios from 'axios';
-import * as cheerio from 'cheerio';
 
-const logger = new Logger('ImdbScraper');
+const logger = new Logger('TMDBScraper');
 
 export interface ImdbTitles {
-  originalTitle: string;          // Título original (geralmente inglês)
-  portugueseTitle: string | null; // Título em português (se disponível)
-  allTitles: string[];            // Todos os títulos para comparação
-  foundInPortuguese: boolean;     // Se encontrou título específico em pt-BR
+  originalTitle: string;
+  portugueseTitle: string | null;
+  allTitles: string[];
+  foundInPortuguese: boolean;
+  year?: number;
+  mediaType?: 'movie' | 'tv';
 }
 
 export class ImdbScraperService {
-  private readonly imdbBaseUrl = 'https://www.imdb.com/title';
-  private titleCache = new Map<string, ImdbTitles>();
+  private readonly tmdbBaseUrl = 'https://api.themoviedb.org/3';
+  private readonly tmdbApiKey: string;
+  private readonly language = 'pt-BR';
+  
+  // Cache global compartilhado
+  private static globalCache = new Map<string, {
+    data: ImdbTitles;
+    timestamp: number;
+    tmdbId?: number;
+    mediaType?: 'movie' | 'tv';
+  }>();
+  
+  private readonly cacheTTL = 5 * 60 * 1000; // 5 minutos
 
   constructor() {
-    logger.info('Servico de scraping do IMDB inicializado - Suporte a multiplos idiomas');
+    this.tmdbApiKey = process.env.TMDB_API_KEY || '4bfe2bbccad24f1bb07507953a137ebd';
+    
+    if (!this.tmdbApiKey) {
+      logger.error('TMDB API KEY não configurada!');
+    }
+    
+    logger.info('TMDB Scraper v1.1.0 inicializado', {
+      feature: 'Cache global compartilhado'
+    });
   }
 
-  /**
-   * Obtém TODOS os títulos disponíveis para um IMDB ID
-   * Inclui original e português (se disponível)
-   */
+  // Busca títulos - usa cache global
   async getTitlesFromImdbId(imdbId: string): Promise<ImdbTitles> {
     try {
-      // Verifica cache primeiro
-      if (this.titleCache.has(imdbId)) {
-        logger.debug('Usando titulos em cache', { imdbId });
-        return this.titleCache.get(imdbId)!;
-      }
-
-      logger.info(`Buscando titulos no IMDB: ${imdbId}`);
-
-      // Busca PARALELA para melhor performance
-      const [originalResult, portugueseResult] = await Promise.allSettled([
-        this.fetchAndParseTitle(imdbId, false), // Inglês/Original
-        this.fetchAndParseTitle(imdbId, true)   // Português
-      ]);
-
-      // Processa resultado ORIGINAL
-      let originalTitle = '';
-      if (originalResult.status === 'fulfilled' && originalResult.value) {
-        originalTitle = originalResult.value;
-      } else {
-        logger.warn('Falha ao buscar titulo original', { 
-          imdbId, 
-          error: originalResult.status === 'rejected' ? originalResult.reason : 'Desconhecido' 
-        });
-      }
-
-      // Processa resultado PORTUGUÊS
-      let portugueseTitle: string | null = null;
-      let foundInPortuguese = false;
+      // Cache: verificar primeiro
+      const cached = ImdbScraperService.globalCache.get(imdbId);
       
-      if (portugueseResult.status === 'fulfilled' && portugueseResult.value) {
-        portugueseTitle = portugueseResult.value;
-        foundInPortuguese = this.isValidPortugueseTitle(portugueseTitle);
-        
-        // Se título português não for válido, descarta
-        if (!foundInPortuguese) {
-          logger.debug('Titulo em portugues nao considerado valido', { 
-            imdbId, 
-            title: portugueseTitle 
-          });
-          portugueseTitle = null;
+      if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+        logger.debug('Cache TMDB hit', { imdbId });
+        return cached.data;
+      }
+
+      logger.debug('Cache TMDB miss', { imdbId });
+
+      // Converter IMDB ID para TMDB ID
+      const tmdbInfo = await this.findInTMDB(imdbId);
+      
+      if (!tmdbInfo) {
+        return this.createEmptyResult(imdbId);
+      }
+
+      const { tmdbId, mediaType } = tmdbInfo;
+      
+      // Buscar detalhes
+      const details = await this.fetchDetailsFromTMDB(tmdbId, mediaType);
+      
+      if (!details) {
+        return this.createEmptyResult(imdbId);
+      }
+
+      // Extrair títulos
+      let originalTitle = '';
+      let portugueseTitle = '';
+      let year: number | undefined;
+
+      if (mediaType === 'movie') {
+        originalTitle = details.original_title || '';
+        portugueseTitle = details.title || '';
+        if (details.release_date) {
+          year = parseInt(details.release_date.substring(0, 4));
+        }
+      } else if (mediaType === 'tv') {
+        originalTitle = details.original_name || '';
+        portugueseTitle = details.name || '';
+        if (details.first_air_date) {
+          year = parseInt(details.first_air_date.substring(0, 4));
         }
       }
 
-      // Fallback: se não encontrou original, tenta método de fallback
       if (!originalTitle) {
-        logger.warn('Tentando fallback para titulo original', { imdbId });
-        originalTitle = await this.getEnglishTitleFallback(imdbId);
+        return this.createEmptyResult(imdbId);
       }
 
-      if (!originalTitle) {
-        throw new Error(`Nao foi possivel obter titulo para ${imdbId}`);
+      // Normalizar títulos
+      const normalizedOriginal = this.normalizeTitle(originalTitle);
+      const normalizedPortuguese = portugueseTitle ? this.normalizeTitle(portugueseTitle) : '';
+
+      // Lista de todos os títulos
+      const allTitles = [normalizedOriginal];
+      if (normalizedPortuguese && normalizedPortuguese !== normalizedOriginal) {
+        allTitles.push(normalizedPortuguese);
       }
 
-      // Prepara lista de todos os títulos para comparação
-      const allTitles = [originalTitle];
-      if (portugueseTitle && portugueseTitle !== originalTitle) {
-        allTitles.push(portugueseTitle);
-      }
-
-      // Remove duplicatas e títulos vazios
       const uniqueTitles = Array.from(new Set(allTitles.filter(title => title.trim().length > 0)));
 
       const result: ImdbTitles = {
-        originalTitle,
-        portugueseTitle,
+        originalTitle: normalizedOriginal,
+        portugueseTitle: normalizedPortuguese || null,
         allTitles: uniqueTitles,
-        foundInPortuguese
+        foundInPortuguese: !!normalizedPortuguese,
+        year,
+        mediaType
       };
 
-      // Armazena em cache
-      this.titleCache.set(imdbId, result);
+      // Armazenar em cache global
+      ImdbScraperService.globalCache.set(imdbId, {
+        data: result,
+        timestamp: Date.now(),
+        tmdbId,
+        mediaType
+      });
 
-      logger.info(`Titulos encontrados no IMDB`, {
+      logger.debug('Títulos encontrados no TMDB', {
         imdbId,
-        originalTitle,
-        portugueseTitle,
-        foundInPortuguese,
-        totalTitles: uniqueTitles.length,
-        titlesList: uniqueTitles
+        tmdbId,
+        year,
+        mediaType
       });
 
       return result;
 
     } catch (error) {
-      logger.error('Erro critico ao buscar titulos no IMDB', {
+      logger.error('Erro TMDB', {
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
 
-      // Fallback extremo: tenta método antigo
-      try {
-        const fallbackTitle = await this.getTitleFromImdbIdFallback(imdbId);
-        return {
-          originalTitle: fallbackTitle || `Unknown Title (${imdbId})`,
-          portugueseTitle: null,
-          allTitles: fallbackTitle ? [fallbackTitle] : [],
-          foundInPortuguese: false
-        };
-      } catch {
-        return {
-          originalTitle: `Unknown Title (${imdbId})`,
-          portugueseTitle: null,
-          allTitles: [],
-          foundInPortuguese: false
-        };
-      }
+      return this.createEmptyResult(imdbId);
     }
   }
 
-  /**
-   * Método de compatibilidade - retorna apenas um título
-   * (Prefere português, fallback para original)
-   */
-  async getTitleFromImdbId(imdbId: string): Promise<string | null> {
+  // Encontrar no TMDB usando IMDB ID
+  private async findInTMDB(imdbId: string): Promise<{tmdbId: number, mediaType: 'movie' | 'tv'} | null> {
     try {
-      const titles = await this.getTitlesFromImdbId(imdbId);
-      // Prefere português, fallback para original
-      return titles.portugueseTitle || titles.originalTitle || null;
-    } catch (error) {
-      logger.error('Erro no metodo de compatibilidade', {
-        imdbId,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      const response = await axios.get(`${this.tmdbBaseUrl}/find/${imdbId}`, {
+        params: {
+          api_key: this.tmdbApiKey,
+          external_source: 'imdb_id',
+          language: this.language
+        },
+        timeout: 10000
       });
-      return null;
-    }
-  }
 
-  /**
-   * Busca e parseia título específico (inglês ou português)
-   */
-  private async fetchAndParseTitle(imdbId: string, inPortuguese: boolean): Promise<string | null> {
-    try {
-      const url = inPortuguese 
-        ? `${this.imdbBaseUrl}/${imdbId}/?language=pt-BR`
-        : `${this.imdbBaseUrl}/${imdbId}`;
-
-      const html = await this.fetchImdbPage(url, inPortuguese);
-      const title = this.parseTitleFromHtml(html, imdbId);
-
-      if (!title) {
-        return null;
+      // Filmes primeiro, depois séries
+      if (response.data.movie_results && response.data.movie_results.length > 0) {
+        return {
+          tmdbId: response.data.movie_results[0].id,
+          mediaType: 'movie'
+        };
       }
-
-      // Limpa e formata título
-      const cleanedTitle = this.cleanTitle(title);
       
-      // Validação adicional para português
-      if (inPortuguese && !this.isValidPortugueseTitle(cleanedTitle)) {
-        return null;
+      if (response.data.tv_results && response.data.tv_results.length > 0) {
+        return {
+          tmdbId: response.data.tv_results[0].id,
+          mediaType: 'tv'
+        };
       }
 
-      return cleanedTitle;
-
+      return null;
+      
     } catch (error) {
-      logger.debug(`Falha ao buscar titulo ${inPortuguese ? 'em portugues' : 'original'}`, {
+      logger.error('Erro converter IMDB para TMDB', {
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
@@ -187,205 +177,89 @@ export class ImdbScraperService {
     }
   }
 
-  /**
-   * Busca página do IMDB com headers apropriados
-   */
-  private async fetchImdbPage(url: string, isPortuguese: boolean): Promise<string> {
-    const headers: Record<string, string> = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'Accept-Encoding': 'gzip, deflate, br',
-      'Connection': 'keep-alive',
-      'Cache-Control': 'no-cache'
-    };
-
-    // Headers específicos para idioma
-    if (isPortuguese) {
-      headers['Accept-Language'] = 'pt-BR,pt;q=0.9,en;q=0.8';
-      headers['Cookie'] = 'lc-main=pt_BR';
-    } else {
-      headers['Accept-Language'] = 'en-US,en;q=0.9';
-    }
-
-    const response = await axios.get(url, {
-      timeout: 10000,
-      headers,
-      validateStatus: (status) => status === 200
-    });
-
-    return response.data;
-  }
-
-  /**
-   * Parseia título do HTML do IMDB
-   */
-  private parseTitleFromHtml(html: string, imdbId: string): string | null {
+  // Buscar detalhes do TMDB
+  private async fetchDetailsFromTMDB(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<any> {
     try {
-      const $ = cheerio.load(html);
+      const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
+      
+      const response = await axios.get(`${this.tmdbBaseUrl}/${endpoint}/${tmdbId}`, {
+        params: {
+          api_key: this.tmdbApiKey,
+          language: this.language
+        },
+        timeout: 10000
+      });
 
-      // Método 1: Tag h1 principal (recomendado pelo IMDB)
-      const h1Title = $('h1[data-testid="hero__pageTitle"]').text().trim();
-      if (h1Title) {
-        return h1Title;
-      }
-
-      // Método 2: Primeiro h1 na página
-      const firstH1 = $('h1').first().text().trim();
-      if (firstH1) {
-        return firstH1;
-      }
-
-      // Método 3: Meta tag og:title
-      const metaTitle = $('meta[property="og:title"]').attr('content');
-      if (metaTitle) {
-        // Remove " - IMDb" se presente
-        return metaTitle.replace(/\s*-\s*IMDb\s*$/i, '').trim();
-      }
-
-      // Método 4: Título da página
-      const pageTitle = $('title').text().trim();
-      if (pageTitle) {
-        return pageTitle.replace(/\s*-\s*IMDb\s*$/i, '').trim();
-      }
-
-      // Método 5: JSON-LD structured data
-      const jsonLdScript = $('script[type="application/ld+json"]').first().html();
-      if (jsonLdScript) {
-        try {
-          const data = JSON.parse(jsonLdScript);
-          if (data.name) {
-            return data.name.toString().trim();
-          }
-        } catch (e) {
-          // Ignora erro de parse
-        }
-      }
-
-      // Método 6: Títulos alternativos (Also known as)
-      if (this.containsPortugueseMarkers(html)) {
-        const altTitleSection = $('.titlereference-overview, [data-testid="akas"]').first();
-        if (altTitleSection.length) {
-          const altTitles = altTitleSection.text();
-          const lines = altTitles.split('\n').map(line => line.trim()).filter(line => line);
-          
-          for (const line of lines) {
-            if (line.toLowerCase().includes('brazil') || 
-                line.toLowerCase().includes('portuguese') ||
-                this.containsPortugueseMarkers(line)) {
-              const title = line.replace(/\(.*?\)/g, '').trim();
-              if (title) return title;
-            }
-          }
-        }
-      }
-
-      return null;
-
+      return response.data;
+      
     } catch (error) {
-      logger.error('Erro ao parsear HTML do IMDB', {
-        imdbId,
+      logger.error('Erro buscar detalhes TMDB', {
+        tmdbId,
+        mediaType,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
       return null;
     }
   }
 
-  /**
-   * Limpa título extraindo apenas o nome principal
-   */
-  private cleanTitle(title: string): string {
+  // Criar resultado vazio
+  private createEmptyResult(imdbId: string): ImdbTitles {
+    return {
+      originalTitle: `Unknown Title (${imdbId})`,
+      portugueseTitle: null,
+      allTitles: [],
+      foundInPortuguese: false
+    };
+  }
+
+  // Normalizar título
+  private normalizeTitle(title: string): string {
     return title
-      .replace(/\s*[-–]\s*IMDb\s*$/i, '')      // Remove "- IMDb" no final
-      .replace(/\(\s*\d{4}\s*\)$/, '')          // Remove ano (2024)
-      .replace(/\s*[|•]\s*.*$/, '')             // Remove tudo depois de | ou •
-      .replace(/\s+/g, ' ')                     // Espaços múltiplos para um
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
       .trim();
   }
 
-  /**
-   * Valida se título parece ser em português válido
-   */
-  private isValidPortugueseTitle(title: string): boolean {
-    if (!title || title.length < 2) return false;
-
-    const titleLower = title.toLowerCase();
-
-    // 1. Verifica caracteres acentuados específicos do português
-    const hasPortugueseAccents = /[áàâãéèêíïóôõöúüçñ]/i.test(title);
-    
-    // 2. Verifica palavras/frases comuns em português brasileiro
-    const portugueseIndicators = [
-      /\b(de|do|da|dos|das)\b/i,
-      /\b(no|na|nos|nas)\b/i,
-      /\b(um|uma|uns|umas)\b/i,
-      /\b(o|a|os|as)\s+[a-z]/i, // Artigo seguido de palavra
-      /\b(e|mas|porque|que)\b/i,
-      /\b(temporada|epis[oó]dio|s[ée]rie|filme)\b/i,
-      /\b(dublado|legendado|nacional|brasil)\b/i
-    ];
-
-    const hasPortugueseWords = portugueseIndicators.some(pattern => pattern.test(titleLower));
-    
-    // 3. Verifica se NÃO parece ser inglês
-    const englishIndicators = [
-      /\b(the|of|and|in|on|at|to|for)\b/i,
-      /\b(season|episode|series|movie)\b/i,
-      /\b(web|dl|bluray|dvd|hd)\b/i
-    ];
-
-    const hasEnglishWords = englishIndicators.some(pattern => pattern.test(titleLower));
-
-    // É português se: tem acentos OU palavras portuguesas E não tem palavras inglesas óbvias
-    return (hasPortugueseAccents || hasPortugueseWords) && !hasEnglishWords;
-  }
-
-  /**
-   * Detecta marcadores de português no texto
-   */
-  private containsPortugueseMarkers(text: string): boolean {
-    const lowerText = text.toLowerCase();
-    return lowerText.includes('brasil') || 
-           lowerText.includes('portuguese') ||
-           lowerText.includes('português') ||
-           /[áàâãéèêíïóôõöúüçñ]/i.test(text);
-  }
-
-  /**
-   * Fallback para título original (método antigo)
-   */
-  private async getEnglishTitleFallback(imdbId: string): Promise<string> {
+  // Método de compatibilidade
+  async getTitleFromImdbId(imdbId: string): Promise<string | null> {
     try {
-      const url = `${this.imdbBaseUrl}/${imdbId}`;
-      const html = await this.fetchImdbPage(url, false);
-      const title = this.parseTitleFromHtml(html, imdbId);
-      return title ? this.cleanTitle(title) : '';
-    } catch {
-      return '';
-    }
-  }
-
-  /**
-   * Fallback completo (método antigo para compatibilidade)
-   */
-  private async getTitleFromImdbIdFallback(imdbId: string): Promise<string | null> {
-    try {
-      // Tenta português primeiro
-      const portugueseTitle = await this.fetchAndParseTitle(imdbId, true);
-      if (portugueseTitle) return portugueseTitle;
-
-      // Fallback para inglês
-      const englishTitle = await this.fetchAndParseTitle(imdbId, false);
-      return englishTitle;
-    } catch {
+      const titles = await this.getTitlesFromImdbId(imdbId);
+      return titles.portugueseTitle || titles.originalTitle || null;
+    } catch (error) {
+      logger.error('Erro compatibilidade', {
+        imdbId,
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
       return null;
     }
   }
 
-  /**
-   * Limpa cache (útil para testes)
-   */
-  clearCache(): void {
-    this.titleCache.clear();
-    logger.debug('Cache do IMDB limpo');
+  // Métodos estáticos para cache global
+  static clearGlobalCache(): void {
+    ImdbScraperService.globalCache.clear();
+  }
+
+  static getGlobalCacheStats() {
+    return {
+      size: ImdbScraperService.globalCache.size,
+      entries: Array.from(ImdbScraperService.globalCache.keys())
+    };
+  }
+
+  // Métodos de instância
+  clearInstanceCache(): void {
+    // Mantido para compatibilidade
+    ImdbScraperService.clearGlobalCache();
+  }
+
+  getStats() {
+    return {
+      cacheSize: ImdbScraperService.globalCache.size,
+      cacheTTL: this.cacheTTL,
+      version: '1.1.0'
+    };
   }
 }

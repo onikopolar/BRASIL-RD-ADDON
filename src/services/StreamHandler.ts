@@ -10,8 +10,6 @@ import { Op } from 'sequelize';
 import { Torrent, File } from '../database/models';
 import { QualityDetector } from '../lib/qualityDetector';
 import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper';
-import { extractCleanMovieTitle } from '../lib/stringUtils';
-import { EpisodeMatcher } from '../lib/episodeMatcher';
 import { TitleFilter } from '../lib/titleFilter';
 import { StreamFormatter } from '../lib/streamFormatter';
 import { CatalogProvider } from '../providers/catalogProvider';
@@ -57,24 +55,19 @@ export class StreamHandler {
   private readonly logger: Logger;
   private staticResponseService: StaticResponseService;
 
-  // Módulos utilitários
   private readonly qualityDetector: QualityDetector;
-  private readonly episodeMatcher: EpisodeMatcher;
   private readonly titleFilter: TitleFilter;
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
 
-  // Configurações
   private readonly processingConfig: StreamProcessingConfig = {
     maxConcurrentTorrents: 3,
     delayBetweenTorrents: 800
   };
 
-  // Cache para scraping
   private scrapingCache = new Map<string, ScrapingCacheEntry>();
-  private readonly scrapingCacheTTL = 6 * 60 * 60 * 1000; // 6 horas
+  private readonly scrapingCacheTTL = 6 * 60 * 60 * 1000;
 
-  // Estatísticas
   private stats = {
     totalRequests: 0,
     servedFromDatabase: 0,
@@ -92,125 +85,118 @@ export class StreamHandler {
     this.torrentScraper = new TorrentScraperService();
     this.imdbScraper = new ImdbScraperService();
     this.logger = new Logger('StreamHandler');
+    this.logger.info('StreamHandler v4.0.2 inicializado');
     this.staticResponseService = new StaticResponseService(baseUrl);
 
-    // Inicializar módulos utilitários
     this.qualityDetector = new QualityDetector();
-    this.episodeMatcher = new EpisodeMatcher();
     this.titleFilter = new TitleFilter();
     this.streamFormatter = new StreamFormatter();
     this.catalogProvider = new CatalogProvider(this.magnetService);
   }
 
-  /**
-   * Atualiza a URL base do StaticResponseService
-   */
   public setStaticResponseBaseUrl(baseUrl: string): void {
     this.staticResponseService.setBaseUrl(baseUrl);
     this.rdService.setStaticResponseBaseUrl(baseUrl);
   }
 
-  // ==================== MÉTODO DE DEDUPLICAÇÃO ====================
-
-  /**
-   * Remove streams duplicados com base no infoHash
-   * @param streams Lista de streams a serem deduplicados
-   * @returns Lista de streams únicos
-   */
-  private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
-    const seenHashes = new Set<string>();
-    const uniqueStreams: Stream[] = [];
+private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
+  const seenCombinations = new Set<string>();
+  const uniqueStreams: Stream[] = [];
+  
+  for (const stream of streams) {
+    let infoHash: string | undefined;
     
-    for (const stream of streams) {
-      // Extrair infoHash do magnet link ou do campo infoHash
-      let infoHash: string | undefined;
-      
-      if (stream.infoHash) {
-        infoHash = stream.infoHash.toLowerCase();
-      } else if (stream.sources && stream.sources[0]) {
-        // Tentar extrair do magnet link no sources
-        const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
-        if (magnetMatch) {
-          infoHash = magnetMatch[1].toLowerCase();
-        }
-      }
-      
-      // Se não tem infoHash ou já vimos este, pular
-      if (!infoHash) {
-        // Se não temos infoHash, usamos título e qualidade como fallback
-        const fallbackKey = `${stream.title}|${stream.name}`.toLowerCase();
-        if (seenHashes.has(fallbackKey)) {
-          this.logger.debug('Stream duplicado ignorado (fallback)', {
-            title: stream.title,
-            reason: 'Duplicata por título/qualidade'
-          });
-          this.stats.duplicatesRemoved++;
-          continue;
-        }
-        seenHashes.add(fallbackKey);
-        uniqueStreams.push(stream);
-      } else if (seenHashes.has(infoHash)) {
-        this.logger.debug('Stream duplicado ignorado', {
-          title: stream.title,
-          infoHash: infoHash.substring(0, 8) + '...',
-          reason: 'Duplicata por infoHash'
-        });
-        this.stats.duplicatesRemoved++;
-        continue;
-      } else {
-        seenHashes.add(infoHash);
-        uniqueStreams.push(stream);
+    if (stream.infoHash) {
+      infoHash = stream.infoHash.toLowerCase();
+    } else if (stream.sources && stream.sources[0]) {
+      const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
+      if (magnetMatch) {
+        infoHash = magnetMatch[1].toLowerCase();
       }
     }
     
-    if (streams.length !== uniqueStreams.length) {
-      this.logger.info('Deduplicação de streams concluída', {
-        antes: streams.length,
-        depois: uniqueStreams.length,
-        duplicatasRemovidas: streams.length - uniqueStreams.length
+    // Extrair qualidade do título do stream
+    const qualityMatch = stream.name?.match(/\((\d+p|4K|HD|SD)\)/);
+    const quality = qualityMatch ? qualityMatch[1] : 'unknown';
+    
+    // Chave única: infoHash + qualidade
+    const uniqueKey = infoHash ? `${infoHash}_${quality}` : stream.name;
+    
+    if (seenCombinations.has(uniqueKey)) {
+      this.stats.duplicatesRemoved++;
+      this.logger.debug('Stream duplicado removido (mesma qualidade no mesmo hash)', {
+        infoHash: infoHash?.substring(0, 8),
+        qualidade: quality,
+        title: stream.title?.substring(0, 50)
       });
+      continue;
+    } else {
+      seenCombinations.add(uniqueKey);
+      uniqueStreams.push(stream);
     }
-    
-    return uniqueStreams;
   }
-
-  // ==================== HANDLER PRINCIPAL ====================
+  
+  if (streams.length !== uniqueStreams.length) {
+    this.logger.debug('Streams deduplicados por infoHash+qualidade', {
+      antes: streams.length,
+      depois: uniqueStreams.length,
+      removidos: streams.length - uniqueStreams.length
+    });
+  }
+  
+  return uniqueStreams;
+}
 
   async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
     const requestStartTime = Date.now();
     this.stats.totalRequests++;
 
+    this.logger.debug('Processando request', {
+      requestId,
+      type: request.type,
+      hasApiKey: !!request.apiKey
+    });
+
     if (!request.apiKey) {
       return { streams: [] };
     }
 
     try {
-      // AGUARDAR INICIALIZAÇÃO DO CATÁLOGO ANTES DE TUDO
       await this.magnetService.waitForInitialization();
 
-      const imdbId = this.extractImdbIdFromRequest(request);
-      
-      // 1. BANCO DE DADOS (PRIMEIRO)
       const dbResult = await this.getStreamsFromDatabase(request);
       if (dbResult.success && dbResult.streams.length > 0) {
         const dedupedStreams = this.deduplicateStreamsByInfoHash(dbResult.streams);
         this.stats.servedFromDatabase++;
+        
+        this.logger.debug('Streams do banco', {
+          requestId,
+          antes: dbResult.streams.length,
+          depois: dedupedStreams.length,
+          tempo: dbResult.processingTime
+        });
+        
         return { streams: dedupedStreams };
       }
 
-      // 2. CATÁLOGO JSON (SEGUNDO)
       const catalogResult = await this.getStreamsFromCatalog(request);
       if (catalogResult.success && catalogResult.streams.length > 0) {
         const dedupedStreams = this.deduplicateStreamsByInfoHash(catalogResult.streams);
         this.stats.servedFromCatalog++;
+        
+        this.logger.debug('Streams do catálogo', {
+          requestId,
+          antes: catalogResult.streams.length,
+          depois: dedupedStreams.length,
+          tempo: catalogResult.processingTime
+        });
+        
         return { streams: dedupedStreams };
       }
 
-      // 3. SCRAPING (ÚLTIMO RECURSO)
       const shouldScrape = await this.shouldAttemptScraping(request);
       if (!shouldScrape) {
-        // Se não deve fazer scraping, verifica se pode adicionar stream informativo
         const informativeStream = this.createInformativeStreamIfNoContent(request);
         if (informativeStream) {
           return { streams: [informativeStream] };
@@ -220,48 +206,44 @@ export class StreamHandler {
 
       try {
         const scrapingResult = await this.processStreamRequest(request);
-        const dedupedScrapingResult = this.deduplicateStreamsByInfoHash(scrapingResult);
+        const dedupedStreams = this.deduplicateStreamsByInfoHash(scrapingResult);
         
-        // Atualizar cache de scraping
-        await this.updateScrapingCache(request, dedupedScrapingResult.length > 0);
+        await this.updateScrapingCache(request, dedupedStreams.length > 0);
         
-        this.stats.servedFromScraping += dedupedScrapingResult.length > 0 ? 1 : 0;
+        this.stats.servedFromScraping += dedupedStreams.length > 0 ? 1 : 0;
         
-        return { streams: dedupedScrapingResult };
+        this.logger.debug('Streams do scraping', {
+          requestId,
+          antes: scrapingResult.length,
+          depois: dedupedStreams.length,
+          fonte: 'scraping'
+        });
+        
+        return { streams: dedupedStreams };
         
       } catch (error) {
-        // Capturar StreamStatusException e criar stream informativo
         if (error instanceof StreamStatusException) {
-          this.logger.info('Capturando StreamStatusException', {
-            requestId,
-            staticResponse: error.staticResponse,
-            rdStatus: error.rdStatus,
-            progress: error.progress
-          });
-          
+          this.logger.debug('StreamStatusException capturada', { requestId });
           const informativeStream = this.createInformativeStreamFromException(error, requestId);
           this.stats.servedInformativeStreams++;
           return { streams: [informativeStream] };
         }
         
-        // Outros erros, retornar vazio
         throw error;
       }
 
     } catch (error) {
-      this.logger.error('Falha no processamento de stream', {
+      this.logger.error('Falha no processamento', {
         requestId,
-        error: error instanceof Error ? error.message : 'Unknown error'
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
       
-      // Tentar criar stream informativo mesmo em caso de erro geral
       if (error instanceof StreamStatusException) {
         const informativeStream = this.createInformativeStreamFromException(error, requestId);
         this.stats.servedInformativeStreams++;
         return { streams: [informativeStream] };
       }
       
-      // Stream informativo genérico para erro
       const errorStream = this.staticResponseService.createInformativeStream(
         StaticResponse.FAILED_UNEXPECTED,
         requestId
@@ -271,13 +253,7 @@ export class StreamHandler {
     }
   }
 
-  // ==================== STREAMS INFORMATIVOS ====================
-
-  // Cria stream informativo baseado em uma exceção de status
-  private createInformativeStreamFromException(
-    exception: StreamStatusException,
-    requestId: string
-  ): Stream {
+  private createInformativeStreamFromException(exception: StreamStatusException, requestId: string): Stream {
     const informativeStream = this.staticResponseService.createInformativeStream(
       exception.staticResponse,
       requestId
@@ -286,22 +262,19 @@ export class StreamHandler {
     return this.convertToStreamFormat(informativeStream);
   }
 
-  // Cria stream informativo quando não há conteúdo disponível
   private createInformativeStreamIfNoContent(request: StreamRequest): Stream | null {
-    // Para séries com episódio específico, criar stream de "download em andamento"
     if (request.type === 'series') {
-      const episodeInfo = this.episodeMatcher.extractEpisodeFromMultipleSources(request.id);
-      if (episodeInfo.isValid) {
+      const imdbId = this.extractImdbIdFromRequest(request);
+      if (imdbId) {
         const informativeStream = this.staticResponseService.createInformativeStream(
           StaticResponse.DOWNLOADING,
-          `S${episodeInfo.season}E${episodeInfo.episode}`
+          request.id
         );
         
         return this.convertToStreamFormat(informativeStream);
       }
     }
     
-    // Para filmes ou séries sem episódio específico
     const informativeStream = this.staticResponseService.createInformativeStream(
       StaticResponse.DOWNLOADING,
       request.id
@@ -310,18 +283,16 @@ export class StreamHandler {
     return this.convertToStreamFormat(informativeStream);
   }
 
-  /* Converte um stream informativo do StaticResponseService para o formato Stream do Stremio*/
   private convertToStreamFormat(informativeStream: any): Stream {
     const infoHash = `info-${Date.now()}-${Math.random().toString(36).substring(7)}`;
     
-    // Criar o objeto Stream apenas com propriedades válidas
     const stream: Stream = {
       title: informativeStream.title || 'Brasil RD - Informação',
       name: informativeStream.name || 'Brasil RD - Mensagem Informativa',
       description: informativeStream.description || 'Mensagem informativa do addon Brasil RD',
       url: informativeStream.url || 'data:text/plain,Brasil%20RD%20-%20Mensagem%20informativa',
       behaviorHints: {
-        notWebReady: true, // Sempre true para streams informativos
+        notWebReady: true,
         bingeGroup: 'br-info'
       },
       status: 'available',
@@ -333,7 +304,6 @@ export class StreamHandler {
     return stream;
   }
 
-  // ==================== BANCO DE DADOS ====================
   private async getStreamsFromDatabase(request: StreamRequest): Promise<DatabaseStreamResult> {
     const startTime = Date.now();
 
@@ -348,9 +318,12 @@ export class StreamHandler {
       if (request.type === 'movie') {
         fileEntries = await this.getImdbIdMovieEntries(imdbId);
       } else if (request.type === 'series') {
-        const episodeInfo = this.episodeMatcher.extractEpisodeFromMultipleSources(request.id);
-        if (episodeInfo.isValid) {
-          fileEntries = await this.getImdbIdSeriesEntries(imdbId, episodeInfo.season, episodeInfo.episode);
+        const imdbId = this.extractImdbIdFromRequest(request);
+        const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
+        if (seasonMatch) {
+          const season = parseInt(seasonMatch[1]);
+          const episode = parseInt(seasonMatch[2]);
+          fileEntries = await this.getImdbIdSeriesEntries(imdbId!, season, episode);
         }
       }
 
@@ -413,21 +386,23 @@ export class StreamHandler {
       const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
       const magnetLink = `magnet:?xt=urn:btih:${magnetHash}`;
 
-      // Adicionar informação de temporada/episódio para séries
       let titleSuffix = '';
       let season: number | undefined;
       let episode: number | undefined;
 
-      if (request.type === 'series' && fileEntry.imdbSeason && fileEntry.imdbEpisode) {
-        season = fileEntry.imdbSeason;
-        episode = fileEntry.imdbEpisode;
-        titleSuffix = ` S${season!.toString().padStart(2, '0')}E${episode!.toString().padStart(2, '0')}`;
+      if (request.type === 'series') {
+        const match = request.id.match(/tt\d+:(\d+):(\d+)/);
+        if (match) {
+          season = parseInt(match[1]);
+          episode = parseInt(match[2]);
+          titleSuffix = ` S${season!.toString().padStart(2, '0')}E${episode!.toString().padStart(2, '0')}`;
+        }
       }
 
       const stream: Stream = {
         title: torrent.title,
         name: `Brasil RD (${quality})${titleSuffix}`,
-        description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'pt-BR')}`,
+        description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'}`,
         sources: [magnetLink],
         behaviorHints: {
           notWebReady: false,
@@ -448,8 +423,6 @@ export class StreamHandler {
     }
   }
 
-  // ==================== CATÁLOGO JSON ====================
-
   private async getStreamsFromCatalog(request: StreamRequest): Promise<DatabaseStreamResult> {
     const startTime = Date.now();
 
@@ -467,24 +440,19 @@ export class StreamHandler {
     }
   }
 
-  // ==================== DECISÃO DE SCRAPING ====================
-
   private async shouldAttemptScraping(request: StreamRequest): Promise<boolean> {
     const imdbId = this.extractImdbIdFromRequest(request);
     const requestKey = `${imdbId || request.id}:${request.type}`;
 
-    // Verificar cache de scraping
     const cacheEntry = this.scrapingCache.get(requestKey);
     if (cacheEntry) {
       const timeSinceLastAttempt = Date.now() - cacheEntry.lastAttempt.getTime();
       
-      // Se já tentou recentemente e não encontrou nada, não tentar de novo
       if (!cacheEntry.successful && timeSinceLastAttempt < this.scrapingCacheTTL / 2) {
         return false;
       }
 
-      // Se já tentou muito recentemente, esperar um pouco
-      if (timeSinceLastAttempt < 5 * 60 * 1000) { // 5 minutos
+      if (timeSinceLastAttempt < 5 * 60 * 1000) {
         return false;
       }
     }
@@ -501,7 +469,6 @@ export class StreamHandler {
       successful
     });
 
-    // Limpar cache antigo
     this.cleanupOldCache();
   }
 
@@ -521,8 +488,6 @@ export class StreamHandler {
     }
   }
 
-  // ==================== SCRAPING ====================
-
   private async processStreamRequest(request: StreamRequest): Promise<Stream[]> {
     if (request.type === 'series') {
       return await this.processSeriesRequest(request);
@@ -536,9 +501,8 @@ export class StreamHandler {
       const imdbId = this.extractImdbIdFromRequest(request);
       return await this.performIntelligentScraping(imdbId, request);
     } catch (error) {
-      // Capturar StreamStatusException aqui também
       if (error instanceof StreamStatusException) {
-        throw error; // Relançar para ser capturado no handleStreamRequest
+        throw error;
       }
       return [];
     }
@@ -551,13 +515,15 @@ export class StreamHandler {
         return await this.performIntelligentScraping(null, request);
       }
 
-      const episodeInfo = this.episodeMatcher.extractEpisodeFromMultipleSources(request.id);
+      const match = request.id.match(/tt\d+:(\d+):(\d+)/);
+      if (match) {
+        const season = parseInt(match[1]);
+        const episode = parseInt(match[2]);
 
-      if (episodeInfo.isValid) {
         const episodeStream = await this.processSpecificEpisode(
           imdbId,
-          episodeInfo.season,
-          episodeInfo.episode,
+          season,
+          episode,
           request
         );
 
@@ -573,9 +539,8 @@ export class StreamHandler {
       return await this.performIntelligentScraping(imdbId, request);
 
     } catch (error) {
-      // Capturar StreamStatusException aqui também
       if (error instanceof StreamStatusException) {
-        throw error; // Relançar para ser capturado no handleStreamRequest
+        throw error;
       }
       return [];
     }
@@ -587,12 +552,11 @@ export class StreamHandler {
   ): Promise<Stream[]> {
     try {
       const type = request.type;
-      const episodeInfo = this.episodeMatcher.extractEpisodeFromRequest(request.id);
+      const match = request.id.match(/tt\d+:(\d+):(\d+)/);
 
       let searchTitle: string | null = null;
       let imdbTitles: ImdbTitles | null = null;
 
-      // Obter títulos do IMDB se tiver imdbId
       if (imdbId) {
         imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
         if (imdbTitles && imdbTitles.allTitles.length > 0) {
@@ -605,31 +569,52 @@ export class StreamHandler {
       }
 
       let searchQuery = searchTitle;
-      if (type === 'series' && episodeInfo.isValid) {
-        searchQuery = `${searchTitle} Temporada ${episodeInfo.season}`;
+      if (type === 'series' && match) {
+        const season = parseInt(match[1]);
+        searchQuery = `${searchTitle} Temporada ${season}`;
       }
 
-      // Buscar torrents
+      this.logger.debug('Iniciando scraping', {
+        searchQuery,
+        type,
+        imdbId,
+        hasImdbTitles: !!imdbTitles
+      });
+
       const torrentResults = await this.torrentScraper.searchTorrents(
         searchQuery,
         type,
-        episodeInfo.isValid ? episodeInfo.season : undefined
+        match ? parseInt(match[1]) : undefined
       );
+
+      this.logger.debug('Resultados do scraping', {
+        encontrados: torrentResults.length,
+        query: searchQuery
+      });
 
       if (torrentResults.length === 0) {
         return [];
       }
 
-      // FILTRO DE DEDUPLICAÇÃO NO SCRAPING (Nível 2)
       const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+      
+      const season = match ? parseInt(match[1]) : undefined;
+      const episode = match ? parseInt(match[2]) : undefined;
       
       const filteredTorrents = await this.filterAndValidateTorrents(
         deduplicatedTorrents,
         imdbId,
         request,
-        episodeInfo,
+        season,
+        episode,
         imdbTitles
       );
+
+      this.logger.debug('Torrents filtrados', {
+        antes: deduplicatedTorrents.length,
+        validos: filteredTorrents.valid.length,
+        invalidos: filteredTorrents.invalid.length
+      });
 
       if (filteredTorrents.valid.length === 0) {
         return [];
@@ -638,28 +623,28 @@ export class StreamHandler {
       await this.saveValidTorrentsToCatalog(
         filteredTorrents.valid,
         request,
-        episodeInfo,
+        season,
+        episode,
         imdbTitles
       );
 
       const streams = await this.processTorrentsWithOptimization(
         filteredTorrents.valid,
         request,
-        episodeInfo
+        season,
+        episode
       );
 
       return this.streamFormatter.sortStreamsByQuality(streams);
 
     } catch (error) {
-      // Capturar StreamStatusException aqui também
       if (error instanceof StreamStatusException) {
-        throw error; // Relançar para ser capturado no handleStreamRequest
+        throw error;
       }
       return [];
     }
   }
 
-  // Deduplica torrents por magnet link (Nível 2 de deduplicação)
   private deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): ScrapedTorrent[] {
     const seenMagnets = new Set<string>();
     const uniqueTorrents: ScrapedTorrent[] = [];
@@ -676,7 +661,7 @@ export class StreamHandler {
     }
     
     if (torrents.length !== uniqueTorrents.length) {
-      this.logger.debug('Torrents deduplicados no scraping', {
+      this.logger.debug('Torrents deduplicados', {
         antes: torrents.length,
         depois: uniqueTorrents.length
       });
@@ -689,13 +674,13 @@ export class StreamHandler {
     torrents: ScrapedTorrent[],
     imdbId: string | null,
     request: StreamRequest,
-    episodeInfo: { season: number; episode: number; isValid: boolean },
+    season?: number,
+    episode?: number,
     imdbTitles: ImdbTitles | null = null
   ): Promise<{ valid: ScrapedTorrent[], invalid: ScrapedTorrent[] }> {
     const valid: ScrapedTorrent[] = [];
     const invalid: ScrapedTorrent[] = [];
 
-    // Se não tem imdbId, aceita todos (fallback)
     if (!imdbId) {
       return { valid: torrents, invalid: [] };
     }
@@ -705,8 +690,8 @@ export class StreamHandler {
         const titleMatchResult = await this.titleFilter.doTitlesMatch(
           torrent.title,
           imdbId,
-          episodeInfo.isValid ? episodeInfo.season : undefined,
-          episodeInfo.isValid ? episodeInfo.episode : undefined
+          season,
+          episode
         );
 
         if (titleMatchResult.matches) {
@@ -725,7 +710,8 @@ export class StreamHandler {
   private async saveValidTorrentsToCatalog(
     validTorrents: ScrapedTorrent[],
     request: StreamRequest,
-    episodeInfo: { season: number; episode: number; isValid: boolean },
+    season?: number,
+    episode?: number,
     imdbTitles: ImdbTitles | null = null
   ): Promise<void> {
     const imdbId = this.extractImdbIdFromRequest(request);
@@ -736,21 +722,6 @@ export class StreamHandler {
 
     for (const torrent of validTorrents) {
       try {
-        const finalMatchResult = await this.titleFilter.doTitlesMatch(
-          torrent.title,
-          imdbId,
-          episodeInfo.isValid ? episodeInfo.season : undefined,
-          episodeInfo.isValid ? episodeInfo.episode : undefined
-        );
-
-        if (!finalMatchResult.matches) {
-          continue;
-        }
-
-        const metadata = this.titleFilter.extractSeriesMetadata(torrent.title);
-        const imdbSeason = episodeInfo.isValid ? episodeInfo.season : metadata.season;
-        const imdbEpisode = episodeInfo.isValid ? episodeInfo.episode : metadata.episode;
-
         await this.autoMagnetService.autoAddMagnet(
           torrent.magnet,
           torrent.title,
@@ -759,8 +730,8 @@ export class StreamHandler {
           torrent.seeders,
           torrent.quality,
           torrent.size,
-          imdbSeason,
-          imdbEpisode
+          season,
+          episode
         );
       } catch (error) {
         // Ignorar erros ao salvar
@@ -768,12 +739,11 @@ export class StreamHandler {
     }
   }
 
-  // ==================== PROCESSAMENTO DE TORRENTS ====================
-
   private async processTorrentsWithOptimization(
     torrents: ScrapedTorrent[],
     request: StreamRequest,
-    episodeInfo: { season: number; episode: number; isValid: boolean }
+    season?: number,
+    episode?: number
   ): Promise<Stream[]> {
     const allStreams: Stream[] = [];
     const batchSize = this.processingConfig.maxConcurrentTorrents;
@@ -783,15 +753,32 @@ export class StreamHandler {
 
       const batchPromises = batch.map(async (torrent) => {
         try {
-          return request.type === 'series'
-            ? await this.createSeriesStream(torrent, request, episodeInfo)
-            : await this.createMovieStream(torrent, request);
-        } catch (error) {
-          // Capturar StreamStatusException aqui também
-          if (error instanceof StreamStatusException) {
-            throw error; // Relançar para ser capturado no handleStreamRequest
+          if (request.type === 'series' && season !== undefined) {
+            return this.streamFormatter.createMultipleQualityStreams(
+              torrent,
+              request,
+              null,
+              'series',
+              season,
+              episode,
+              false
+            );
+          } else {
+            return this.streamFormatter.createMultipleQualityStreams(
+              torrent,
+              request,
+              null,
+              'movie',
+              undefined,
+              undefined,
+              false
+            );
           }
-          return null;
+        } catch (error) {
+          if (error instanceof StreamStatusException) {
+            throw error;
+          }
+          return [];
         }
       });
 
@@ -799,82 +786,16 @@ export class StreamHandler {
 
       for (const result of batchResults) {
         if (result.status === 'fulfilled' && result.value) {
-          const streamResult = result.value;
-          if (Array.isArray(streamResult)) {
-            allStreams.push(...streamResult);
-          } else {
-            allStreams.push(streamResult);
-          }
+          allStreams.push(...result.value);
         }
       }
 
       if (i + batchSize < torrents.length) {
-        await this.delay(this.processingConfig.delayBetweenTorrents);
+        await new Promise(resolve => setTimeout(resolve, this.processingConfig.delayBetweenTorrents));
       }
     }
 
     return allStreams;
-  }
-
-  private async createMovieStream(
-    torrent: ScrapedTorrent,
-    request: StreamRequest
-  ): Promise<Stream> {
-    const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
-    const magnetHash = extractHashFromMagnet(torrent.magnet);
-
-    return {
-      title: `Brasil RD (${quality})`,
-      name: `Brasil RD (${quality})`,
-      description: `${extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language)}`,
-      sources: [torrent.magnet],
-      behaviorHints: {
-        notWebReady: false,
-        bingeGroup: `br-scrape-${request.id}`
-      },
-      status: 'available',
-      infoHash: magnetHash || undefined,
-      magnet: torrent.magnet,
-      url: generateLazyResolveUrl(torrent.magnet, request.apiKey!, 'movie')
-    };
-  }
-
-  private async createSeriesStream(
-    torrent: ScrapedTorrent,
-    request: StreamRequest,
-    episodeInfo: { season: number; episode: number; isValid: boolean }
-  ): Promise<Stream | Stream[]> {
-    const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
-
-    if (episodeInfo.isValid) {
-      const episodeTag = `S${episodeInfo.season.toString().padStart(2, '0')}E${episodeInfo.episode.toString().padStart(2, '0')}`;
-      const magnetHash = extractHashFromMagnet(torrent.magnet);
-
-      return {
-        title: `Brasil RD (${quality}) ${episodeTag}`,
-        name: `Brasil RD (${quality}) ${episodeTag}`,
-        description: `${extractCleanMovieTitle(torrent.title)}\n${torrent.seeders} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language)} | ${episodeTag}`,
-        sources: [torrent.magnet],
-        behaviorHints: {
-          notWebReady: false,
-          bingeGroup: `br-${request.id}-${episodeInfo.season}`
-        },
-        status: 'available',
-        infoHash: magnetHash || undefined,
-        magnet: torrent.magnet,
-        url: generateLazyResolveUrl(torrent.magnet, request.apiKey!, 'series', episodeInfo.season, episodeInfo.episode)
-      };
-    } else {
-      return await this.createMovieStream(torrent, request);
-    }
-  }
-
-  // ==================== UTILITÁRIOS ====================
-
-  private extractImdbIdFromRequest(request: StreamRequest): string | null {
-    if (request.imdbId) return request.imdbId;
-    const imdbMatch = request.id.match(/^(tt\d+)/);
-    return imdbMatch ? imdbMatch[1] : null;
   }
 
   private async processSpecificEpisode(
@@ -882,7 +803,7 @@ export class StreamHandler {
     season: number,
     episode: number,
     request: StreamRequest
-  ): Promise<Stream | Stream[] | null> {
+  ): Promise<Stream[] | null> {
     try {
       const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
@@ -902,15 +823,14 @@ export class StreamHandler {
         return null;
       }
 
-      // Aplicar deduplicação também aqui
       const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
       
-      const episodeInfo = { season, episode, isValid: true };
       const filteredTorrents = await this.filterAndValidateTorrents(
         deduplicatedTorrents,
         imdbId,
         request,
-        episodeInfo,
+        season,
+        episode,
         imdbTitles
       );
 
@@ -922,35 +842,28 @@ export class StreamHandler {
         current.seeders > best.seeders ? current : best
       );
 
-      const streamResult = await this.createSeriesStream(bestTorrent, request, episodeInfo);
+      const streams = this.streamFormatter.createMultipleQualityStreams(
+        bestTorrent,
+        request,
+        null,
+        'series',
+        season,
+        episode,
+        false
+      );
 
-      if (Array.isArray(streamResult)) {
-        return streamResult.length > 0 ? streamResult[0] : null;
-      } else {
-        return streamResult;
-      }
+      return streams.length > 0 ? streams : null;
 
     } catch (error) {
       return null;
     }
   }
 
-  private formatLanguage(language: string): string {
-    const langMap: Record<string, string> = {
-      'pt-BR': 'PT-BR',
-      'pt-BR,en': 'Dual PT-BR/EN',
-      'en': 'EN',
-      'dual': 'Dual Audio',
-      'pt': 'Português'
-    };
-    return langMap[language] || language;
+  private extractImdbIdFromRequest(request: StreamRequest): string | null {
+    if (request.imdbId) return request.imdbId;
+    const imdbMatch = request.id.match(/^(tt\d+)/);
+    return imdbMatch ? imdbMatch[1] : null;
   }
-
-  private async delay(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-  }
-
-  // ==================== MÉTODOS PÚBLICOS ====================
 
   addCuratedMagnet(magnet: CuratedMagnet): void {
     this.magnetService.addMagnet(magnet);
@@ -990,7 +903,8 @@ export class StreamHandler {
       servedFromScraping: this.stats.servedFromScraping,
       servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
-      scrapingCacheSize: this.scrapingCache.size
+      scrapingCacheSize: this.scrapingCache.size,
+      version: '4.0.2'
     };
   }
 }

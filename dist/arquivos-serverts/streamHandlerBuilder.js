@@ -11,13 +11,13 @@ const createStremioBuilder = (manifest) => {
         const requestStartTime = Date.now();
         const config = args.config;
         if (!config || !config.apiKey) {
-            logger.warn('Requisição de stream sem API key configurada', {
+            logger.warn('Requisição sem API key', {
                 type: args.type,
                 id: args.id
             });
             return { streams: [] };
         }
-        logger.info('DEBUG - Formato do ID recebido', {
+        logger.debug('ID recebido', {
             id: args.id,
             type: args.type,
             hasColon: args.id.includes(':'),
@@ -35,28 +35,27 @@ const createStremioBuilder = (manifest) => {
                 maxResults: '25'
             }
         };
-        logger.info('DEBUG - Formato do ID para séries', {
+        logger.debug('Detalhes da requisição', {
             type: args.type,
             id: args.id,
             isSeries: args.type === 'series',
             hasSeasonEpisodeFormat: args.type === 'series' && /tt\d+:\d+:\d+/.test(args.id),
-            colonCount: (args.id.match(/:/g) || []).length
         });
         try {
             const streamHandler = new StreamHandler_1.StreamHandler();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             const processingTime = Date.now() - requestStartTime;
-            logger.info('Streams processados com sucesso', {
+            logger.info('Streams processados', {
                 requestId: args.id,
                 streamsCount: result.streams.length,
                 processingTime: processingTime + 'ms',
             });
             if (result.streams.length > 0) {
-                logger.debug('Nomes dos streams encontrados', {
+                logger.debug('Streams encontrados', {
                     streamNames: result.streams.map(s => s.name)
                 });
             }
-            if (result.streams.length < 5) {
+            if (result.streams.length < 3) {
                 logger.warn('Poucos streams encontrados', {
                     requestId: args.id,
                     streamsFound: result.streams.length,
@@ -64,19 +63,16 @@ const createStremioBuilder = (manifest) => {
                     id: args.id
                 });
             }
-            logger.info("DEBUG - Streams sendo retornados para o cliente:", {
+            logger.debug('Streams retornados', {
                 requestId: args.id,
-                streamCount: result.streams.length,
-                streamTitles: result.streams.map(s => s.title),
-                streamSources: result.streams.map(s => s.sources),
-                streamNames: result.streams.map(s => s.name)
+                streamCount: result.streams.length
             });
             return result;
         }
         catch (error) {
             const errorTime = Date.now() - requestStartTime;
             logger.error('Falha no processamento de streams', {
-                error: error instanceof Error ? error.message : 'Unknown error',
+                error: error instanceof Error ? error.message : 'Erro desconhecido',
                 request: { type: args.type, id: args.id },
                 processingTime: errorTime + 'ms'
             });

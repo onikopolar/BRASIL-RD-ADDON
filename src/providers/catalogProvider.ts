@@ -5,12 +5,15 @@ import { Stream } from '../types/index';
 import { extractHashFromMagnet } from '../lib/magnetHelper';
 import { Logger } from '../utils/logger';
 import { RealDebridService } from '../services/RealDebridService';
+import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor';
+import { EnhancedSeriesMetadata } from '../lib/title-filter/interfaces';
 
 export class CatalogProvider {
   private readonly logger: Logger;
   private readonly qualityDetector: QualityDetector;
   private readonly streamFormatter: StreamFormatter;
   private readonly rdService: RealDebridService;
+  private readonly metadataExtractor: MetadataExtractor;
 
   constructor(
     private readonly magnetService: CuratedMagnetService
@@ -19,6 +22,7 @@ export class CatalogProvider {
     this.qualityDetector = new QualityDetector();
     this.streamFormatter = new StreamFormatter();
     this.rdService = new RealDebridService();
+    this.metadataExtractor = new MetadataExtractor();
     
     this.logger.info('CatalogProvider inicializado com verificação Real-Debrid');
   }
@@ -47,30 +51,19 @@ export class CatalogProvider {
       return [];
     }
 
-    const qualityGroups = this.groupMagnetsByQuality(curatedMagnets);
-    const bestMagnets = this.selectBestFromEachQualityGroup(qualityGroups);
-    
     const streams: Stream[] = [];
     
-    // Processar cada magnet em paralelo para verificar disponibilidade no RD
-    const streamPromises = bestMagnets.map(async (magnet) => {
+    for (const magnet of curatedMagnets) {
       try {
-        return await this.processMagnetWithRDCache(magnet, request);
+        const stream = await this.processMagnetWithRDCache(magnet, request);
+        if (stream) {
+          streams.push(stream);
+        }
       } catch (error) {
         this.logger.error('Erro ao processar magnet com RD cache', {
           title: magnet.title,
           error: error instanceof Error ? error.message : 'Unknown error'
         });
-        return null;
-      }
-    });
-
-    const streamResults = await Promise.all(streamPromises);
-    
-    // Filtrar streams nulos
-    for (const stream of streamResults) {
-      if (stream) {
-        streams.push(stream);
       }
     }
 
@@ -101,14 +94,31 @@ export class CatalogProvider {
         return null;
       }
 
-      const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+      // EXTRAIR METADADOS COMPLETOS
+      const enhancedMetadata = this.metadataExtractor.extractEnhancedMetadata(magnet.title);
+      
+      this.logger.debug('Metadados extraídos do magnet:', {
+        title: magnet.title.substring(0, 60),
+        season: enhancedMetadata.season,
+        episode: enhancedMetadata.episode,
+        isCompleteSeason: enhancedMetadata.isCompleteSeason,
+        isPackage: enhancedMetadata.isPackage,
+        quality: enhancedMetadata.quality,
+        mediaType: enhancedMetadata.mediaType,
+        hasMultiEpisode: enhancedMetadata.hasMultiEpisode
+      });
+
+      // Qualidade: usar do metadata ou detectar
+      const extractedQuality = enhancedMetadata.quality !== 'unknown' ? enhancedMetadata.quality : 
+                              this.qualityDetector.extractQualityFromFilename(magnet.title);
+      const quality = extractedQuality || 'HD';
+      
       const cleanTitle = this.extractCleanMovieTitle(magnet.title);
       
-      const season = magnet.season;
-      const episode = magnet.episode;
-      const isSeries = request.type === 'series';
+      const season = enhancedMetadata.season || magnet.season;
+      const episode = enhancedMetadata.episode || magnet.episode;
+      const isSeries = request.type === 'series' || enhancedMetadata.mediaType === 'series';
       
-      // Construir nome e descrição
       let name = `Brasil RD (${quality})`;
       let description = `${cleanTitle}\n${magnet.seeds || 0} seeds | ${magnet.size || 'Tamanho não especificado'} | ${this.formatLanguage(magnet.language)}`;
       
@@ -119,7 +129,26 @@ export class CatalogProvider {
         description += ` | S${seasonStr}E${episodeStr}`;
       }
 
-      // VERIFICAR SE JÁ ESTÁ DISPONÍVEL NO REAL-DEBRID
+      // Adicionar informações dos metadados
+      if (enhancedMetadata.isPackage) {
+        description += ' | 📦 Pacote/Temporada';
+      }
+      if (enhancedMetadata.isCompleteSeason) {
+        description += ' | ✅ Temporada Completa';
+      }
+      if (enhancedMetadata.hasMultiEpisode) {
+        description += ' | 📺 Múltiplos Episódios';
+      }
+      if (enhancedMetadata.language && enhancedMetadata.language !== 'unknown') {
+        description += ` | 🌐 ${enhancedMetadata.language}`;
+      }
+      if (enhancedMetadata.source && enhancedMetadata.source !== 'unknown') {
+        description += ` | 🎞️ ${enhancedMetadata.source}`;
+      }
+      if (enhancedMetadata.codec && enhancedMetadata.codec !== 'unknown') {
+        description += ` | 🔧 ${enhancedMetadata.codec}`;
+      }
+
       const apiKey = request.apiKey;
       
       if (apiKey) {
@@ -128,14 +157,14 @@ export class CatalogProvider {
             hash: magnetHash,
             season,
             episode,
-            isSeries
+            isSeries,
+            isPackage: enhancedMetadata.isPackage,
+            isCompleteSeason: enhancedMetadata.isCompleteSeason
           });
 
-          // 1. Verificar se já existe no RD
           const existingTorrent = await this.rdService.findExistingTorrent(magnetHash, apiKey);
           
           if (existingTorrent) {
-            // 2. Obter informações do torrent
             const torrentInfo = await this.rdService.getTorrentInfo(existingTorrent.id, apiKey);
             
             this.logger.debug('Torrent encontrado no RD:', {
@@ -144,7 +173,6 @@ export class CatalogProvider {
               progress: torrentInfo.progress
             });
 
-            // 3. Se estiver pronto, obter link direto
             if (torrentInfo.status === 'downloaded' || torrentInfo.status === 'ready') {
               const streamLink = await this.rdService.getStreamLinkForTorrent(
                 existingTorrent.id,
@@ -159,9 +187,12 @@ export class CatalogProvider {
                   quality,
                   season,
                   episode,
+                  isPackage: enhancedMetadata.isPackage,
+                  isCompleteSeason: enhancedMetadata.isCompleteSeason,
                   streamLinkLength: streamLink.length
                 });
 
+                // ✅ AGORA PASSANDO METADADOS PARA STREAMFORMATTER
                 return this.streamFormatter.createDirectStream(
                   name,
                   name,
@@ -174,11 +205,11 @@ export class CatalogProvider {
                   {
                     bingeGroup: `brasil-rd-${isSeries ? 'series' : 'movie'}-${quality}`,
                     filename: this.sanitizeFilename(name)
-                  }
+                  },
+                  enhancedMetadata // ✅ METADADOS PASSADOS AQUI!
                 );
               }
             } else if (torrentInfo.status === 'downloading' || torrentInfo.status === 'queued') {
-              // Está baixando - usar método lazy com estimativa de tempo
               name += ' ⏳';
               description += ` | Processando no RD (${torrentInfo.progress || 0}%)...`;
             }
@@ -188,12 +219,11 @@ export class CatalogProvider {
             error: rdError instanceof Error ? rdError.message : 'Unknown RD error',
             title: cleanTitle
           });
-          // Continua com o método lazy se houver erro no RD
         }
       }
 
-      // SE NÃO ESTIVER DISPONÍVEL OU SEM API KEY, USAR MÉTODO LAZY
-      return this.streamFormatter.createLazyStream(
+      // MÉTODO LAZY - TAMBÉM PASSANDO METADADOS
+      const lazyStream = this.streamFormatter.createLazyStream(
         name,
         name,
         description,
@@ -206,8 +236,11 @@ export class CatalogProvider {
         {
           bingeGroup: `brasil-rd-${isSeries ? 'series' : 'movie'}-${quality}`,
           filename: this.sanitizeFilename(name)
-        }
+        },
+        enhancedMetadata // ✅ METADADOS PASSADOS AQUI!
       );
+
+      return lazyStream;
 
     } catch (error) {
       this.logger.error('Erro ao processar magnet com RD cache', {
@@ -216,47 +249,6 @@ export class CatalogProvider {
       });
       return null;
     }
-  }
-
-  private groupMagnetsByQuality(magnets: any[]): Map<string, any[]> {
-    const groups = new Map<string, any[]>();
-    
-    const allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
-    for (const quality of allowedQualities) {
-      groups.set(quality, []);
-    }
-    
-    for (const magnet of magnets) {
-      const quality = this.qualityDetector.extractQualityFromFilename(magnet.title);
-      if (allowedQualities.has(quality)) {
-        groups.get(quality)!.push(magnet);
-      } else {
-        groups.get('HD')!.push(magnet);
-      }
-    }
-    
-    return groups;
-  }
-
-  private selectBestFromEachQualityGroup(qualityGroups: Map<string, any[]>): any[] {
-    const bestMagnets: any[] = [];
-    const qualityOrder = ['2160p', '1080p', '720p', 'HD'];
-    
-    for (const quality of qualityOrder) {
-      const group = qualityGroups.get(quality);
-      if (group && group.length > 0) {
-        const bestInQuality = group.sort((a, b) => {
-          if (b.seeds !== a.seeds) {
-            return b.seeds - a.seeds;
-          }
-          return b.title.length - a.title.length;
-        })[0];
-        
-        bestMagnets.push(bestInQuality);
-      }
-    }
-    
-    return bestMagnets;
   }
 
   private extractCleanMovieTitle(fullTitle: string): string {

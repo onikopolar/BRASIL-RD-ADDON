@@ -42,59 +42,60 @@ const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 const scraperProviders_1 = require("./scraperProviders");
 const scraperConfigs_1 = require("./scraperConfigs");
+const qualityDetector_1 = require("../../lib/qualityDetector");
 const logger = new logger_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor() {
         this.providers = scraperProviders_1.scraperProviders;
         this.maxRetries = scraperConfigs_1.maxRetries;
         this.retryDelay = scraperConfigs_1.retryDelay;
-        this.allowedQualities = scraperConfigs_1.allowedQualities;
-        this.qualityPriority = scraperConfigs_1.qualityPriority;
         this.ignoredWords = scraperConfigs_1.ignoredWords;
         this.promotionalKeywords = scraperConfigs_1.promotionalKeywords;
-        this.qualityPatterns = scraperConfigs_1.qualityPatterns;
         this.episodePatterns = scraperConfigs_1.episodePatterns;
-        logger.info('TorrentScraperService initialized', {
-            providers: this.providers.map(p => p.name),
-            allowedQualities: Array.from(this.allowedQualities)
-        });
+        this.qualityDetector = new qualityDetector_1.QualityDetector();
+        logger.info('TorrentScraperService iniciado');
     }
     async searchTorrents(query, type = 'movie', targetSeason) {
         const startTime = Date.now();
-        logger.info('Starting torrent search', {
+        logger.info('Iniciando busca', {
             query,
             type,
             targetSeason,
-            providersCount: this.providers.length,
-            targetQualities: Array.from(this.allowedQualities)
+            providers: this.providers.length
         });
         try {
-            const seasonQueries = this.generateSeasonQueries(query, targetSeason);
-            const torrentIndexerPromise = scraperProviders_1.torrentIndexerConfig.enabled ?
-                Promise.all(seasonQueries.map(seasonQuery => this.searchTorrentIndexer(seasonQuery, type, targetSeason))).then(results => results.flat()) :
-                Promise.resolve([]);
-            const traditionalSearchPromises = seasonQueries.map(seasonQuery => this.providers.map(provider => this.searchProvider(provider, seasonQuery, type, targetSeason))).flat();
-            const allPromises = [torrentIndexerPromise, ...traditionalSearchPromises];
-            const settledResults = await Promise.allSettled(allPromises);
-            const allResults = this.processSettledResults(settledResults);
-            const filteredResults = this.applyFilters(allResults, query, type);
-            const bestResults = this.selectBestResults(filteredResults);
+            const mainQuery = query;
+            const allPromises = [];
+            if (scraperProviders_1.torrentIndexerConfig.enabled) {
+                allPromises.push(this.searchTorrentIndexer(mainQuery, type, targetSeason)
+                    .catch(() => []));
+            }
+            for (const provider of this.providers) {
+                allPromises.push(this.searchProvider(provider, mainQuery, type, targetSeason)
+                    .catch(() => []));
+            }
+            const timeoutPromise = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('Timeout 8s')), 8000);
+            });
+            const searchPromise = Promise.all(allPromises).then(results => {
+                const allResults = results.flat();
+                const filteredResults = this.applyFilters(allResults, query, type);
+                const bestResults = this.selectBestResults(filteredResults);
+                return bestResults;
+            });
+            const bestResults = await Promise.race([searchPromise, timeoutPromise]);
             const duration = Date.now() - startTime;
-            logger.info('Search completed', {
+            logger.info('Busca finalizada', {
                 query,
-                type,
-                totalResults: allResults.length,
-                filteredResults: filteredResults.length,
-                finalResults: bestResults.length,
-                duration: `${duration}ms`
+                total: bestResults.length,
+                tempo: `${duration}ms`
             });
             return bestResults;
         }
         catch (error) {
-            logger.error('Error in torrent search', {
+            logger.error('Erro na busca', {
                 query,
-                type,
-                error: error instanceof Error ? error.message : 'Unknown error'
+                error: error instanceof Error ? error.message : 'Unknown'
             });
             return [];
         }
@@ -109,10 +110,6 @@ class TorrentScraperService {
             }
         }
         catch (error) {
-            logger.debug('Provider search failed', {
-                provider: provider.name,
-                error: error instanceof Error ? error.message : 'Unknown error'
-            });
             return [];
         }
     }
@@ -134,8 +131,11 @@ class TorrentScraperService {
         try {
             const html = await this.fetchWithRetry(searchUrl, provider.timeout);
             const rawResults = this.parseHtmlResults(html, provider, type);
-            const resultsWithMagnets = await this.enrichWithMagnets(rawResults, provider, html);
-            return resultsWithMagnets;
+            if (rawResults.length > 0) {
+                const resultsWithMagnets = await this.enrichWithMagnets(rawResults, provider, html);
+                return resultsWithMagnets;
+            }
+            return [];
         }
         catch (error) {
             return [];
@@ -164,7 +164,7 @@ class TorrentScraperService {
             if (!data.results || !Array.isArray(data.results)) {
                 return [];
             }
-            const results = data.results.slice(0, 20);
+            const results = data.results.slice(0, 15);
             return results.map((indexerResult) => this.mapTorrentIndexerResult(indexerResult, type)).filter(Boolean);
         }
         catch (error) {
@@ -177,7 +177,7 @@ class TorrentScraperService {
             if (this.promotionalKeywords.some(keyword => titleLower.includes(keyword))) {
                 return false;
             }
-            if (!this.allowedQualities.has(result.quality)) {
+            if (!this.qualityDetector.isValidQuality(result.quality)) {
                 return false;
             }
             return true;
@@ -185,11 +185,12 @@ class TorrentScraperService {
     }
     selectBestResults(results) {
         const qualityGroups = new Map();
-        for (const quality of this.allowedQualities) {
+        const allowedQualities = ['2160p', '1080p', '720p', 'HD'];
+        for (const quality of allowedQualities) {
             qualityGroups.set(quality, []);
         }
         for (const result of results) {
-            if (this.allowedQualities.has(result.quality)) {
+            if (this.qualityDetector.isValidQuality(result.quality)) {
                 qualityGroups.get(result.quality).push(result);
             }
         }
@@ -206,38 +207,11 @@ class TorrentScraperService {
                         return b.seeders - a.seeders;
                     }
                     return 0;
-                }).slice(0, 3);
+                }).slice(0, 2);
                 bestResults.push(...bestInQuality);
             }
         }
-        return bestResults.slice(0, 12);
-    }
-    generateSeasonQueries(baseQuery, targetSeason) {
-        const queries = [baseQuery];
-        if (!targetSeason) {
-            return queries;
-        }
-        const cleanQuery = baseQuery
-            .replace(/temporada\s*\d+/gi, '')
-            .replace(/season\s*\d+/gi, '')
-            .replace(/\s+/g, ' ')
-            .trim();
-        if (cleanQuery.length < 2) {
-            queries.push(`Temporada ${targetSeason}`, `Season ${targetSeason}`);
-        }
-        else {
-            queries.push(`${cleanQuery} Temporada ${targetSeason}`, `${cleanQuery} Season ${targetSeason}`, `${cleanQuery} S${targetSeason}`);
-        }
-        return [...new Set(queries)];
-    }
-    processSettledResults(settledResults) {
-        const allResults = [];
-        settledResults.forEach((result) => {
-            if (result.status === 'fulfilled') {
-                allResults.push(...result.value);
-            }
-        });
-        return allResults;
+        return bestResults.slice(0, 8);
     }
     parseAPIResults(posts, provider, type) {
         const results = [];
@@ -247,7 +221,7 @@ class TorrentScraperService {
                 if (!title || title.length < 5) {
                     continue;
                 }
-                const quality = this.extractQuality(title);
+                const quality = this.qualityDetector.extractQualityFromFilename(title);
                 const magnet = this.extractMagnetFromContent(post.content?.rendered || '');
                 results.push({
                     title: this.cleanTitle(title),
@@ -283,7 +257,7 @@ class TorrentScraperService {
                 if (!title || title.length < 5) {
                     return;
                 }
-                const quality = this.extractQuality(title);
+                const quality = this.qualityDetector.extractQualityFromFilename(title);
                 results.push({
                     title: this.cleanTitle(title),
                     magnet: '',
@@ -305,11 +279,12 @@ class TorrentScraperService {
                 return;
             }
         });
-        return results;
+        return results.slice(0, 10);
     }
     async enrichWithMagnets(results, provider, originalHtml) {
+        const limitedResults = results.slice(0, 5);
         const enrichedResults = [];
-        for (const result of results) {
+        for (const result of limitedResults) {
             try {
                 const $original = cheerio.load(originalHtml);
                 const item = $original(provider.itemSelector).filter((_, element) => {
@@ -319,9 +294,14 @@ class TorrentScraperService {
                 let detailUrl = item.find(provider.linkSelector).attr('href');
                 let magnetLink = '';
                 if (detailUrl) {
-                    const html = await this.fetchWithRetry(detailUrl, provider.timeout);
-                    const $ = cheerio.load(html);
-                    magnetLink = $('a[href^="magnet:"]').first().attr('href') || '';
+                    const html = await axios_1.default.get(detailUrl, {
+                        timeout: 3000,
+                        headers: this.getRequestHeaders()
+                    }).then(res => res.data).catch(() => '');
+                    if (html) {
+                        const $ = cheerio.load(html);
+                        magnetLink = $('a[href^="magnet:"]').first().attr('href') || '';
+                    }
                 }
                 if (magnetLink) {
                     enrichedResults.push({
@@ -340,8 +320,8 @@ class TorrentScraperService {
         if (!indexerResult.title || !indexerResult.magnet_link) {
             return null;
         }
-        const quality = this.extractQuality(indexerResult.title);
-        if (!this.allowedQualities.has(quality)) {
+        const quality = this.qualityDetector.extractQualityFromFilename(indexerResult.title);
+        if (!this.qualityDetector.isValidQuality(quality)) {
             return null;
         }
         const seasonNumber = this.extractSeasonNumber(indexerResult.title);
@@ -361,44 +341,6 @@ class TorrentScraperService {
             lastUpdated: new Date(indexerResult.date || Date.now()),
             confidence: 0.5
         };
-    }
-    extractQuality(title) {
-        const cleanTitle = title.toLowerCase();
-        for (const { pattern, quality, confidence } of this.qualityPatterns) {
-            if (pattern.test(cleanTitle) && confidence >= 95) {
-                return quality;
-            }
-        }
-        const exactPatterns = [
-            { pattern: /\b2160p\b/i, quality: '2160p' },
-            { pattern: /\b4k\b/i, quality: '2160p' },
-            { pattern: /\b1080p\b/i, quality: '1080p' },
-            { pattern: /\b720p\b/i, quality: '720p' },
-            { pattern: /\bhd\b/i, quality: 'HD' }
-        ];
-        for (const { pattern, quality } of exactPatterns) {
-            if (pattern.test(cleanTitle)) {
-                return quality;
-            }
-        }
-        for (const { pattern, quality, confidence } of this.qualityPatterns) {
-            if (pattern.test(cleanTitle) && confidence >= 80) {
-                return quality;
-            }
-        }
-        return this.inferQualityFromContext(cleanTitle);
-    }
-    inferQualityFromContext(titleLower) {
-        if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
-            return '1080p';
-        }
-        if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
-            return '1080p';
-        }
-        if (titleLower.includes('hdtv')) {
-            return '720p';
-        }
-        return 'HD';
     }
     extractSeasonNumber(text) {
         for (const pattern of this.episodePatterns) {
@@ -495,29 +437,30 @@ class TorrentScraperService {
         return Math.round(base * multiplier);
     }
     async fetchWithRetry(url, timeout) {
-        for (let attempt = 1; attempt <= this.maxRetries + 1; attempt++) {
+        try {
+            const response = await axios_1.default.get(url, {
+                timeout,
+                headers: this.getRequestHeaders(),
+                validateStatus: (status) => status < 500
+            });
+            if (response.status === 200) {
+                return response.data;
+            }
+            throw new Error(`HTTP ${response.status}`);
+        }
+        catch (error) {
+            await this.delay(1000);
             try {
                 const response = await axios_1.default.get(url, {
-                    timeout,
-                    headers: this.getRequestHeaders(),
-                    validateStatus: (status) => status < 500
+                    timeout: timeout + 1000,
+                    headers: this.getRequestHeaders()
                 });
-                if (response.status === 200) {
-                    return response.data;
-                }
-                if (attempt === this.maxRetries + 1) {
-                    throw new Error(`HTTP ${response.status}`);
-                }
-                await this.delay(this.retryDelay * attempt);
+                return response.data;
             }
-            catch (error) {
-                if (attempt === this.maxRetries + 1) {
-                    throw error;
-                }
-                await this.delay(this.retryDelay * attempt);
+            catch {
+                throw error;
             }
         }
-        throw new Error(`All ${this.maxRetries} attempts failed`);
     }
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));
