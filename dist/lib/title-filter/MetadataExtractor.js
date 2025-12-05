@@ -25,6 +25,7 @@ class MetadataExtractor {
             { pattern: /(\d+)x(\d+)[\-_](\d+)/i, type: 'XxX-X' },
             { pattern: /temporada[\s\._-]?(\d+)[\s\._-]?epis[oó]dio[\s\._-]?(\d+)/i, type: 'temp_ep' },
             { pattern: /ep(?:isode)?\s*(\d+)/i, type: 'epX' },
+            { pattern: /season\s*(\d+)\s*episode\s*(\d+)/i, type: 'seasonXepisodeX' },
             { pattern: /(\d+)\s*-\s*(\d+)/, type: 'X-X' },
             { pattern: /(\d+)of(\d+)/i, type: 'XofX' },
             { pattern: /parte?\s*(\d+)/i, type: 'partX' },
@@ -36,14 +37,8 @@ class MetadataExtractor {
             /(?:box|cole[cç][aã]o)[\s\._-]?(?:completa|inteira|series)/i,
             /(?:toda|all|todas)[\s\._-]*(?:as\s+)?temporadas/i
         ];
-        this.PACKAGE_INDICATORS = [
-            'pack', 'pacote', 'temporada', 'season', 'complete', 'completa', 'full', 'inteira', 'box', 'coleção'
-        ];
-        this.TECHNICAL_TERMS = [
-            'h264', 'h265', 'x264', 'x265', 'hevc', 'avc', 'aac', 'ac3', 'dts',
-            '720p', '1080p', '2160p', '4k', 'hd', 'web-dl', 'webrip', 'bluray',
-            'mkv', 'mp4', 'avi', 'mpg', 'mpeg', 'mov', 'wmv', 'flv'
-        ];
+        this.PACKAGE_INDICATORS = ['pack', 'pacote', 'temporada', 'season', 'complete', 'completa', 'full', 'inteira', 'box', 'coleção'];
+        this.TECHNICAL_TERMS = ['h264', 'h265', 'x264', 'x265', 'hevc', 'avc', 'aac', 'ac3', 'dts', '720p', '1080p', '2160p', '4k', 'hd', 'web-dl', 'webrip', 'bluray', 'mkv', 'mp4', 'avi', 'mpg', 'mpeg', 'mov', 'wmv', 'flv'];
         this.QUALITY_PATTERNS = [
             { pattern: /\b(2160p|4k|uhd)\b/i, quality: '2160p' },
             { pattern: /\b(1080p|fullhd|full hd)\b/i, quality: '1080p' },
@@ -51,7 +46,7 @@ class MetadataExtractor {
             { pattern: /\b(480p|sd|standard definition)\b/i, quality: 'SD' },
         ];
         this.logger = new logger_1.Logger('MetadataExtractor');
-        this.logger.info('MetadataExtractor v1.3.0 inicializado');
+        this.logger.info('MetadataExtractor v1.4.0 inicializado');
     }
     extractSeriesMetadata(torrentTitle) {
         const basic = this.extractBasicMetadataInternal(torrentTitle);
@@ -70,11 +65,7 @@ class MetadataExtractor {
             return cached.basic;
         }
         const metadata = this.extractBasicMetadataInternal(torrentTitle);
-        this.metadataCache.set(cacheKey, {
-            basic: metadata,
-            enhanced: null,
-            timestamp: Date.now()
-        });
+        this.metadataCache.set(cacheKey, { basic: metadata, enhanced: null, timestamp: Date.now() });
         return metadata;
     }
     extractBasicMetadataInternal(torrentTitle) {
@@ -124,17 +115,15 @@ class MetadataExtractor {
             hasEpisodeInfo: !!(basicMetadata.season || basicMetadata.episode || basicMetadata.isCompleteSeason),
             matchedPattern: undefined
         };
-        this.metadataCache.set(cacheKey, {
-            basic: basicMetadata,
-            enhanced: enhancedMetadata,
-            timestamp: Date.now()
-        });
+        this.metadataCache.set(cacheKey, { basic: basicMetadata, enhanced: enhancedMetadata, timestamp: Date.now() });
         return enhancedMetadata;
     }
     detectMediaType(title) {
         const seriesIndicators = [
             /s\d+e\d+/i, /season/i, /temporada/i, /episode/i, /episodio/i,
-            /\d+x\d+/i, /parte?\s*\d+/i, /cap(?:itulo|ítulo)?\s*\d+/i
+            /\d+x\d+/i, /parte?\s*\d+/i, /cap(?:itulo|ítulo)?\s*\d+/i,
+            /s\d+\b/i,
+            /\bseason\s+\d+\s+episode\s+\d+/i
         ];
         const movieIndicators = [
             /\b\d{4}\b(?!\s*(?:h|x|hevc|avc))/i,
@@ -153,17 +142,15 @@ class MetadataExtractor {
         const yearMatch = title.match(/\b(19|20)\d{2}\b(?!\s*(?:h|x|hevc|avc))/i);
         if (yearMatch) {
             const year = parseInt(yearMatch[0]);
-            if (year >= 1900 && year <= 2100) {
+            if (year >= 1900 && year <= 2100)
                 return year;
-            }
         }
         return null;
     }
     extractQuality(title) {
         for (const { pattern, quality } of this.QUALITY_PATTERNS) {
-            if (pattern.test(title)) {
+            if (pattern.test(title))
                 return quality;
-            }
         }
         return 'unknown';
     }
@@ -175,9 +162,8 @@ class MetadataExtractor {
             { pattern: /eng|english|ingl[eê]s/i, lang: 'EN' }
         ];
         for (const { pattern, lang } of langPatterns) {
-            if (pattern.test(title)) {
+            if (pattern.test(title))
                 return lang;
-            }
         }
         return 'unknown';
     }
@@ -188,9 +174,8 @@ class MetadataExtractor {
             { pattern: /av1|vp9/i, codec: 'AV1/VP9' }
         ];
         for (const { pattern, codec } of codecPatterns) {
-            if (pattern.test(title)) {
+            if (pattern.test(title))
                 return codec;
-            }
         }
         return 'unknown';
     }
@@ -203,9 +188,8 @@ class MetadataExtractor {
             { pattern: /hdtv|tvrip/i, source: 'HDTV' }
         ];
         for (const { pattern, source } of sourcePatterns) {
-            if (pattern.test(title)) {
+            if (pattern.test(title))
                 return source;
-            }
         }
         return 'unknown';
     }
@@ -222,17 +206,15 @@ class MetadataExtractor {
         if (multiMatch) {
             const start = parseInt(multiMatch[2]);
             const end = parseInt(multiMatch[3]);
-            if (!isNaN(start) && !isNaN(end) && start < end) {
+            if (!isNaN(start) && !isNaN(end) && start < end)
                 return { start, end };
-            }
         }
         const rangeMatch = title.match(/(\d+)x(\d+)[\-_](\d+)/i);
         if (rangeMatch) {
             const start = parseInt(rangeMatch[2]);
             const end = parseInt(rangeMatch[3]);
-            if (!isNaN(start) && !isNaN(end) && start < end) {
+            if (!isNaN(start) && !isNaN(end) && start < end)
                 return { start, end };
-            }
         }
         return null;
     }
@@ -241,9 +223,8 @@ class MetadataExtractor {
             const match = title.match(pattern);
             if (match) {
                 const season = parseInt(match[1]);
-                if (!isNaN(season) && season > 0) {
+                if (!isNaN(season) && season > 0)
                     return { season, pattern: match[0] };
-                }
             }
         }
         return null;
@@ -253,9 +234,8 @@ class MetadataExtractor {
             const match = title.match(pattern);
             if (match) {
                 const season = parseInt(match[1]);
-                if (!isNaN(season) && season > 0) {
+                if (!isNaN(season) && season > 0)
                     return { season, pattern: match[0] };
-                }
             }
         }
         return null;
@@ -287,6 +267,10 @@ class MetadataExtractor {
                         season = parseInt(match[1]);
                         episode = parseInt(match[2]);
                         break;
+                    case 'seasonXepisodeX':
+                        season = parseInt(match[1]);
+                        episode = parseInt(match[2]);
+                        break;
                     case 'epX':
                     case 'XofX':
                     case 'partX':
@@ -296,9 +280,8 @@ class MetadataExtractor {
                     case 'X-X':
                         const num1 = parseInt(match[1]);
                         const num2 = parseInt(match[2]);
-                        if (this.looksLikeYearRange(num1, num2)) {
+                        if (this.looksLikeYearRange(num1, num2))
                             continue;
-                        }
                         season = num1;
                         episode = num2;
                         break;
@@ -308,15 +291,13 @@ class MetadataExtractor {
                 if (!isNaN(episode) && episode > 0) {
                     const matchedText = match[0].toLowerCase();
                     const isTechnicalTerm = this.TECHNICAL_TERMS.some(term => matchedText.includes(term.toLowerCase()));
-                    if (isTechnicalTerm) {
+                    if (isTechnicalTerm)
                         continue;
-                    }
                     if (type === 'X-X' || type === 'epX' || type === 'XofX' || type === 'partX' || type === 'capX') {
                         const surroundingText = this.getSurroundingText(title, match.index || 0, match[0].length);
                         const looksLikeCodec = this.looksLikeCodecOrQuality(surroundingText);
-                        if (looksLikeCodec) {
+                        if (looksLikeCodec)
                             continue;
-                        }
                     }
                     return { season, episode, pattern: match[0] };
                 }
@@ -325,9 +306,7 @@ class MetadataExtractor {
         return null;
     }
     looksLikeYearRange(num1, num2) {
-        return (num1 >= 1900 && num1 <= 2100 &&
-            num2 >= 1900 && num2 <= 2100 &&
-            Math.abs(num2 - num1) <= 3);
+        return (num1 >= 1900 && num1 <= 2100 && num2 >= 1900 && num2 <= 2100 && Math.abs(num2 - num1) <= 3);
     }
     getSurroundingText(text, startIndex, matchLength) {
         const before = text.substring(Math.max(0, startIndex - 10), startIndex);
@@ -336,8 +315,7 @@ class MetadataExtractor {
     }
     looksLikeCodecOrQuality(text) {
         const codecPatterns = [
-            /h\.?265|x265|hevc/i,
-            /h\.?264|x264|avc/i,
+            /h\.?265|x265|hevc/i, /h\.?264|x264|avc/i,
             /\d+p/i, /4k/i, /hd/i, /uhd/i,
             /web[\s\._-]?dl/i, /blu[\s\._-]?ray/i, /dvdrip/i
         ];
@@ -346,9 +324,8 @@ class MetadataExtractor {
     isPackageTitle(title) {
         const titleLower = title.toLowerCase();
         for (const pattern of this.PACKAGE_PATTERNS) {
-            if (pattern.test(titleLower)) {
+            if (pattern.test(titleLower))
                 return true;
-            }
         }
         return this.PACKAGE_INDICATORS.some(indicator => titleLower.includes(indicator));
     }
@@ -377,7 +354,7 @@ class MetadataExtractor {
         return {
             cacheSize: this.metadataCache.size,
             cacheTTL: this.cacheTTL,
-            version: '1.3.0'
+            version: '1.4.0'
         };
     }
 }

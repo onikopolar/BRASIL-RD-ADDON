@@ -9,7 +9,7 @@ const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
 const DATABASE_URL = process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
-    process.env.RAILWAY_POSTGRES_URL;
+    process.env.DATABASE_PUBLIC_URL;
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
     throw new Error('URL do banco de dados não configurada para produção');
 }
