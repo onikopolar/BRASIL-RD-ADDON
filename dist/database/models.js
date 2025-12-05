@@ -7,20 +7,66 @@ exports.Subtitle = exports.File = exports.Torrent = exports.sequelize = void 0;
 const sequelize_1 = require("sequelize");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
-const DATABASE_URL = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+const DATABASE_URL = process.env.DATABASE_URL ||
+    process.env.POSTGRES_URL ||
+    process.env.RAILWAY_POSTGRES_URL;
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
-    throw new Error('DATABASE_URL não configurada para produção');
+    throw new Error('URL do banco de dados não configurada para produção');
+}
+if (process.env.NODE_ENV !== 'production') {
+    console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Não configurada');
+    if (DATABASE_URL) {
+        const maskedUrl = DATABASE_URL.replace(/:[^:@]+@/, ':****@');
+        console.log('Database URL (mascarada):', maskedUrl);
+    }
+}
+const isRailway = DATABASE_URL?.includes('railway.app') || DATABASE_URL?.includes('railway.internal');
+const isRailwayInternal = DATABASE_URL?.includes('railway.internal');
+const isRailwayExternal = DATABASE_URL?.includes('railway.app') && !isRailwayInternal;
+const sequelizeConfig = {
+    logging: false,
+    dialect: 'postgres',
+    pool: {
+        max: 15,
+        min: 2,
+        acquire: 30000,
+        idle: 10000,
+        evict: 10000
+    },
+    retry: {
+        max: 3,
+        timeout: 10000
+    }
+};
+if (DATABASE_URL?.includes('postgres')) {
+    sequelizeConfig.dialect = 'postgres';
+    sequelizeConfig.dialectOptions = {
+        ssl: isRailwayExternal ? {
+            require: true,
+            rejectUnauthorized: false
+        } : false
+    };
+    if (isRailwayInternal) {
+        sequelizeConfig.dialectOptions = {
+            ...sequelizeConfig.dialectOptions,
+            connectTimeout: 10000,
+            statement_timeout: 30000,
+            idle_in_transaction_session_timeout: 30000
+        };
+    }
 }
 const sequelize = DATABASE_URL
-    ? new sequelize_1.Sequelize(DATABASE_URL, {
-        logging: false,
-        pool: { max: 30, min: 5, idle: 20 * 60 * 1000 }
-    })
+    ? new sequelize_1.Sequelize(DATABASE_URL, sequelizeConfig)
     : new sequelize_1.Sequelize('sqlite::memory:', {
         logging: false,
         pool: { max: 30, min: 5, idle: 20 * 60 * 1000 }
     });
 exports.sequelize = sequelize;
+if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
+    sequelize.authenticate()
+        .then(() => console.log('Conexão com PostgreSQL estabelecida'))
+        .catch(err => console.error('Erro na conexão PostgreSQL:', err.message));
+}
 class Torrent extends sequelize_1.Model {
 }
 exports.Torrent = Torrent;

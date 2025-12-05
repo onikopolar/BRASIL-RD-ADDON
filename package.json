@@ -4,18 +4,20 @@
   "description": "Addon brasileiro para Stremio com suporte completo ao Real-Debrid",
   "type": "commonjs",
   "main": "dist/server.js",
-  "scripts": {
-    "build": "node build.js",
-    "start": "npm run start:stremio",
-    "start:stremio": "node dist/server.js",
-    "dev": "npm run dev:stremio",
-    "dev:stremio": "ts-node src/server.ts",
-    "test": "jest",
-    "clean": "rm -rf dist",
-    "rebuild": "npm run clean && npm run build",
-    "add-magnet": "ts-node scripts/add-magnet.ts",
-    "add-magnet:dev": "ts-node --transpile-only scripts/add-magnet.ts"
-  },
+"scripts": {
+  "build": "node build.js",
+  "start": "node railway-start.js",
+  "start:stremio": "node dist/server.js",
+  "dev": "npm start:stremio",
+  "dev:stremio": "ts-node src/server.ts",
+  "test": "jest",
+  "clean": "rm -rf dist",
+  "rebuild": "npm run clean && npm run build",
+  "add-magnet": "ts-node scripts/add-magnet.ts",
+  "add-magnet:dev": "ts-node --transpile-only scripts/add-magnet.ts",
+  "migrate": "node scripts/migrate-database.js",
+  "migrate:dev": "node scripts/migrate-database.js"
+},
   "dependencies": {
     "@types/cors": "^2.8.19",
     "axios": "^1.6.0",
