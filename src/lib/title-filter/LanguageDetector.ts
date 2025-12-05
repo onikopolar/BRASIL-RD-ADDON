@@ -3,6 +3,9 @@ import { Logger } from '../../utils/logger';
 export class LanguageDetector {
   private readonly logger: Logger;
   
+  // Versionamento Semântico - atualize aqui ao fazer mudanças
+  private readonly VERSION = '2.2.0';
+  
   // Indicadores de português
   private readonly PORTUGUES_INDICATORS = [
     'dublado', 'dublada', 'dublagem', 'dubladores',
@@ -36,17 +39,17 @@ export class LanguageDetector {
     /\[eng[^\]]*\]/i,
   ];
   
-  // Grupos internacionais
+  // Grupos internacionais (geralmente inglês)
   private readonly INTERNATIONAL_GROUPS = [
     'yts', 'rarbg', 'ettv', 'eztv', 'skgtv', 'rartv', 'turbotorrent'
   ];
   
-  // Tags comuns em inglês
-  private readonly COMMON_ENGLISH_TAGS = [
+  // Tags técnicas comuns em releases
+  private readonly COMMON_TECH_TAGS = [
     'webrip', 'web-dl', 'hdtv', 'bluray', 'x264', 'x265', 'h264', 'h265'
   ];
   
-  // Padrões comuns em releases BR
+  // Padrões BR (séries, temporadas, episódios)
   private readonly BR_PATTERNS = [
     /\d+\s*ª?\s*temporada/i,
     /completa\s*\d+\s*temporada/i,
@@ -54,149 +57,96 @@ export class LanguageDetector {
     /\d+\s*epis[oó]dios/i
   ];
   
-  // Palavras-chave relevantes para verificação
+  // Palavras-chave para séries populares
   private readonly KEYWORD_CHECKS = [
     {
       keywords: ['horror story', 'historia de horror'],
-      description: 'Título relevante para American Horror Story'
+      description: 'American Horror Story'
     },
     {
-      keywords: ['breaking bad', 'breaking bad'],
-      description: 'Título relevante para Breaking Bad'
+      keywords: ['breaking bad'],
+      description: 'Breaking Bad'
     }
   ];
 
   constructor() {
     this.logger = new Logger('LanguageDetector');
-    this.logger.info('LanguageDetector v2.1.0 iniciado (aceita mais títulos)');
+    this.logger.info(`LanguageDetector v${this.VERSION} iniciado - Foco em detecção de idioma`);
   }
 
-  // Verifica se conteúdo está em português
+  // Método principal: detecta se conteúdo está em português
   isPortugueseContent(torrentTitle: string): boolean {
     const titleLower = torrentTitle.toLowerCase();
     
-    this.logger.debug('Verificando português', {
+    // Debug: título sendo analisado
+    this.logger.debug('Analisando idioma', {
       title: torrentTitle.substring(0, 80)
     });
 
-    // CORREÇÃO: Aceita se tiver "o filme" ou "a filme" no título
-    if (this.isMovieTitle(titleLower)) {
-      this.logger.debug('✅ ACEITO - Título de filme', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Título contém "filme" ou é nome de filme'
+    // 1. Verifica dual áudio com português
+    const hasPortugueseDualAudio = this.hasPortugueseDualAudio(titleLower);
+    if (hasPortugueseDualAudio) {
+      this.logger.debug('Aceito: Dual áudio com português', {
+        title: torrentTitle.substring(0, 60)
       });
       return true;
     }
     
-    // 1. Verifica dual áudio primeiro
-    const isDualAudio = this.isExplicitDualAudio(titleLower);
-    if (isDualAudio) {
-      this.logger.debug('✅ ACEITO - Dual áudio', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Dual áudio detectado'
+    // 2. Verifica inglês puro (deve rejeitar)
+    const isEnglishOnly = this.isEnglishOnlyContent(titleLower);
+    if (isEnglishOnly) {
+      this.logger.debug('Rejeitado: Conteúdo apenas em inglês', {
+        title: torrentTitle.substring(0, 60)
+      });
+      return false;
+    }
+    
+    // 3. Verifica indicadores de português
+    const hasPortugueseIndicators = this.hasPortugueseIndicators(titleLower);
+    if (hasPortugueseIndicators) {
+      this.logger.debug('Aceito: Indicadores de português', {
+        title: torrentTitle.substring(0, 60)
       });
       return true;
     }
     
-    // 2. Verifica inglês puro
-    const hasEnglishOnly = this.hasEnglishOnlyIndicator(titleLower);
-    if (hasEnglishOnly) {
-      this.logger.debug('❌ REJEITADO - Inglês puro', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Inglês puro detectado'
-      });
-      return false;
-    }
-    
-    // 3. Verifica português
-    const hasPortuguese = this.hasPortugueseIndicator(titleLower);
-    if (hasPortuguese) {
-      this.logger.debug('✅ ACEITO - Português', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Português detectado'
-      });
-      return true;
-    }
-    
-    // 4. Termina com (eng) → REJEITA
-    if (this.endsWithEnglishIndicator(titleLower)) {
-      this.logger.debug('❌ REJEITADO - Termina com eng', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Termina com indicador de inglês'
-      });
-      return false;
-    }
-    
-    // 5. Grupo internacional sem português → REJEITA
-    if (this.isInternationalEnglishOnly(titleLower)) {
-      this.logger.debug('❌ REJEITADO - Grupo internacional', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Grupo internacional sem português'
-      });
-      return false;
-    }
-    
-    // 6. Padrões BR → ACEITA
+    // 4. Verifica padrões BR (séries, temporadas)
     const hasBRPatterns = this.hasBRPatterns(titleLower);
     if (hasBRPatterns) {
-      this.logger.debug('✅ ACEITO - Padrão BR', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Padrão BR detectado'
+      this.logger.debug('Aceito: Padrão BR detectado', {
+        title: torrentTitle.substring(0, 60)
       });
       return true;
     }
     
-    // 7. Palavras-chave relevantes → ACEITA
+    // 5. Verifica palavras-chave relevantes
     const hasRelevantKeywords = this.hasRelevantKeywords(titleLower);
     if (hasRelevantKeywords) {
-      this.logger.debug('✅ ACEITO - Palavras-chave', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Palavras-chave relevantes'
+      this.logger.debug('Aceito: Palavras-chave relevantes', {
+        title: torrentTitle.substring(0, 60)
       });
       return true;
     }
     
-    // 8. Títulos muito curtos (até 5 palavras) → ACEITA com benefício da dúvida
-    if (this.isShortTitle(torrentTitle)) {
-      this.logger.debug('✅ ACEITO - Título curto', {
-        torrentTitle: torrentTitle.substring(0, 80),
-        reason: 'Título curto - benefício da dúvida'
+    // 6. Títulos curtos: benefício da dúvida
+    const isShortTitle = this.isShortTitle(torrentTitle);
+    if (isShortTitle) {
+      this.logger.debug('Aceito: Título curto - benefício da dúvida', {
+        title: torrentTitle.substring(0, 60)
       });
       return true;
     }
     
-    // 9. Se não tem indicadores claros → REJEITA
-    this.logger.debug('❌ REJEITADO - Sem indicadores', {
-      torrentTitle: torrentTitle.substring(0, 80),
-      reason: 'Sem indicadores claros de português'
+    // 7. Rejeita por falta de indicadores claros
+    this.logger.debug('Rejeitado: Sem indicadores claros de português', {
+      title: torrentTitle.substring(0, 60)
     });
     return false;
   }
 
-  // CORREÇÃO: Verifica se é título de filme
-  private isMovieTitle(titleLower: string): boolean {
-    // Contém "filme" no título
-    if (titleLower.includes('filme') || titleLower.includes('movie')) {
-      return true;
-    }
-    
-    // Títulos conhecidos de filmes brasileiros
-    const brazilianMovies = [
-      '',
-      '',
-      '',
-      '',
-      '',
-      '',
-      ''
-    ];
-    
-    return brazilianMovies.some(movie => titleLower.includes(movie));
-  }
-
-  // Detecta dual áudio explícito
-  private isExplicitDualAudio(titleLower: string): boolean {
-    const dualAudioCombinations = [
+  // Verifica dual áudio que inclui português
+  private hasPortugueseDualAudio(titleLower: string): boolean {
+    const dualAudioPatterns = [
       'dual audio português',
       'dual áudio português', 
       'dual audio pt',
@@ -210,32 +160,31 @@ export class LanguageDetector {
       'pt + eng',
       'pt e eng',
       'pt-br + eng',
-      'pt-br e eng',
-      'dual audio',
-      'dual áudio'
+      'pt-br e eng'
     ];
     
-    for (const combination of dualAudioCombinations) {
-      if (titleLower.includes(combination)) {
-        if (combination === 'dual audio' || combination === 'dual áudio') {
-          const hasPortuguese = titleLower.includes('português') || 
-                               titleLower.includes('portugues') || 
-                               titleLower.includes('pt') ||
-                               titleLower.includes('pt-br');
-          if (hasPortuguese) {
-            return true;
-          }
-        } else {
-          return true;
-        }
+    // Verifica combinações explícitas
+    for (const pattern of dualAudioPatterns) {
+      if (titleLower.includes(pattern)) {
+        return true;
       }
+    }
+    
+    // Verifica "dual áudio" ou "dual audio" com indicador de português
+    if (titleLower.includes('dual audio') || titleLower.includes('dual áudio')) {
+      const hasPortuguese = titleLower.includes('português') || 
+                           titleLower.includes('portugues') || 
+                           titleLower.includes('pt') ||
+                           titleLower.includes('pt-br');
+      return hasPortuguese;
     }
     
     return false;
   }
 
-  // Verifica inglês puro
-  private hasEnglishOnlyIndicator(titleLower: string): boolean {
+  // Verifica se é conteúdo apenas em inglês
+  private isEnglishOnlyContent(titleLower: string): boolean {
+    // Se tem indicadores fortes de português, não é inglês puro
     const hasStrongPortuguese = 
       (titleLower.includes('dublado') || titleLower.includes('legendado')) &&
       (titleLower.includes('português') || titleLower.includes('portugues') || titleLower.includes('pt'));
@@ -244,7 +193,8 @@ export class LanguageDetector {
       return false;
     }
     
-    return this.ENGLISH_ONLY_INDICATORS.some(indicator => {
+    // Verifica indicadores de inglês puro
+    const hasEnglishOnly = this.ENGLISH_ONLY_INDICATORS.some(indicator => {
       if (typeof indicator === 'string') {
         return titleLower.includes(indicator);
       } else if (indicator instanceof RegExp) {
@@ -252,33 +202,36 @@ export class LanguageDetector {
       }
       return false;
     });
+    
+    if (hasEnglishOnly) {
+      return true;
+    }
+    
+    // Verifica se termina com (eng)
+    const endsWithEnglish = titleLower.match(/\(eng\)$|\[eng\]$|\{eng\}$|\.eng$/) !== null;
+    if (endsWithEnglish) {
+      return true;
+    }
+    
+    // Verifica grupos internacionais sem português
+    const hasInternationalGroup = this.INTERNATIONAL_GROUPS.some(group => 
+      titleLower.includes(group)
+    );
+    const hasTechTags = this.COMMON_TECH_TAGS.some(tag => 
+      titleLower.includes(tag)
+    );
+    
+    return hasInternationalGroup && hasTechTags && !this.hasPortugueseIndicators(titleLower);
   }
 
-  // Verifica português
-  private hasPortugueseIndicator(titleLower: string): boolean {
+  // Verifica indicadores de português
+  private hasPortugueseIndicators(titleLower: string): boolean {
     return this.PORTUGUES_INDICATORS.some(indicator =>
       titleLower.includes(indicator)
     );
   }
 
-  // Verifica se termina com (eng)
-  private endsWithEnglishIndicator(titleLower: string): boolean {
-    return titleLower.match(/\(eng\)$|\[eng\]$|\{eng\}$|\.eng$/) !== null;
-  }
-
-  // Verifica grupo internacional
-  private isInternationalEnglishOnly(titleLower: string): boolean {
-    const hasInternationalGroup = this.INTERNATIONAL_GROUPS.some(group => 
-      titleLower.includes(group)
-    );
-    const hasEnglishTags = this.COMMON_ENGLISH_TAGS.some(tag => 
-      titleLower.includes(tag)
-    );
-    
-    return hasInternationalGroup && hasEnglishTags;
-  }
-
-  // Verifica padrões BR
+  // Verifica padrões BR (séries, temporadas, episódios)
   private hasBRPatterns(titleLower: string): boolean {
     return this.BR_PATTERNS.some(pattern => pattern.test(titleLower));
   }
@@ -293,7 +246,7 @@ export class LanguageDetector {
     return false;
   }
 
-  // CORREÇÃO: Verifica se é título curto
+  // Verifica se é título curto (até 5 palavras)
   private isShortTitle(torrentTitle: string): boolean {
     const cleanTitle = torrentTitle
       .replace(/[^\w\s]|_/g, ' ')
@@ -304,40 +257,55 @@ export class LanguageDetector {
     return words.length <= 5;
   }
 
-  // Métodos para configuração
+  // Métodos para extensão dinâmica
+
   addPortugueseIndicator(indicator: string): void {
     this.PORTUGUES_INDICATORS.push(indicator.toLowerCase());
+    this.logger.debug('Indicador de português adicionado', { indicator });
   }
 
   addEnglishIndicator(indicator: string | RegExp): void {
     this.ENGLISH_ONLY_INDICATORS.push(indicator);
+    this.logger.debug('Indicador de inglês adicionado', { 
+      indicator: indicator instanceof RegExp ? indicator.toString() : indicator 
+    });
   }
 
   addInternationalGroup(group: string): void {
     this.INTERNATIONAL_GROUPS.push(group.toLowerCase());
+    this.logger.debug('Grupo internacional adicionado', { group });
   }
 
-  addEnglishTag(tag: string): void {
-    this.COMMON_ENGLISH_TAGS.push(tag.toLowerCase());
+  addTechTag(tag: string): void {
+    this.COMMON_TECH_TAGS.push(tag.toLowerCase());
+    this.logger.debug('Tag técnica adicionada', { tag });
   }
 
   addBRPattern(pattern: RegExp): void {
     this.BR_PATTERNS.push(pattern);
+    this.logger.debug('Padrão BR adicionado', { pattern: pattern.toString() });
   }
 
   addKeywordCheck(keywords: string[], description: string): void {
     this.KEYWORD_CHECKS.push({ keywords, description });
+    this.logger.debug('Palavras-chave adicionadas', { description, keywords });
   }
 
-  // Estatísticas
+  // Estatísticas para debugging
   getIndicatorStats() {
     return {
+      version: this.VERSION,
       portugueseIndicators: this.PORTUGUES_INDICATORS.length,
       englishIndicators: this.ENGLISH_ONLY_INDICATORS.length,
       internationalGroups: this.INTERNATIONAL_GROUPS.length,
-      englishTags: this.COMMON_ENGLISH_TAGS.length,
+      techTags: this.COMMON_TECH_TAGS.length,
       brPatterns: this.BR_PATTERNS.length,
       keywordChecks: this.KEYWORD_CHECKS.length
     };
+  }
+
+  // Log de configuração atual
+  logCurrentConfig(): void {
+    this.logger.info('Configuração atual LanguageDetector', this.getIndicatorStats());
   }
 }

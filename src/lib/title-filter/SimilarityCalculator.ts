@@ -12,7 +12,10 @@ export class SimilarityCalculator {
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
 
-  // Palavras técnicas para filtro COMPLETO
+  // Versionamento Semântico - fix: remoção de verificação incorreta de filme/série
+  private readonly VERSION = '12.1.0';
+
+  // Palavras técnicas para filtro
   private readonly TECHNICAL_WORDS = [
     // Formatos de vídeo
     'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv',
@@ -52,7 +55,7 @@ export class SimilarityCalculator {
 
   constructor(titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
-    this.logger.info('SimilarityCalculator v12.0.0 - Filtro Técnico Completo + Contexto Inteligente');
+    this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Foco em similaridade, não tipo de mídia`);
     this.titleCleaner = titleCleaner;
     
     if (useTmdbScraper) {
@@ -74,7 +77,9 @@ export class SimilarityCalculator {
     torrentMetadata?: { year?: number }
   ): Promise<SmartTitleMatch> {
     
-    this.logger.debug(`Análise: ${torrentTitle.substring(0, 50)}...`);
+    this.logger.debug('Analisando similaridade', {
+      title: torrentTitle.substring(0, 50)
+    });
 
     let movieInfo: {
       portugueseTitle: string | null;
@@ -90,7 +95,7 @@ export class SimilarityCalculator {
         
         let tmdbData;
         if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
-          this.logger.debug(`Cache usado: ${imdbId}`);
+          this.logger.debug('Cache TMDB usado', { imdbId });
           tmdbData = cached.data;
         } else {
           tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId);
@@ -108,7 +113,10 @@ export class SimilarityCalculator {
         };
         
       } catch (error) {
-        this.logger.error(`Erro TMDB ${imdbId}: ${error instanceof Error ? error.message : 'Erro desconhecido'}`);
+        this.logger.error('Erro TMDB', {
+          imdbId,
+          error: error instanceof Error ? error.message : 'Erro desconhecido'
+        });
       }
     }
 
@@ -123,11 +131,18 @@ export class SimilarityCalculator {
     const torrentYear = torrentMetadata?.year || this.extractYearFromTitle(torrentTitle);
     const torrentClean = this.normalizeForComparison(torrentTitle);
     
-    this.logger.debug(`TMDB: ${movieInfo.portugueseTitle || movieInfo.originalTitle} | Torrent: ${torrentClean.substring(0, 40)}`);
+    this.logger.debug('Comparando títulos', {
+      tmdb: movieInfo.portugueseTitle || movieInfo.originalTitle,
+      torrent: torrentClean.substring(0, 40)
+    });
 
+    // VALIDAÇÃO DE ANO: deve ser exato
     if (movieInfo.year && torrentYear) {
       if (movieInfo.year !== torrentYear) {
-        this.logger.warn(`Ano diferente: ${movieInfo.year} ≠ ${torrentYear}`);
+        this.logger.warn('Ano diferente', {
+          tmdb: movieInfo.year,
+          torrent: torrentYear
+        });
         return {
           matches: false,
           similarity: 0.3,
@@ -136,15 +151,9 @@ export class SimilarityCalculator {
       }
     }
 
-    if (this.isSeriesTitle(torrentTitle)) {
-      this.logger.warn('Torrent é série mas busca é filme');
-      return {
-        matches: false,
-        similarity: 0.2,
-        reason: 'Torrent é série (tem temporada/episódio) mas busca é filme'
-      };
-    }
-
+    // FIX: REMOVIDA verificação incorreta de filme/série
+    // A detecção de tipo (filme/série) é responsabilidade do TMDB e filtro principal
+    
     const matchResult = this.semanticContextAnalysis(
       torrentClean,
       torrentTitle,
@@ -156,9 +165,14 @@ export class SimilarityCalculator {
     );
 
     if (matchResult.matches) {
-      this.logger.info(`✅ Match: ${(matchResult.similarity * 100).toFixed(1)}% - ${matchResult.matchedTmdbTitle}`);
+      this.logger.info('Match encontrado', {
+        similarity: `${(matchResult.similarity * 100).toFixed(1)}%`,
+        title: matchResult.matchedTmdbTitle
+      });
     } else {
-      this.logger.debug(`❌ Sem match: ${(matchResult.similarity * 100).toFixed(1)}%`);
+      this.logger.debug('Sem match', {
+        similarity: `${(matchResult.similarity * 100).toFixed(1)}%`
+      });
     }
 
     return matchResult;
@@ -175,9 +189,12 @@ export class SimilarityCalculator {
   ): SmartTitleMatch & { matchedTmdbTitle?: string } {
     
     const torrentInfo = this.extractTorrentInfo(torrentClean, originalTorrentTitle);
-    this.logger.debug(`Info torrent: núcleo="${torrentInfo.coreClean}", final=${torrentInfo.hasFinal}, parte=${torrentInfo.partNumber}`);
+    this.logger.debug('Info torrent extraída', {
+      nucleo: torrentInfo.coreClean,
+      parte: torrentInfo.partNumber
+    });
     
-    // Palavras significativas APÓS limpeza completa
+    // Palavras significativas após limpeza
     const torrentWords = torrentInfo.coreClean.split(' ').filter(w => w.length > 0);
     
     let bestMatch = {
@@ -193,12 +210,17 @@ export class SimilarityCalculator {
       const tmdbClean = this.normalizeForComparison(tmdbTitle);
       const tmdbInfo = this.extractTmdbInfo(tmdbClean, tmdbTitle);
       
-      this.logger.debug(`Info TMDB: núcleo="${tmdbInfo.coreClean}", parte=${tmdbInfo.partNumber}`);
+      this.logger.debug('Info TMDB extraída', {
+        nucleo: tmdbInfo.coreClean,
+        parte: tmdbInfo.partNumber
+      });
       
-      // VERIFICAÇÃO CRÍTICA: Parte 1 ≠ "O Final"
+      // Verificação: Parte 1 ≠ "O Final"
       const partConflict = this.checkPartConflict(torrentInfo, tmdbInfo);
       if (partConflict.shouldReject) {
-        this.logger.debug(`Conflito de partes: ${partConflict.reason}`);
+        this.logger.debug('Conflito de partes detectado', {
+          reason: partConflict.reason
+        });
         return {
           matches: false,
           similarity: 0.3,
@@ -207,9 +229,12 @@ export class SimilarityCalculator {
         };
       }
       
-      // CASO ESPECIAL: "Wicked Part I" vs "Wicked" (mesmo filme)
+      // Caso especial: "Wicked Part I" vs "Wicked" (mesmo filme)
       if (this.isSameMovieWithPart(torrentInfo, tmdbInfo)) {
-        this.logger.debug(`Detectado mesmo filme com parte: ${tmdbTitle} + parte ${torrentInfo.partNumber}`);
+        this.logger.debug('Mesmo filme com parte detectado', {
+          tmdb: tmdbTitle,
+          parte: torrentInfo.partNumber
+        });
         return {
           matches: true,
           similarity: 0.85,
@@ -218,7 +243,7 @@ export class SimilarityCalculator {
         };
       }
       
-      // ANÁLISE ESTRUTURAL ESPECÍFICA PARA TÍTULOS DE 1 PALAVRA
+      // Análise estrutural para títulos de 1 palavra
       const tmdbWords = tmdbInfo.coreClean.split(' ').filter(w => w.length > 0);
       
       if (tmdbWords.length === 1) {
@@ -245,9 +270,11 @@ export class SimilarityCalculator {
         continue;
       }
       
-      // ANÁLISE DE NÚCLEO (para títulos multi-palavra)
+      // Análise de núcleo (para títulos multi-palavra)
       const coreSimilarity = this.calculateEnhancedSimilarity(torrentInfo.coreClean, tmdbInfo.coreClean);
-      this.logger.debug(`Similaridade núcleo: ${(coreSimilarity * 100).toFixed(1)}%`);
+      this.logger.debug('Similaridade núcleo calculada', {
+        similarity: `${(coreSimilarity * 100).toFixed(1)}%`
+      });
       
       if (coreSimilarity >= 0.6) {
         const semanticMatch = this.analyzeEnhancedSemanticMatch(
@@ -284,10 +311,13 @@ export class SimilarityCalculator {
       }
     }
     
-    const threshold = 0.55; // Aumentado para 0.55 para ser mais rigoroso
+    const threshold = 0.55;
     
     if (bestMatch.similarity >= threshold) {
-      this.logger.debug(`Match aceito: ${(bestMatch.similarity * 100).toFixed(1)}% >= ${threshold * 100}%`);
+      this.logger.debug('Match aceito', {
+        similarity: `${(bestMatch.similarity * 100).toFixed(1)}%`,
+        threshold: `${threshold * 100}%`
+      });
       return {
         matches: true,
         similarity: bestMatch.similarity,
@@ -296,7 +326,10 @@ export class SimilarityCalculator {
       };
     }
     
-    this.logger.debug(`Match insuficiente: ${(bestMatch.similarity * 100).toFixed(1)}% < ${threshold * 100}%`);
+    this.logger.debug('Match insuficiente', {
+      similarity: `${(bestMatch.similarity * 100).toFixed(1)}%`,
+      threshold: `${threshold * 100}%`
+    });
     return {
       matches: false,
       similarity: bestMatch.similarity,
@@ -310,13 +343,11 @@ export class SimilarityCalculator {
       return false;
     }
     
-    // Torrent começa com título TMDB + "part"
     const tmdbCoreLower = tmdbInfo.coreClean.toLowerCase();
     const torrentCoreLower = torrentInfo.coreClean.toLowerCase();
     
     // Verifica se o núcleo do torrent começa com o núcleo do TMDB
     if (torrentCoreLower.startsWith(tmdbCoreLower)) {
-      // Tem "part" ou "parte" no título (já extraído em partNumber)
       return torrentInfo.partNumber > 0;
     }
     
@@ -337,9 +368,9 @@ export class SimilarityCalculator {
     isSemanticMatch: boolean;
   } {
     
-    // CASO 1: Torrent tem APENAS a palavra TMDB
+    // Caso 1: Torrent tem APENAS a palavra TMDB
     if (torrentWords.length === 1 && torrentWords[0] === tmdbWord) {
-      this.logger.debug(`Título 1 palavra - match exato: ${tmdbWord}`);
+      this.logger.debug('Match exato 1 palavra', { palavra: tmdbWord });
       return {
         similarity: 0.9,
         reason: `Título exato: "${tmdbTitle}"`,
@@ -348,7 +379,7 @@ export class SimilarityCalculator {
       };
     }
     
-    // CASO 2: Palavra TMDB está no torrent
+    // Caso 2: Palavra TMDB está no torrent
     const wordIndex = torrentWords.indexOf(tmdbWord);
     
     if (wordIndex !== -1) {
@@ -378,7 +409,7 @@ export class SimilarityCalculator {
       };
     }
     
-    // CASO 3: Palavra não encontrada
+    // Caso 3: Palavra não encontrada
     const basicSimilarity = this.calculateWordSimilarity(torrentClean, tmdbClean);
     
     return {
@@ -413,15 +444,17 @@ export class SimilarityCalculator {
     if (wordIndex > 0) adjacentWords.push(torrentWords[wordIndex - 1]);
     if (wordIndex < torrentWords.length - 1) adjacentWords.push(torrentWords[wordIndex + 1]);
     
-    // REGRA: Se tem palavras adjacentes significativas (≥4 letras)
+    // Verifica se forma expressão com palavras adjacentes
     if (adjacentWords.length > 0) {
       const significantAdjacent = adjacentWords.filter(w => 
         w.length >= 4 && !this.isTechnicalTerm(w)
       );
       
       if (significantAdjacent.length > 0) {
-        // "rio" + "doce" = expressão diferente
-        this.logger.debug(`Palavra TMDB forma expressão: "${tmdbWord}" + "${significantAdjacent.join(' ')}"`);
+        this.logger.debug('Palavra forma expressão diferente', {
+          palavra: tmdbWord,
+          expressao: significantAdjacent.join(' ')
+        });
         
         return {
           shouldReject: true,
@@ -431,7 +464,7 @@ export class SimilarityCalculator {
       }
     }
     
-    // REGRA: Se palavra TMDB não está no início e tem palavras antes significativas
+    // Verifica se palavra não está no início
     if (wordIndex > 0) {
       const wordsBefore = torrentWords.slice(0, wordIndex);
       const hasSignificantWordsBefore = wordsBefore.some(w => 
@@ -439,7 +472,10 @@ export class SimilarityCalculator {
       );
       
       if (hasSignificantWordsBefore) {
-        this.logger.debug(`Palavra TMDB não está no início: "${wordsBefore.join(' ')}" antes de "${tmdbWord}"`);
+        this.logger.debug('Palavra não está no início', {
+          palavra: tmdbWord,
+          antes: wordsBefore.join(' ')
+        });
         
         return {
           shouldReject: true,
@@ -457,11 +493,10 @@ export class SimilarityCalculator {
   }
 
   private isTechnicalTerm(word: string): boolean {
-    // Verifica se é palavra técnica ou acrônimo
     const lowerWord = word.toLowerCase();
     return this.TECHNICAL_WORDS.includes(lowerWord) || 
            this.TECHNICAL_ACRONYMS.includes(lowerWord) ||
-           /^\d+(?:\.\d+)?(?:ch)?$/i.test(lowerWord); // 5.1, 7.1, 5.1ch, etc
+           /^\d+(?:\.\d+)?(?:ch)?$/i.test(lowerWord);
   }
 
   private calculateContextualSimilarity(torrentWords: string[], tmdbWords: string[]): number {
@@ -478,7 +513,7 @@ export class SimilarityCalculator {
     }
     
     if (tmdbWords.length === 1 && torrentWords.length >= 2) {
-      penalty += 0.3; // Penalidade maior para "rio" vs "rio doce"
+      penalty += 0.3;
     }
     
     return Math.max(0, basicSimilarity - penalty);
@@ -513,13 +548,12 @@ export class SimilarityCalculator {
   }
 
   private extractCleanCore(title: string): string {
-    // Limpeza COMPLETA do título
     let core = title.toLowerCase();
     
     // 1. Remove anos
     core = core.replace(/\b(19|20)\d{2}\b/g, '');
     
-    // 2. Remove TODAS palavras técnicas
+    // 2. Remove palavras técnicas
     this.TECHNICAL_WORDS.forEach(term => {
       const regex = new RegExp(`\\b${term}\\b`, 'gi');
       core = core.replace(regex, '');
@@ -531,7 +565,7 @@ export class SimilarityCalculator {
       core = core.replace(regex, '');
     });
     
-    // 4. Remove números e combinações (5.1, 7.1, etc)
+    // 4. Remove números e combinações
     core = core.replace(/\b\d+(?:\.\d+)?(?:ch)?\b/gi, '');
     
     // 5. Remove pontuação extra
@@ -566,7 +600,7 @@ export class SimilarityCalculator {
   }
 
   private extractPartNumber(title: string): number | null {
-    // Primeiro tenta numeral romano
+    // Tenta numeral romano
     const romanMatch = title.match(/\b([i|ii|iii|iv|v])\b/i);
     if (romanMatch) {
       const romanMap: Record<string, number> = {
@@ -575,7 +609,7 @@ export class SimilarityCalculator {
       return romanMap[romanMatch[1].toLowerCase()] || null;
     }
     
-    // Depois tenta número arábico
+    // Tenta número arábico
     const arabicMatch = title.match(/(?:parte?\s*|part\s*)(\d+)/i);
     if (arabicMatch) {
       return parseInt(arabicMatch[1]);
@@ -766,13 +800,13 @@ export class SimilarityCalculator {
 
   getStats() {
     return {
-      version: '12.0.0',
-      feature: 'Filtro Técnico Completo + Contexto Inteligente',
-      description: 'Remove HDR, 5.1, acrônimos, detecta "Part I" como mesmo filme, análise contextual rigorosa',
+      version: this.VERSION,
+      feature: 'Foco em similaridade, não tipo de mídia',
+      description: 'SimilarityCalculator não verifica se é filme ou série - isso é responsabilidade do TMDB/filtro principal',
       technicalWordsCount: this.TECHNICAL_WORDS.length,
       technicalAcronymsCount: this.TECHNICAL_ACRONYMS.length,
       threshold: '0.55',
-      detection: '"Part I/Part 1" = mesmo filme, "Parte 1" ≠ "O Final"'
+      fix: 'Removida verificação incorreta de filme/série que bloqueava séries legítimas'
     };
   }
 }

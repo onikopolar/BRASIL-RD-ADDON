@@ -4,6 +4,7 @@ exports.LanguageDetector = void 0;
 const logger_1 = require("../../utils/logger");
 class LanguageDetector {
     constructor() {
+        this.VERSION = '2.2.0';
         this.PORTUGUES_INDICATORS = [
             'dublado', 'dublada', 'dublagem', 'dubladores',
             'português', 'portugues', 'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br',
@@ -36,7 +37,7 @@ class LanguageDetector {
         this.INTERNATIONAL_GROUPS = [
             'yts', 'rarbg', 'ettv', 'eztv', 'skgtv', 'rartv', 'turbotorrent'
         ];
-        this.COMMON_ENGLISH_TAGS = [
+        this.COMMON_TECH_TAGS = [
             'webrip', 'web-dl', 'hdtv', 'bluray', 'x264', 'x265', 'h264', 'h265'
         ];
         this.BR_PATTERNS = [
@@ -48,112 +49,70 @@ class LanguageDetector {
         this.KEYWORD_CHECKS = [
             {
                 keywords: ['horror story', 'historia de horror'],
-                description: 'Título relevante para American Horror Story'
+                description: 'American Horror Story'
             },
             {
-                keywords: ['breaking bad', 'breaking bad'],
-                description: 'Título relevante para Breaking Bad'
+                keywords: ['breaking bad'],
+                description: 'Breaking Bad'
             }
         ];
         this.logger = new logger_1.Logger('LanguageDetector');
-        this.logger.info('LanguageDetector v2.1.0 iniciado (aceita mais títulos)');
+        this.logger.info(`LanguageDetector v${this.VERSION} iniciado - Foco em detecção de idioma`);
     }
     isPortugueseContent(torrentTitle) {
         const titleLower = torrentTitle.toLowerCase();
-        this.logger.debug('Verificando português', {
+        this.logger.debug('Analisando idioma', {
             title: torrentTitle.substring(0, 80)
         });
-        if (this.isMovieTitle(titleLower)) {
-            this.logger.debug('✅ ACEITO - Título de filme', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Título contém "filme" ou é nome de filme'
+        const hasPortugueseDualAudio = this.hasPortugueseDualAudio(titleLower);
+        if (hasPortugueseDualAudio) {
+            this.logger.debug('Aceito: Dual áudio com português', {
+                title: torrentTitle.substring(0, 60)
             });
             return true;
         }
-        const isDualAudio = this.isExplicitDualAudio(titleLower);
-        if (isDualAudio) {
-            this.logger.debug('✅ ACEITO - Dual áudio', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Dual áudio detectado'
+        const isEnglishOnly = this.isEnglishOnlyContent(titleLower);
+        if (isEnglishOnly) {
+            this.logger.debug('Rejeitado: Conteúdo apenas em inglês', {
+                title: torrentTitle.substring(0, 60)
+            });
+            return false;
+        }
+        const hasPortugueseIndicators = this.hasPortugueseIndicators(titleLower);
+        if (hasPortugueseIndicators) {
+            this.logger.debug('Aceito: Indicadores de português', {
+                title: torrentTitle.substring(0, 60)
             });
             return true;
-        }
-        const hasEnglishOnly = this.hasEnglishOnlyIndicator(titleLower);
-        if (hasEnglishOnly) {
-            this.logger.debug('❌ REJEITADO - Inglês puro', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Inglês puro detectado'
-            });
-            return false;
-        }
-        const hasPortuguese = this.hasPortugueseIndicator(titleLower);
-        if (hasPortuguese) {
-            this.logger.debug('✅ ACEITO - Português', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Português detectado'
-            });
-            return true;
-        }
-        if (this.endsWithEnglishIndicator(titleLower)) {
-            this.logger.debug('❌ REJEITADO - Termina com eng', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Termina com indicador de inglês'
-            });
-            return false;
-        }
-        if (this.isInternationalEnglishOnly(titleLower)) {
-            this.logger.debug('❌ REJEITADO - Grupo internacional', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Grupo internacional sem português'
-            });
-            return false;
         }
         const hasBRPatterns = this.hasBRPatterns(titleLower);
         if (hasBRPatterns) {
-            this.logger.debug('✅ ACEITO - Padrão BR', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Padrão BR detectado'
+            this.logger.debug('Aceito: Padrão BR detectado', {
+                title: torrentTitle.substring(0, 60)
             });
             return true;
         }
         const hasRelevantKeywords = this.hasRelevantKeywords(titleLower);
         if (hasRelevantKeywords) {
-            this.logger.debug('✅ ACEITO - Palavras-chave', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Palavras-chave relevantes'
+            this.logger.debug('Aceito: Palavras-chave relevantes', {
+                title: torrentTitle.substring(0, 60)
             });
             return true;
         }
-        if (this.isShortTitle(torrentTitle)) {
-            this.logger.debug('✅ ACEITO - Título curto', {
-                torrentTitle: torrentTitle.substring(0, 80),
-                reason: 'Título curto - benefício da dúvida'
+        const isShortTitle = this.isShortTitle(torrentTitle);
+        if (isShortTitle) {
+            this.logger.debug('Aceito: Título curto - benefício da dúvida', {
+                title: torrentTitle.substring(0, 60)
             });
             return true;
         }
-        this.logger.debug('❌ REJEITADO - Sem indicadores', {
-            torrentTitle: torrentTitle.substring(0, 80),
-            reason: 'Sem indicadores claros de português'
+        this.logger.debug('Rejeitado: Sem indicadores claros de português', {
+            title: torrentTitle.substring(0, 60)
         });
         return false;
     }
-    isMovieTitle(titleLower) {
-        if (titleLower.includes('filme') || titleLower.includes('movie')) {
-            return true;
-        }
-        const brazilianMovies = [
-            '',
-            '',
-            '',
-            '',
-            '',
-            '',
-            ''
-        ];
-        return brazilianMovies.some(movie => titleLower.includes(movie));
-    }
-    isExplicitDualAudio(titleLower) {
-        const dualAudioCombinations = [
+    hasPortugueseDualAudio(titleLower) {
+        const dualAudioPatterns = [
             'dual audio português',
             'dual áudio português',
             'dual audio pt',
@@ -167,35 +126,29 @@ class LanguageDetector {
             'pt + eng',
             'pt e eng',
             'pt-br + eng',
-            'pt-br e eng',
-            'dual audio',
-            'dual áudio'
+            'pt-br e eng'
         ];
-        for (const combination of dualAudioCombinations) {
-            if (titleLower.includes(combination)) {
-                if (combination === 'dual audio' || combination === 'dual áudio') {
-                    const hasPortuguese = titleLower.includes('português') ||
-                        titleLower.includes('portugues') ||
-                        titleLower.includes('pt') ||
-                        titleLower.includes('pt-br');
-                    if (hasPortuguese) {
-                        return true;
-                    }
-                }
-                else {
-                    return true;
-                }
+        for (const pattern of dualAudioPatterns) {
+            if (titleLower.includes(pattern)) {
+                return true;
             }
+        }
+        if (titleLower.includes('dual audio') || titleLower.includes('dual áudio')) {
+            const hasPortuguese = titleLower.includes('português') ||
+                titleLower.includes('portugues') ||
+                titleLower.includes('pt') ||
+                titleLower.includes('pt-br');
+            return hasPortuguese;
         }
         return false;
     }
-    hasEnglishOnlyIndicator(titleLower) {
+    isEnglishOnlyContent(titleLower) {
         const hasStrongPortuguese = (titleLower.includes('dublado') || titleLower.includes('legendado')) &&
             (titleLower.includes('português') || titleLower.includes('portugues') || titleLower.includes('pt'));
         if (hasStrongPortuguese) {
             return false;
         }
-        return this.ENGLISH_ONLY_INDICATORS.some(indicator => {
+        const hasEnglishOnly = this.ENGLISH_ONLY_INDICATORS.some(indicator => {
             if (typeof indicator === 'string') {
                 return titleLower.includes(indicator);
             }
@@ -204,17 +157,19 @@ class LanguageDetector {
             }
             return false;
         });
-    }
-    hasPortugueseIndicator(titleLower) {
-        return this.PORTUGUES_INDICATORS.some(indicator => titleLower.includes(indicator));
-    }
-    endsWithEnglishIndicator(titleLower) {
-        return titleLower.match(/\(eng\)$|\[eng\]$|\{eng\}$|\.eng$/) !== null;
-    }
-    isInternationalEnglishOnly(titleLower) {
+        if (hasEnglishOnly) {
+            return true;
+        }
+        const endsWithEnglish = titleLower.match(/\(eng\)$|\[eng\]$|\{eng\}$|\.eng$/) !== null;
+        if (endsWithEnglish) {
+            return true;
+        }
         const hasInternationalGroup = this.INTERNATIONAL_GROUPS.some(group => titleLower.includes(group));
-        const hasEnglishTags = this.COMMON_ENGLISH_TAGS.some(tag => titleLower.includes(tag));
-        return hasInternationalGroup && hasEnglishTags;
+        const hasTechTags = this.COMMON_TECH_TAGS.some(tag => titleLower.includes(tag));
+        return hasInternationalGroup && hasTechTags && !this.hasPortugueseIndicators(titleLower);
+    }
+    hasPortugueseIndicators(titleLower) {
+        return this.PORTUGUES_INDICATORS.some(indicator => titleLower.includes(indicator));
     }
     hasBRPatterns(titleLower) {
         return this.BR_PATTERNS.some(pattern => pattern.test(titleLower));
@@ -237,31 +192,43 @@ class LanguageDetector {
     }
     addPortugueseIndicator(indicator) {
         this.PORTUGUES_INDICATORS.push(indicator.toLowerCase());
+        this.logger.debug('Indicador de português adicionado', { indicator });
     }
     addEnglishIndicator(indicator) {
         this.ENGLISH_ONLY_INDICATORS.push(indicator);
+        this.logger.debug('Indicador de inglês adicionado', {
+            indicator: indicator instanceof RegExp ? indicator.toString() : indicator
+        });
     }
     addInternationalGroup(group) {
         this.INTERNATIONAL_GROUPS.push(group.toLowerCase());
+        this.logger.debug('Grupo internacional adicionado', { group });
     }
-    addEnglishTag(tag) {
-        this.COMMON_ENGLISH_TAGS.push(tag.toLowerCase());
+    addTechTag(tag) {
+        this.COMMON_TECH_TAGS.push(tag.toLowerCase());
+        this.logger.debug('Tag técnica adicionada', { tag });
     }
     addBRPattern(pattern) {
         this.BR_PATTERNS.push(pattern);
+        this.logger.debug('Padrão BR adicionado', { pattern: pattern.toString() });
     }
     addKeywordCheck(keywords, description) {
         this.KEYWORD_CHECKS.push({ keywords, description });
+        this.logger.debug('Palavras-chave adicionadas', { description, keywords });
     }
     getIndicatorStats() {
         return {
+            version: this.VERSION,
             portugueseIndicators: this.PORTUGUES_INDICATORS.length,
             englishIndicators: this.ENGLISH_ONLY_INDICATORS.length,
             internationalGroups: this.INTERNATIONAL_GROUPS.length,
-            englishTags: this.COMMON_ENGLISH_TAGS.length,
+            techTags: this.COMMON_TECH_TAGS.length,
             brPatterns: this.BR_PATTERNS.length,
             keywordChecks: this.KEYWORD_CHECKS.length
         };
+    }
+    logCurrentConfig() {
+        this.logger.info('Configuração atual LanguageDetector', this.getIndicatorStats());
     }
 }
 exports.LanguageDetector = LanguageDetector;
