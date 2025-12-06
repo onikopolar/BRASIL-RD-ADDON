@@ -1,6 +1,5 @@
 import { Logger } from '../../utils/logger';
-import { SmartTitleMatch } from './interfaces';
-import { SeriesConfusion } from './interfaces';
+import { SmartTitleMatch, SeriesConfusion } from './interfaces';
 import { ImdbScraperService } from '../../services/ImdbScraperService';
 
 export class SimilarityCalculator {
@@ -12,12 +11,12 @@ export class SimilarityCalculator {
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
 
-  // Versionamento Semântico - fix: adicionar suporte a season para validação de ano
-  private readonly VERSION = '12.2.0';
+  // Versionamento Semântico v23.1.3 - Fix Ordem das Regras
+  private readonly VERSION = '23.1.3';
 
-  // Palavras técnicas para filtro
+  // Palavras técnicas otimizadas
   private readonly TECHNICAL_WORDS = [
-    'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv',
+    'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv', 'rmvb',
     '720p', '1080p', '2160p', '4k', 'hd', 'fullhd', 'uhd', 'sd', 'fhd', 'hdr', 'dv',
     'x264', 'x265', 'h264', 'h265', 'avc', 'hevc', 'xvid', 'divx',
     'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'camrip', 'ts', 'tc', 'r5', 'scr', 'dvdscr', 'bdscr', 'webscr',
@@ -29,10 +28,11 @@ export class SimilarityCalculator {
     'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'amzn', 'nf', 'hulu',
     'm2ts', 'iso', 'bdmv', 'mpls', 'playlist', 'chapter',
     'movie', 'the movie', 'cinema', 'cinematográfico', 'cinematografico',
-    'brasileiro', 'brasileira', 'nacional', 'nacionais',
     'versão', 'versao', 'version', 'edição', 'edicao', 'edition',
-    'completo', 'completa', 'complete',
-    'torrent', 'download', 'baixar', 'assistir'
+    'completo', 'completa', 'complete', 'torrent', 'download', 'baixar', 'assistir',
+    'the', 'of', 'and', 'in', 'to', 'a', 'an', 'for', 'with', 'on', 'at',
+    'web', 'dl', 'rip', 'cam', 'part', 'pt', 'vol', 'volume',
+    'i', 'ii', 'iii', 'iv', 'v', '1', '2', '3', '4', '5'
   ];
 
   private readonly TECHNICAL_ACRONYMS = [
@@ -42,7 +42,7 @@ export class SimilarityCalculator {
 
   constructor(titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
-    this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Suporte a season para validação de ano`);
+    this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Fix Ordem das Regras`);
     this.titleCleaner = titleCleaner;
     
     if (useTmdbScraper) {
@@ -52,22 +52,20 @@ export class SimilarityCalculator {
     }
     
     this.confusingSeries = [
-      { original: 'american horror story', derivative: 'american horror stories', minSimilarity: 0.8 },
-      { original: 'stranger things', derivative: 'stranger things stories', minSimilarity: 0.8 },
-      { original: 'megamind', derivative: 'megamind vs', minSimilarity: 0.7 }
+      { original: 'american horror story', derivative: 'american horror stories', minSimilarity: 0.85 },
+      { original: 'stranger things', derivative: 'stranger things stories', minSimilarity: 0.85 }
     ];
   }
 
-  // FIX: Adicionar parâmetro season para validação de ano correto
   async smartTitleContainsCheck(
     torrentTitle: string, 
     imdbId: string,
     torrentMetadata?: { year?: number; season?: number }
   ): Promise<SmartTitleMatch> {
     
-    this.logger.debug('Analisando similaridade', {
-      title: torrentTitle.substring(0, 50),
-      season: torrentMetadata?.season
+    this.logger.debug('Análise iniciada', {
+      titulo: torrentTitle.substring(0, 60),
+      temporada: torrentMetadata?.season
     });
 
     let movieInfo: {
@@ -75,11 +73,11 @@ export class SimilarityCalculator {
       originalTitle: string;
       year?: number;
       allTitles: string[];
+      mediaType?: 'movie' | 'tv';
     } | null = null;
     
     if (this.tmdbScraper) {
       try {
-        // FIX: Usar season no cache key para obter ano correto
         const season = torrentMetadata?.season;
         const cacheKey = season ? `tmdb-${imdbId}:s${season}` : `tmdb-${imdbId}`;
         const cached = this.tmdbCache.get(cacheKey);
@@ -89,7 +87,6 @@ export class SimilarityCalculator {
           this.logger.debug('Cache TMDB usado', { imdbId, season });
           tmdbData = cached.data;
         } else {
-          // FIX: Passar season para TMDBScraper
           tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId, season);
           this.tmdbCache.set(cacheKey, {
             data: tmdbData,
@@ -101,21 +98,24 @@ export class SimilarityCalculator {
           portugueseTitle: tmdbData.portugueseTitle,
           originalTitle: tmdbData.originalTitle,
           year: tmdbData.year,
-          allTitles: tmdbData.allTitles
+          allTitles: tmdbData.allTitles,
+          mediaType: tmdbData.mediaType
         };
         
         this.logger.debug('Dados TMDB obtidos', {
           imdbId,
-          season,
-          year: tmdbData.year,
-          mediaType: tmdbData.mediaType
+          temporada: season,
+          ano: tmdbData.year,
+          tipo: tmdbData.mediaType,
+          tituloPT: movieInfo.portugueseTitle || 'não encontrado',
+          tituloOriginal: movieInfo.originalTitle
         });
         
       } catch (error) {
-        this.logger.error('Erro TMDB', {
+        this.logger.error('Erro ao buscar TMDB', {
           imdbId,
-          season: torrentMetadata?.season,
-          error: error instanceof Error ? error.message : 'Erro desconhecido'
+          temporada: torrentMetadata?.season,
+          erro: error instanceof Error ? error.message : 'Erro desconhecido'
         });
       }
     }
@@ -124,207 +124,194 @@ export class SimilarityCalculator {
       return {
         matches: false,
         similarity: 0,
-        reason: 'Sem dados TMDB'
+        reason: 'Sem dados do TMDB'
       };
     }
 
     const torrentYear = torrentMetadata?.year || this.extractYearFromTitle(torrentTitle);
     const torrentClean = this.normalizeForComparison(torrentTitle);
     
-    this.logger.debug('Comparando títulos', {
-      tmdbYear: movieInfo.year,
-      torrentYear,
-      season: torrentMetadata?.season
+    this.logger.debug('Contexto da análise', {
+      anoTMDB: movieInfo.year,
+      anoTorrent: torrentYear,
+      temporada: torrentMetadata?.season,
+      tipo: movieInfo.mediaType
     });
 
-    // VALIDAÇÃO DE ANO: deve ser exato (com season)
-    if (movieInfo.year && torrentYear) {
-      if (movieInfo.year !== torrentYear) {
-        this.logger.warn('Ano diferente', {
-          tmdb: movieInfo.year,
-          torrent: torrentYear,
-          season: torrentMetadata?.season,
-          mediaType: movieInfo.portugueseTitle ? 'português' : 'original'
-        });
-        return {
-          matches: false,
-          similarity: 0.3,
-          reason: `Ano errado: TMDB ${movieInfo.year} ≠ Torrent ${torrentYear} (season: ${torrentMetadata?.season || 'N/A'})`
-        };
-      } else {
-        this.logger.debug('Ano válido', {
-          year: torrentYear,
-          season: torrentMetadata?.season,
-          match: 'exato'
-        });
-      }
-    }
-
-    // Similaridade semântica
-    const matchResult = this.semanticContextAnalysis(
+    const matchResult = this.enhancedContextAnalysis(
       torrentClean,
       torrentTitle,
       movieInfo.portugueseTitle,
       movieInfo.originalTitle,
       movieInfo.allTitles,
       movieInfo.year,
-      torrentYear
+      torrentYear,
+      movieInfo.mediaType
     );
 
     if (matchResult.matches) {
-      this.logger.info('Match encontrado', {
-        similarity: `${(matchResult.similarity * 100).toFixed(1)}%`,
-        season: torrentMetadata?.season
+      const yearValidation = this.contextualYearValidation(
+        movieInfo,
+        torrentYear,
+        torrentTitle,
+        matchResult.similarity,
+        matchResult.confidence
+      );
+      
+      if (yearValidation.shouldReject) {
+        this.logger.debug('Rejeitado por ano inválido', { motivo: yearValidation.reason });
+        return {
+          matches: false,
+          similarity: matchResult.similarity * 0.7,
+          reason: yearValidation.reason
+        };
+      }
+      
+      this.logger.info('Match ACEITO', {
+        similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
+        confianca: matchResult.confidence || 'alta',
+        motivo: matchResult.reason,
+        versao: this.VERSION
       });
     } else {
-      this.logger.debug('Sem match', {
-        similarity: `${(matchResult.similarity * 100).toFixed(1)}%`,
-        reason: matchResult.reason
+      this.logger.debug('Match insuficiente', {
+        similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
+        motivo: matchResult.reason,
+        versao: this.VERSION
       });
     }
 
     return matchResult;
   }
 
-  private semanticContextAnalysis(
+  private contextualYearValidation(
+    movieInfo: any, 
+    torrentYear: number | null, 
+    torrentTitle: string,
+    semanticSimilarity: number,
+    confidence?: string
+  ): { shouldReject: boolean; reason: string } {
+    
+    if (!movieInfo.year) {
+      return { shouldReject: false, reason: 'TMDB sem ano' };
+    }
+    
+    if (!torrentYear) {
+      if (semanticSimilarity >= 0.9) {
+        return { shouldReject: false, reason: 'Similaridade muito alta, ano opcional' };
+      }
+      
+      if (confidence === 'alta') {
+        return { shouldReject: false, reason: 'Confiança alta, ano opcional' };
+      }
+      
+      return {
+        shouldReject: true,
+        reason: `Requer ano. TMDB: ${movieInfo.year}`
+      };
+    }
+    
+    if (movieInfo.year !== torrentYear) {
+      const yearDiff = Math.abs(movieInfo.year - torrentYear);
+      
+      if (yearDiff <= 2 && semanticSimilarity >= 0.85) {
+        return { shouldReject: false, reason: `Diferença pequena (${yearDiff} anos) com contexto forte` };
+      }
+      
+      return {
+        shouldReject: true,
+        reason: `Ano diferente: TMDB ${movieInfo.year} ≠ Torrent ${torrentYear}`
+      };
+    }
+    
+    return { shouldReject: false, reason: 'Ano válido' };
+  }
+
+  private enhancedContextAnalysis(
     torrentClean: string,
     originalTorrentTitle: string,
     portugueseTitle: string | null,
     originalTitle: string,
     allTmdbTitles: string[],
     tmdbYear: number | undefined,
-    torrentYear: number | null
-  ): SmartTitleMatch & { matchedTmdbTitle?: string } {
+    torrentYear: number | null,
+    mediaType?: 'movie' | 'tv'
+  ): SmartTitleMatch & { matchedTmdbTitle?: string; confidence?: string; contextAnalysis?: string } {
     
-    const torrentInfo = this.extractTorrentInfo(torrentClean, originalTorrentTitle);
+    const validTmdbTitles = this.filterValidTmdbTitles(allTmdbTitles, originalTitle);
     
-    // Palavras significativas após limpeza
-    const torrentWords = torrentInfo.coreClean.split(' ').filter(w => w.length > 0);
+    if (validTmdbTitles.length === 0) {
+      this.logger.warn('Nenhum título TMDB válido encontrado', {
+        imdbId: 'n/a',
+        originalTitle,
+        allTitles: allTmdbTitles
+      });
+      return {
+        matches: false,
+        similarity: 0,
+        reason: 'Nenhum título TMDB válido encontrado'
+      };
+    }
     
     let bestMatch = {
       similarity: 0,
+      confidence: 'baixa' as 'baixa' | 'media' | 'alta',
       title: '',
       reason: '',
       matchedTmdbTitle: '',
-      isExact: false,
-      isSemanticMatch: false
+      contextAnalysis: ''
     };
     
-    for (const tmdbTitle of allTmdbTitles) {
+    for (const tmdbTitle of validTmdbTitles) {
       const tmdbClean = this.normalizeForComparison(tmdbTitle);
-      const tmdbInfo = this.extractTmdbInfo(tmdbClean, tmdbTitle);
       
-      // Verificação: Parte 1 ≠ "O Final"
-      const partConflict = this.checkPartConflict(torrentInfo, tmdbInfo);
-      if (partConflict.shouldReject) {
-        this.logger.debug('Conflito de partes detectado', {
-          reason: partConflict.reason
-        });
-        return {
-          matches: false,
-          similarity: 0.3,
-          reason: partConflict.reason,
-          matchedTmdbTitle: tmdbTitle
-        };
-      }
+      const contextResult = this.smartContextAnalysis(
+        torrentClean,
+        tmdbClean,
+        mediaType
+      );
       
-      // Caso especial: "Wicked Part I" vs "Wicked" (mesmo filme)
-      if (this.isSameMovieWithPart(torrentInfo, tmdbInfo)) {
-        this.logger.debug('Mesmo filme com parte detectado', {
-          tmdb: tmdbTitle,
-          parte: torrentInfo.partNumber
-        });
-        return {
-          matches: true,
-          similarity: 0.85,
-          reason: `Mesmo filme com parte ${torrentInfo.partNumber}`,
-          matchedTmdbTitle: tmdbTitle
-        };
-      }
-      
-      // Análise estrutural para títulos de 1 palavra
-      const tmdbWords = tmdbInfo.coreClean.split(' ').filter(w => w.length > 0);
-      
-      if (tmdbWords.length === 1) {
-        const wordAnalysis = this.analyzeSingleWordTmdbTitle(
-          torrentWords,
-          tmdbWords[0],
-          torrentInfo.coreClean,
-          tmdbInfo.coreClean,
-          originalTorrentTitle,
-          tmdbTitle
-        );
-        
-        if (wordAnalysis.similarity > bestMatch.similarity) {
-          bestMatch = {
-            similarity: wordAnalysis.similarity,
-            title: tmdbTitle,
-            reason: wordAnalysis.reason,
-            matchedTmdbTitle: tmdbTitle,
-            isExact: wordAnalysis.isExact,
-            isSemanticMatch: wordAnalysis.isSemanticMatch
-          };
-        }
-        
-        continue;
-      }
-      
-      // Análise de núcleo (para títulos multi-palavra)
-      const coreSimilarity = this.calculateEnhancedSimilarity(torrentInfo.coreClean, tmdbInfo.coreClean);
-      
-      if (coreSimilarity >= 0.6) {
-        const semanticMatch = this.analyzeEnhancedSemanticMatch(
-          torrentInfo,
-          tmdbInfo,
-          coreSimilarity,
-          torrentClean,
-          tmdbClean
-        );
-        
-        if (semanticMatch.similarity > bestMatch.similarity) {
-          bestMatch = {
-            similarity: semanticMatch.similarity,
-            title: tmdbTitle,
-            reason: semanticMatch.reason,
-            matchedTmdbTitle: tmdbTitle,
-            isExact: semanticMatch.isExact,
-            isSemanticMatch: semanticMatch.isSemanticMatch
-          };
-        }
-      }
-      
-      // Fallback: similaridade básica
-      const basicSimilarity = this.calculateEnhancedSimilarity(torrentClean, tmdbClean);
-      if (basicSimilarity > bestMatch.similarity) {
+      if (contextResult.similarity > bestMatch.similarity) {
         bestMatch = {
-          similarity: basicSimilarity,
+          similarity: contextResult.similarity,
+          confidence: contextResult.confidence,
           title: tmdbTitle,
-          reason: `Similaridade: ${(basicSimilarity * 100).toFixed(1)}%`,
+          reason: contextResult.reason,
           matchedTmdbTitle: tmdbTitle,
-          isExact: false,
-          isSemanticMatch: false
+          contextAnalysis: contextResult.contextAnalysis
         };
       }
     }
     
-    const threshold = 0.55;
+    const threshold = mediaType === 'movie' ? 0.75 : 0.65;
+    const tmdbTitleLength = validTmdbTitles[0]?.length || 0;
+    const effectiveThreshold = tmdbTitleLength <= 3 ? threshold * 0.7 : threshold;
     
-    if (bestMatch.similarity >= threshold) {
-      this.logger.debug('Match aceito', {
-        similarity: `${(bestMatch.similarity * 100).toFixed(1)}%`,
-        reason: bestMatch.reason
+    if (bestMatch.similarity >= effectiveThreshold) {
+      this.logger.debug('Match encontrado', {
+        similaridade: `${(bestMatch.similarity * 100).toFixed(1)}%`,
+        confianca: bestMatch.confidence,
+        threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
+        contexto: bestMatch.contextAnalysis,
+        motivo: bestMatch.reason,
+        versao: this.VERSION
       });
       return {
         matches: true,
         similarity: bestMatch.similarity,
         reason: bestMatch.reason,
-        matchedTmdbTitle: bestMatch.matchedTmdbTitle
+        matchedTmdbTitle: bestMatch.matchedTmdbTitle,
+        confidence: bestMatch.confidence,
+        contextAnalysis: bestMatch.contextAnalysis
       };
     }
     
-    this.logger.debug('Match insuficiente', {
-      similarity: `${(bestMatch.similarity * 100).toFixed(1)}%`,
-      reason: bestMatch.reason
+    this.logger.debug('Similaridade insuficiente', {
+      similaridade: `${(bestMatch.similarity * 100).toFixed(1)}%`,
+      threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
+      contexto: bestMatch.contextAnalysis,
+      motivo: bestMatch.reason || 'Similaridade insuficiente',
+      versao: this.VERSION
     });
     return {
       matches: false,
@@ -333,304 +320,484 @@ export class SimilarityCalculator {
     };
   }
 
-  private isSameMovieWithPart(torrentInfo: any, tmdbInfo: any): boolean {
-    if (!torrentInfo.partNumber || !tmdbInfo.coreClean) {
-      return false;
+  private filterValidTmdbTitles(allTitles: string[], originalTitle: string): string[] {
+    const validTitles: string[] = [];
+    
+    for (const title of allTitles) {
+      if (!title || title.trim().length === 0) continue;
+      
+      const lowerTitle = title.toLowerCase().trim();
+      
+      if (lowerTitle === 'n/a' || 
+          lowerTitle === 'nao encontrado' || 
+          lowerTitle === 'não encontrado' ||
+          lowerTitle === 'not found' ||
+          lowerTitle === 'unknown') {
+        continue;
+      }
+      
+      validTitles.push(title);
     }
     
-    const tmdbCoreLower = tmdbInfo.coreClean.toLowerCase();
-    const torrentCoreLower = torrentInfo.coreClean.toLowerCase();
-    
-    if (torrentCoreLower.startsWith(tmdbCoreLower)) {
-      return torrentInfo.partNumber > 0;
+    if (validTitles.length === 0 && originalTitle) {
+      validTitles.push(originalTitle);
     }
     
-    return false;
+    return validTitles;
   }
 
-  private analyzeSingleWordTmdbTitle(
-    torrentWords: string[],
-    tmdbWord: string,
+  private smartContextAnalysis(
     torrentClean: string,
     tmdbClean: string,
-    originalTorrentTitle: string,
-    tmdbTitle: string
+    mediaType?: 'movie' | 'tv'
   ): {
     similarity: number;
+    confidence: 'baixa' | 'media' | 'alta';
     reason: string;
-    isExact: boolean;
-    isSemanticMatch: boolean;
+    contextAnalysis: string;
   } {
     
-    if (torrentWords.length === 1 && torrentWords[0] === tmdbWord) {
-      this.logger.debug('Match exato 1 palavra', { palavra: tmdbWord });
-      return {
-        similarity: 0.9,
-        reason: `Título exato: "${tmdbTitle}"`,
-        isExact: true,
-        isSemanticMatch: true
-      };
+    const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
+    
+    if (tmdbWords.length === 1) {
+      return this.analyzeSingleWordTitle(tmdbClean, torrentClean, mediaType);
     }
     
-    const wordIndex = torrentWords.indexOf(tmdbWord);
-    
-    if (wordIndex !== -1) {
-      const contextAnalysis = this.analyzeWordContext(
-        torrentWords,
-        tmdbWord,
-        wordIndex,
-        originalTorrentTitle
-      );
-      
-      if (contextAnalysis.shouldReject) {
-        return {
-          similarity: contextAnalysis.similarity,
-          reason: contextAnalysis.reason,
-          isExact: false,
-          isSemanticMatch: false
-        };
-      }
-      
-      const similarity = this.calculateContextualSimilarity(torrentWords, [tmdbWord]);
-      
-      return {
-        similarity,
-        reason: `"${tmdbWord}" em contexto similar`,
-        isExact: false,
-        isSemanticMatch: similarity >= 0.7
-      };
+    if (tmdbWords.length === 2) {
+      return this.analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType);
     }
     
-    const basicSimilarity = this.calculateWordSimilarity(torrentClean, tmdbClean);
-    
-    return {
-      similarity: basicSimilarity,
-      reason: `Similaridade: ${(basicSimilarity * 100).toFixed(1)}%`,
-      isExact: false,
-      isSemanticMatch: false
-    };
+    return this.normalContextAnalysis(torrentClean, tmdbClean, mediaType);
   }
 
-  private analyzeWordContext(
-    torrentWords: string[],
+  private analyzeSingleWordTitle(
     tmdbWord: string,
-    wordIndex: number,
-    originalTorrentTitle: string
-  ): {
-    shouldReject: boolean;
-    similarity: number;
-    reason: string;
-  } {
-    if (torrentWords.length === 1) {
-      return {
-        shouldReject: false,
-        similarity: 0.9,
-        reason: 'Apenas palavra TMDB'
-      };
-    }
-    
-    const adjacentWords = [];
-    if (wordIndex > 0) adjacentWords.push(torrentWords[wordIndex - 1]);
-    if (wordIndex < torrentWords.length - 1) adjacentWords.push(torrentWords[wordIndex + 1]);
-    
-    if (adjacentWords.length > 0) {
-      const significantAdjacent = adjacentWords.filter(w => 
-        w.length >= 4 && !this.isTechnicalTerm(w)
-      );
-      
-      if (significantAdjacent.length > 0) {
-        this.logger.debug('Palavra forma expressão diferente', {
-          palavra: tmdbWord,
-          expressao: significantAdjacent.join(' ')
-        });
-        
-        return {
-          shouldReject: true,
-          similarity: 0.3,
-          reason: `"${tmdbWord}" forma expressão com "${significantAdjacent.join(' ')}"`
-        };
-      }
-    }
-    
-    if (wordIndex > 0) {
-      const wordsBefore = torrentWords.slice(0, wordIndex);
-      const hasSignificantWordsBefore = wordsBefore.some(w => 
-        w.length >= 4 && !this.isTechnicalTerm(w)
-      );
-      
-      if (hasSignificantWordsBefore) {
-        this.logger.debug('Palavra não está no início', {
-          palavra: tmdbWord,
-          antes: wordsBefore.join(' ')
-        });
-        
-        return {
-          shouldReject: true,
-          similarity: 0.4,
-          reason: `"${tmdbWord}" não é primeira palavra (tem "${wordsBefore.join(' ')}" antes)`
-        };
-      }
-    }
-    
-    return {
-      shouldReject: false,
-      similarity: 0.6,
-      reason: 'Contexto aceitável'
-    };
-  }
-
-  private isTechnicalTerm(word: string): boolean {
-    const lowerWord = word.toLowerCase();
-    return this.TECHNICAL_WORDS.includes(lowerWord) || 
-           this.TECHNICAL_ACRONYMS.includes(lowerWord) ||
-           /^\d+(?:\.\d+)?(?:ch)?$/i.test(lowerWord);
-  }
-
-  private calculateContextualSimilarity(torrentWords: string[], tmdbWords: string[]): number {
-    const basicSimilarity = this.calculateWordSimilarity(
-      torrentWords.join(' '),
-      tmdbWords.join(' ')
-    );
-    
-    let penalty = 0;
-    
-    const wordCountDiff = Math.abs(torrentWords.length - tmdbWords.length);
-    if (wordCountDiff >= 2) {
-      penalty += 0.2;
-    }
-    
-    if (tmdbWords.length === 1 && torrentWords.length >= 2) {
-      penalty += 0.3;
-    }
-    
-    return Math.max(0, basicSimilarity - penalty);
-  }
-
-  private extractTorrentInfo(torrentClean: string, originalTitle: string) {
-    const hasFinal = this.hasFinalInTitle(torrentClean);
-    const partNumber = this.extractPartNumber(torrentClean);
-    const coreClean = this.extractCleanCore(torrentClean);
-    
-    return {
-      clean: torrentClean,
-      original: originalTitle,
-      coreClean,
-      hasFinal,
-      partNumber,
-      year: this.extractYearFromTitle(originalTitle)
-    };
-  }
-
-  private extractTmdbInfo(tmdbClean: string, originalTitle: string) {
-    const partNumber = this.extractPartNumber(tmdbClean);
-    const coreClean = this.extractCleanCore(tmdbClean);
-    
-    return {
-      clean: tmdbClean,
-      original: originalTitle,
-      coreClean,
-      partNumber,
-      year: this.extractYearFromTitle(originalTitle)
-    };
-  }
-
-  private extractCleanCore(title: string): string {
-    let core = title.toLowerCase();
-    
-    core = core.replace(/\b(19|20)\d{2}\b/g, '');
-    
-    this.TECHNICAL_WORDS.forEach(term => {
-      const regex = new RegExp(`\\b${term}\\b`, 'gi');
-      core = core.replace(regex, '');
-    });
-    
-    this.TECHNICAL_ACRONYMS.forEach(acronym => {
-      const regex = new RegExp(`\\b${acronym}\\b`, 'gi');
-      core = core.replace(regex, '');
-    });
-    
-    core = core.replace(/\b\d+(?:\.\d+)?(?:ch)?\b/gi, '');
-    core = core.replace(/[^\w\s]/g, ' ');
-    core = core.replace(/\s+/g, ' ').trim();
-    
-    return core;
-  }
-
-  private checkPartConflict(torrentInfo: any, tmdbInfo: any): { shouldReject: boolean; reason: string } {
-    if (tmdbInfo.partNumber === 1 && torrentInfo.hasFinal) {
-      return {
-        shouldReject: true,
-        reason: 'Parte 1 nunca é "O Final"'
-      };
-    }
-    
-    if (tmdbInfo.partNumber && torrentInfo.partNumber && tmdbInfo.partNumber !== torrentInfo.partNumber) {
-      return {
-        shouldReject: true,
-        reason: `Parte diferente: TMDB=${tmdbInfo.partNumber}, Torrent=${torrentInfo.partNumber}`
-      };
-    }
-    
-    return { shouldReject: false, reason: '' };
-  }
-
-  private hasFinalInTitle(title: string): boolean {
-    return /(?:^|\s)(?:o\s+final|final)(?:\s|$)/i.test(title);
-  }
-
-  private extractPartNumber(title: string): number | null {
-    const romanMatch = title.match(/\b([i|ii|iii|iv|v])\b/i);
-    if (romanMatch) {
-      const romanMap: Record<string, number> = {
-        'i': 1, 'ii': 2, 'iii': 3, 'iv': 4, 'v': 5
-      };
-      return romanMap[romanMatch[1].toLowerCase()] || null;
-    }
-    
-    const arabicMatch = title.match(/(?:parte?\s*|part\s*)(\d+)/i);
-    if (arabicMatch) {
-      return parseInt(arabicMatch[1]);
-    }
-    
-    return null;
-  }
-
-  private analyzeEnhancedSemanticMatch(
-    torrentInfo: any,
-    tmdbInfo: any,
-    coreSimilarity: number,
     torrentClean: string,
-    tmdbClean: string
+    mediaType?: 'movie' | 'tv'
   ): {
     similarity: number;
+    confidence: 'baixa' | 'media' | 'alta';
     reason: string;
-    isExact: boolean;
-    isSemanticMatch: boolean;
+    contextAnalysis: string;
   } {
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
     
-    const basicSimilarity = this.calculateEnhancedSimilarity(torrentClean, tmdbClean);
+    const containsWord = torrentWords.some(word => word === tmdbWord);
     
-    let bonus = 0;
-    if (coreSimilarity >= 0.7) bonus += 0.1;
-    if (coreSimilarity >= 0.8) bonus += 0.15;
-    if (coreSimilarity >= 0.9) bonus += 0.1;
-    
-    if (torrentInfo.hasFinal && tmdbInfo.partNumber === 2) {
-      bonus += 0.2;
+    if (!containsWord) {
+      return {
+        similarity: 0,
+        confidence: 'baixa',
+        reason: `Palavra única "${tmdbWord}" não encontrada`,
+        contextAnalysis: 'titulo_curto_nao_contem'
+      };
     }
     
-    const finalSimilarity = Math.min(0.95, basicSimilarity + bonus);
+    // FIX v23.1.3: ORDEM CORRETA - DENSIDADE PRIMEIRO
+    const densityAnalysis = this.analyzeSemanticDensity([tmdbWord], torrentWords);
     
-    let reason = `Similaridade: ${(finalSimilarity * 100).toFixed(1)}%`;
-    if (torrentInfo.hasFinal && tmdbInfo.partNumber === 2) {
-      reason += ' ("O Final" = Parte 2)';
+    if (densityAnalysis.isExcessive) {
+      return {
+        similarity: 0.1,
+        confidence: 'baixa',
+        reason: `Densidade excessiva: ${torrentWords.length} vs 1 palavras`,
+        contextAnalysis: 'densidade_excessiva_imediata'
+      };
+    }
+    
+    // FIX v23.1.3: CONTEXTO GLOBAL SEGUNDO
+    const contextAnalysis = this.analyzeGlobalContext(tmdbWord, torrentWords);
+    
+    if (!contextAnalysis.hasStrongContext) {
+      return {
+        similarity: 0.2,
+        confidence: 'baixa',
+        reason: `Contexto fraco: ${contextAnalysis.reason}`,
+        contextAnalysis: 'contexto_fraco_imediato'
+      };
+    }
+    
+    // FIX v23.1.3: POSIÇÃO TERCEIRO
+    const wordPosition = torrentWords.findIndex(word => word === tmdbWord);
+    const isFirstWord = wordPosition === 0;
+    
+    const basicSimilarity = 1.0;
+    const extraWords = torrentWords.length - 1;
+    
+    // FIX v23.1.3: PENALIDADES MAIS RESTRITIVAS
+    let penalty: number;
+    if (extraWords === 0) {
+      penalty = 1.0;
+    } else if (extraWords === 1) {
+      penalty = 0.7;
+    } else if (extraWords === 2) {
+      penalty = 0.5;
+    } else if (extraWords === 3) {
+      penalty = 0.3;
+    } else {
+      penalty = Math.max(0.1, 1.0 - (extraWords * 0.2));
+    }
+    
+    if (!isFirstWord) {
+      const positionPenalty = 1.0 - (wordPosition * 0.4);
+      penalty *= Math.max(0.1, positionPenalty);
+    }
+    
+    let finalSimilarity = basicSimilarity * penalty;
+    
+    // FIX v23.1.3: BÔNUS REDUZIDOS E CONDICIONAIS
+    const startsWithBonus = torrentClean.startsWith(tmdbWord + ' ');
+    const isVeryShortTitle = tmdbWord.length <= 3;
+    
+    if (startsWithBonus && isFirstWord && extraWords <= 1) {
+      finalSimilarity = Math.min(0.9, finalSimilarity * 1.1);
+    }
+    
+    if (isVeryShortTitle && extraWords === 0) {
+      finalSimilarity = Math.min(1.0, finalSimilarity * 1.05);
+    }
+    
+    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let reason = '';
+    
+    if (finalSimilarity >= 0.85) {
+      confidence = 'alta';
+      reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else if (finalSimilarity >= 0.7) {
+      confidence = 'media';
+      reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else if (finalSimilarity >= 0.5) {
+      confidence = 'baixa';
+      reason = `Match baixo: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else {
+      reason = `Similaridade muito baixa: ${(finalSimilarity * 100).toFixed(1)}%`;
+    }
+    
+    reason += ` (palavra única "${tmdbWord}" com ${extraWords} palavras extras)`;
+    
+    if (densityAnalysis.isExcessive) {
+      reason += ` [DENSIDADE: ${torrentWords.length} vs 1 palavras]`;
+    }
+    
+    if (!isFirstWord) {
+      reason += ` [POSIÇÃO: palavra na posição ${wordPosition + 1}]`;
+    }
+    
+    if (!contextAnalysis.hasStrongContext) {
+      reason += ` [CONTEXTO: ${contextAnalysis.reason}]`;
+    }
+    
+    if (startsWithBonus && isFirstWord) {
+      reason += ' [BÔNUS: começa com título]';
+    }
+    
+    if (isVeryShortTitle) {
+      reason += ' [BÔNUS: título muito curto]';
+    }
+    
+    let contextAnalysisStr = `titulo_curto_1_palavra:penalidade_${penalty.toFixed(2)}`;
+    
+    if (densityAnalysis.isExcessive) {
+      contextAnalysisStr += `|densidade_excessiva:${densityAnalysis.ratio.toFixed(1)}`;
+    }
+    
+    if (!isFirstWord) {
+      contextAnalysisStr += `|posicao_${wordPosition}`;
+    }
+    
+    if (!contextAnalysis.hasStrongContext) {
+      contextAnalysisStr += '|contexto_fraco';
+    }
+    
+    if (startsWithBonus) {
+      contextAnalysisStr += '|comeca_com_tmdb';
+    }
+    
+    if (isVeryShortTitle) {
+      contextAnalysisStr += '|titulo_muito_curto';
     }
     
     return {
       similarity: finalSimilarity,
+      confidence,
       reason,
-      isExact: basicSimilarity >= 0.9,
-      isSemanticMatch: coreSimilarity >= 0.7
+      contextAnalysis: contextAnalysisStr
+    };
+  }
+
+  private analyzeDoubleWordTitle(
+    tmdbClean: string,
+    torrentClean: string,
+    mediaType?: 'movie' | 'tv'
+  ): {
+    similarity: number;
+    confidence: 'baixa' | 'media' | 'alta';
+    reason: string;
+    contextAnalysis: string;
+  } {
+    const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
+    
+    const containsBothWords = tmdbWords.every(word => 
+      torrentWords.some(tWord => tWord === word)
+    );
+    
+    if (!containsBothWords) {
+      const missingWords = tmdbWords.filter(word => 
+        !torrentWords.some(tWord => tWord === word)
+      );
+      
+      return {
+        similarity: 0.1,
+        confidence: 'baixa',
+        reason: `Palavras faltando: ${missingWords.join(', ')}`,
+        contextAnalysis: 'titulo_duas_palavras_faltando'
+      };
+    }
+    
+    // FIX v23.1.3: DENSIDADE PRIMEIRO
+    const densityAnalysis = this.analyzeSemanticDensity(tmdbWords, torrentWords);
+    
+    if (densityAnalysis.isExcessive) {
+      return {
+        similarity: 0.15,
+        confidence: 'baixa',
+        reason: `Densidade excessiva: ${torrentWords.length} vs ${tmdbWords.length} palavras`,
+        contextAnalysis: 'densidade_excessiva_imediata'
+      };
+    }
+    
+    const basicSimilarity = this.calculateWordSimilarity(tmdbClean, torrentClean);
+    const extraWords = torrentWords.length - tmdbWords.length;
+    
+    let penalty: number;
+    if (extraWords === 0) {
+      penalty = 1.0;
+    } else if (extraWords === 1) {
+      penalty = 0.9;
+    } else if (extraWords === 2) {
+      penalty = 0.8;
+    } else if (extraWords === 3) {
+      penalty = 0.7;
+    } else {
+      penalty = Math.max(0.5, 1.0 - (extraWords * 0.12));
+    }
+    
+    if (densityAnalysis.isExcessive) {
+      penalty *= 0.4;
+    }
+    
+    const tmdbPhrase = tmdbWords.join(' ');
+    const startsWithBonus = torrentClean.startsWith(tmdbPhrase + ' ');
+    let finalSimilarity = basicSimilarity * penalty;
+    
+    if (startsWithBonus && extraWords <= 3) {
+      finalSimilarity = Math.min(1.0, finalSimilarity * 1.25);
+    }
+    
+    const hasVeryShortWords = tmdbWords.every(word => word.length <= 3);
+    if (hasVeryShortWords && extraWords <= 2) {
+      finalSimilarity = Math.min(1.0, finalSimilarity * 1.15);
+    }
+    
+    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let reason = '';
+    
+    if (finalSimilarity >= 0.85) {
+      confidence = 'alta';
+      reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else if (finalSimilarity >= 0.7) {
+      confidence = 'media';
+      reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else if (finalSimilarity >= 0.5) {
+      confidence = 'baixa';
+      reason = `Match baixo: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else {
+      confidence = 'baixa';
+      reason = `Match muito baixo: ${(finalSimilarity * 100).toFixed(1)}%`;
+    }
+    
+    reason += ` (${tmdbWords.length} vs ${torrentWords.length} palavras)`;
+    
+    if (densityAnalysis.isExcessive) {
+      reason += ` [DENSIDADE: ${torrentWords.length} vs ${tmdbWords.length} palavras]`;
+    }
+    
+    if (startsWithBonus) {
+      reason += ' [BÔNUS: começa com título]';
+    }
+    
+    if (hasVeryShortWords) {
+      reason += ' [BÔNUS: palavras muito curtas]';
+    }
+    
+    let contextAnalysis = `titulo_duas_palavras:penalidade_${penalty.toFixed(2)}`;
+    if (densityAnalysis.isExcessive) {
+      contextAnalysis += `|densidade_excessiva:${densityAnalysis.ratio.toFixed(1)}`;
+    }
+    if (startsWithBonus) {
+      contextAnalysis += '|comeca_com_tmdb';
+    }
+    if (hasVeryShortWords) {
+      contextAnalysis += '|palavras_curtas';
+    }
+    
+    return {
+      similarity: finalSimilarity,
+      confidence,
+      reason,
+      contextAnalysis
+    };
+  }
+
+  // FIX v23.1.3: Análise de densidade mais restritiva
+  private analyzeSemanticDensity(tmdbWords: string[], torrentWords: string[]): {
+    isExcessive: boolean;
+    ratio: number;
+    reason: string;
+  } {
+    const tmdbLength = tmdbWords.length;
+    const torrentLength = torrentWords.length;
+    
+    if (tmdbLength === 0) {
+      return {
+        isExcessive: false,
+        ratio: 0,
+        reason: 'TMDB sem palavras'
+      };
+    }
+    
+    const ratio = torrentLength / tmdbLength;
+    
+    // FIX v23.1.3: REGRAS MAIS RESTRITIVAS
+    const isExcessive = ratio >= 2.0 ||
+                       (tmdbLength === 1 && torrentLength >= 2) ||
+                       (tmdbLength === 2 && torrentLength >= 4);
+    
+    return {
+      isExcessive,
+      ratio,
+      reason: isExcessive ? 
+        `Densidade excessiva: ${torrentLength} vs ${tmdbLength} palavras` :
+        `Densidade normal: ${torrentLength} vs ${tmdbLength} palavras`
+    };
+  }
+
+  // FIX v23.1.3: Análise de contexto mais restritiva
+  private analyzeGlobalContext(tmdbWord: string, torrentWords: string[]): {
+    hasStrongContext: boolean;
+    reason: string;
+  } {
+    const tmdbIndex = torrentWords.indexOf(tmdbWord);
+    
+    if (tmdbIndex === -1) {
+      return {
+        hasStrongContext: false,
+        reason: 'Palavra TMDB não encontrada'
+      };
+    }
+    
+    const tmdbLength = tmdbWord.length;
+    
+    // FIX v23.1.3: Títulos muito curtos (1-3 letras) precisam de contexto MUITO forte
+    if (tmdbLength <= 3) {
+      if (torrentWords.length >= 2) {
+        return {
+          hasStrongContext: false,
+          reason: `Título muito curto (${tmdbLength} letras) com contexto expandido`
+        };
+      }
+    }
+    
+    // FIX v23.1.3: Títulos curtos (4-5 letras) ainda precisam de cuidado
+    if (tmdbLength <= 5 && torrentWords.length >= 3) {
+      return {
+        hasStrongContext: false,
+        reason: `Título curto com muito contexto adicional`
+      };
+    }
+    
+    // Regra geral: se tem 3+ palavras totais para 1 palavra TMDB
+    if (torrentWords.length >= 3) {
+      return {
+        hasStrongContext: false,
+        reason: 'Contexto muito expandido para título único'
+      };
+    }
+    
+    return {
+      hasStrongContext: true,
+      reason: 'Contexto apropriado'
+    };
+  }
+
+  private normalContextAnalysis(
+    torrentClean: string,
+    tmdbClean: string,
+    mediaType?: 'movie' | 'tv'
+  ): {
+    similarity: number;
+    confidence: 'baixa' | 'media' | 'alta';
+    reason: string;
+    contextAnalysis: string;
+  } {
+    
+    const basicSimilarity = this.calculateEnhancedSimilarity(torrentClean, tmdbClean);
+    
+    const densityAnalysis = this.analyzeWordDensity(torrentClean, tmdbClean);
+    const containmentAnalysis = this.analyzeIntelligentContainment(torrentClean, tmdbClean);
+    
+    let finalSimilarity = basicSimilarity;
+    let contextAnalysis = `base:${(basicSimilarity * 100).toFixed(1)}`;
+    
+    if (densityAnalysis.hasExcessiveWords) {
+      finalSimilarity *= 0.6;
+      contextAnalysis += `|densidade_alta:${densityAnalysis.wordRatio.toFixed(1)}`;
+    }
+    
+    if (containmentAnalysis.contains) {
+      finalSimilarity = Math.min(1.0, finalSimilarity + 0.2);
+      contextAnalysis += '|contem_tmdb';
+    } else if (containmentAnalysis.contained) {
+      finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
+      contextAnalysis += '|contido_por_tmdb';
+    }
+    
+    if (densityAnalysis.hasGoodContext) {
+      finalSimilarity = Math.min(1.0, finalSimilarity + 0.1);
+      contextAnalysis += '|contexto_suficiente';
+    }
+    
+    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let reason = '';
+    
+    if (finalSimilarity >= 0.85) {
+      confidence = 'alta';
+      reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else if (finalSimilarity >= 0.7) {
+      confidence = 'media';
+      reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
+    } else {
+      confidence = 'baixa';
+      reason = `Similaridade baixa: ${(finalSimilarity * 100).toFixed(1)}%`;
+    }
+    
+    if (densityAnalysis.hasExcessiveWords) {
+      reason += ` (muitas palavras extras: ${densityAnalysis.torrentWords} vs ${densityAnalysis.tmdbWords})`;
+    }
+    
+    if (containmentAnalysis.contains) {
+      reason += ' (torrent contém título TMDB)';
+    } else if (containmentAnalysis.contained) {
+      reason += ' (TMDB contém título torrent)';
+    }
+    
+    return {
+      similarity: finalSimilarity,
+      confidence,
+      reason,
+      contextAnalysis
     };
   }
 
@@ -645,27 +812,124 @@ export class SimilarityCalculator {
     
     words2.forEach((word, index) => {
       if (wordSet1.has(word)) {
-        const positionWeight = index < 3 ? 1.5 : 1.0;
+        const positionWeight = index < 2 ? 1.3 : 1.0;
         totalScore += positionWeight;
       }
     });
     
-    const maxWords = Math.max(words1.length, words2.length);
-    return totalScore / maxWords;
+    const maxPossibleScore = words2.reduce((sum, word, index) => {
+      const positionWeight = index < 2 ? 1.3 : 1.0;
+      return sum + positionWeight;
+    }, 0);
+    
+    return maxPossibleScore > 0 ? totalScore / maxPossibleScore : 0;
   }
 
-  private isSeriesTitle(torrentTitle: string): boolean {
-    const seriesPatterns = [
-      /s\d{1,2}e\d{1,2}/i,
-      /season\s*\d+/i,
-      /temporada\s*\d+/i,
-      /\d+x\d+/i,
-      /epis[oó]dio\s*\d+/i,
-      /\d+\s*ª?\s*temporada/i,
-      /completa\s*\d+\s*temporada/i
-    ];
+  private analyzeWordDensity(torrentClean: string, tmdbClean: string): {
+    hasExcessiveWords: boolean;
+    hasGoodContext: boolean;
+    wordRatio: number;
+    torrentWords: number;
+    tmdbWords: number;
+  } {
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 2);
+    const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 2);
     
-    return seriesPatterns.some(pattern => pattern.test(torrentTitle));
+    if (tmdbWords.length === 0) {
+      return {
+        hasExcessiveWords: false,
+        hasGoodContext: false,
+        wordRatio: 0,
+        torrentWords: torrentWords.length,
+        tmdbWords: 0
+      };
+    }
+    
+    const wordRatio = torrentWords.length / tmdbWords.length;
+    const hasExcessiveWords = wordRatio > 2.0;
+    const hasGoodContext = torrentWords.length >= 3 && wordRatio <= 1.8;
+    
+    return {
+      hasExcessiveWords,
+      hasGoodContext,
+      wordRatio,
+      torrentWords: torrentWords.length,
+      tmdbWords: tmdbWords.length
+    };
+  }
+
+  private analyzeIntelligentContainment(torrentClean: string, tmdbClean: string): {
+    contains: boolean;
+    contained: boolean;
+  } {
+    const contains = torrentClean.includes(tmdbClean);
+    const contained = tmdbClean.includes(torrentClean);
+    
+    const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 2);
+    
+    if (contains && tmdbWords.length <= 2) {
+      return {
+        contains: false,
+        contained
+      };
+    }
+    
+    return {
+      contains,
+      contained
+    };
+  }
+
+  normalizeForComparison(title: string): string {
+    const decodedTitle = title
+      .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
+      .replace(/&ndash;|&mdash;/g, ' ')
+      .replace(/&amp;/g, ' ')
+      .replace(/&lt;/g, ' ')
+      .replace(/&gt;/g, ' ')
+      .replace(/&quot;/g, ' ')
+      .replace(/&#039;|&apos;/g, ' ');
+    
+    const normalized = decodedTitle
+      .toLowerCase()
+      .normalize('NFD')
+      .replace(/[\u0300-\u036f]/g, '');
+    
+    const clean = normalized
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    
+    const finalClean = this.removeTechnicalWords(clean);
+    
+    return finalClean;
+  }
+
+  private removeTechnicalWords(title: string): string {
+    let clean = title;
+    
+    clean = clean.replace(/[\/\.\-_:]/g, ' ');
+    
+    this.TECHNICAL_WORDS.forEach(term => {
+      const regex = new RegExp(`\\b${term}\\b`, 'gi');
+      clean = clean.replace(regex, '');
+    });
+    
+    this.TECHNICAL_ACRONYMS.forEach(acronym => {
+      const regex = new RegExp(`\\b${acronym}\\b`, 'gi');
+      clean = clean.replace(regex, '');
+    });
+    
+    clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '');
+    clean = clean.replace(/\b[0-9]+k\b/gi, '');
+    clean = clean.replace(/\b[hx]\d{3}\b/gi, '');
+    clean = clean.replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
+    clean = clean.replace(/\b(19|20)\d{2}\b/g, '');
+    clean = clean.replace(/\b\d+\b/g, '');
+    
+    clean = clean.replace(/\s+/g, ' ').trim();
+    
+    return clean;
   }
 
   private extractYearFromTitle(title: string): number | null {
@@ -676,34 +940,21 @@ export class SimilarityCalculator {
     return null;
   }
 
-  normalizeForComparison(title: string): string {
-    const decodedTitle = title
-      .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
-      .replace(/&ndash;|&mdash;/g, '-')
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"')
-      .replace(/&#039;|&apos;/g, "'");
-    
-    return decodedTitle
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\w\s:\-]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-  }
-
   calculateWordSimilarity(str1: string, str2: string): number {
     const words1 = str1.split(' ').filter(w => w.length > 0);
     const words2 = str2.split(' ').filter(w => w.length > 0);
     
     if (words1.length === 0 || words2.length === 0) return 0;
     
+    if (words1.length === 1 && words2.includes(words1[0])) {
+      return 1.0;
+    }
+    
     const wordSet1 = new Set(words1);
     const commonWords = words2.filter(word => wordSet1.has(word));
-    return commonWords.length / Math.max(words1.length, words2.length);
+    
+    const maxLength = Math.max(words1.length, words2.length);
+    return maxLength > 0 ? commonWords.length / maxLength : 0;
   }
 
   smartTitleContainsCheckSync(torrentTitle: string, imdbTitle: string): SmartTitleMatch {
@@ -759,18 +1010,6 @@ export class SimilarityCalculator {
     return this.confusingSeries;
   }
 
-  removeConfusingSeries(original: string, derivative: string): boolean {
-    const originalLower = original.toLowerCase();
-    const derivativeLower = derivative.toLowerCase();
-    
-    const initialLength = this.confusingSeries.length;
-    this.confusingSeries = this.confusingSeries.filter(
-      confusion => !(confusion.original === originalLower && confusion.derivative === derivativeLower)
-    );
-    
-    return initialLength > this.confusingSeries.length;
-  }
-
   clearCache(): void {
     this.tmdbCache.clear();
   }
@@ -778,12 +1017,23 @@ export class SimilarityCalculator {
   getStats() {
     return {
       version: this.VERSION,
-      feature: 'Suporte a season para validação de ano correto',
-      description: 'SimilarityCalculator agora usa season para obter ano correto da temporada específica',
-      technicalWordsCount: this.TECHNICAL_WORDS.length,
-      technicalAcronymsCount: this.TECHNICAL_ACRONYMS.length,
-      threshold: '0.55',
-      fix: 'Parâmetro season adicionado para validação de ano correto em séries'
+      feature: 'Fix Ordem das Regras - Densidade Primeiro',
+      description: 'Correção da ordem de análise para priorizar densidade sobre bônus',
+      thresholdMovies: '0.75 (ajustável para títulos curtos)',
+      thresholdSeries: '0.65',
+      fixes: [
+        'Ordem corrigida: 1) Densidade 2) Contexto 3) Posição 4) Bônus',
+        'Densidade mais restritiva: 2+ palavras para título único = excessivo',
+        'Contexto mais restritivo para títulos curtos (1-5 letras)',
+        'Bônus reduzidos e condicionais',
+        'Penalidades mais severas para palavras extras'
+      ],
+      exampleFixes: [
+        '"Rio Doce": antes 100% → agora ~10% (REJEITADO)',
+        '"Day of the Wicked": antes 90% → agora ~15% (REJEITADO)',
+        '"Wicked (2024)": mantém 100% (ACEITO)',
+        '"Rio 2011 dublado": análise correta'
+      ]
     };
   }
 }

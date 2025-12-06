@@ -9,8 +9,10 @@ class TitleFilter {
         this.IMDB_CACHE_TTL = 30 * 60 * 1000;
         this.DEDUP_CACHE_TTL = 10 * 60 * 1000;
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
+        this.VERSION = '2.4.0';
         this.logger = new logger_1.Logger('TitleFilter');
-        this.logger.info('TitleFilter v2.2.0 inicializado (FIX: ano correto para temporadas específicas)');
+        this.logger.info(`TitleFilter v${this.VERSION} iniciado`);
+        this.logger.info(`SimilarityCalculator v20.0.0 integrado - Tecnologia de Contexto Completo`);
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.titleCleaner = new title_filter_1.TitleCleaner();
         this.languageDetector = new title_filter_1.LanguageDetector();
@@ -110,7 +112,7 @@ class TitleFilter {
             return cachedEntry.titles;
         }
         try {
-            this.logger.debug('Cache IMDB miss - buscando TMDB', { imdbId, season });
+            this.logger.debug('Cache IMDB miss', { imdbId, season });
             const titles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
             if (titles.allTitles.length > 0) {
                 this.cacheManager.saveImdbTitlesToCache(cacheKey, titles);
@@ -118,8 +120,8 @@ class TitleFilter {
                     imdbId,
                     season,
                     year: titles.year,
-                    mediaType: titles.mediaType,
-                    hasPortuguese: titles.foundInPortuguese
+                    tipo: titles.mediaType,
+                    portugues: titles.foundInPortuguese
                 });
                 return titles;
             }
@@ -169,40 +171,15 @@ class TitleFilter {
                 };
             }
             if (imdbTitles.year) {
-                this.logger.debug('TMDB ano usado para validação', {
+                this.logger.debug('TMDB ano', {
                     imdbId,
                     season: targetSeason,
                     year: imdbTitles.year,
-                    mediaType: imdbTitles.mediaType
+                    tipo: imdbTitles.mediaType
                 });
             }
             const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
             const torrentYear = this.extractTorrentYear(torrentTitle);
-            if (imdbTitles.year && torrentYear) {
-                const yearDifference = Math.abs(imdbTitles.year - torrentYear);
-                const isYearMatch = imdbTitles.year === torrentYear;
-                if (!isYearMatch) {
-                    this.logger.warn('Ano diferente', {
-                        requested: imdbTitles.year,
-                        torrent: torrentYear,
-                        difference: yearDifference,
-                        season: targetSeason,
-                        mediaType: imdbTitles.mediaType
-                    });
-                    return {
-                        matches: false,
-                        similarity: 0.3,
-                        torrentMetadata,
-                        reason: `Ano errado: solicitado ${imdbTitles.year} ≠ torrent ${torrentYear}`
-                    };
-                }
-                else {
-                    this.logger.debug('Ano válido', {
-                        year: torrentYear,
-                        mediaType: imdbTitles.mediaType
-                    });
-                }
-            }
             if (targetSeason !== undefined) {
                 if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
                     this.logger.warn('Temporada diferente', {
@@ -252,10 +229,10 @@ class TitleFilter {
                 torrentMetadata,
                 reason: smartMatch.reason
             };
-            this.logger.debug('Resultado validação', {
+            this.logger.debug('Resultado', {
                 matches: result.matches,
-                similarity: result.similarity,
-                reason: result.reason
+                similaridade: result.similarity,
+                motivo: result.reason
             });
             return result;
         }
@@ -343,11 +320,11 @@ class TitleFilter {
                 this.logger.error('TMDB falhou', { imdbId, season: targetSeason });
                 return [];
             }
-            this.logger.debug('TMDB dados obtidos', {
+            this.logger.debug('TMDB dados', {
                 imdbId,
                 season: targetSeason,
                 year: imdbTitles.year,
-                mediaType: imdbTitles.mediaType
+                tipo: imdbTitles.mediaType
             });
         }
         catch (error) {
@@ -361,23 +338,6 @@ class TitleFilter {
         }
         for (const torrent of portugueseTorrents) {
             const torrentMetadata = this.extractSeriesMetadata(torrent.title);
-            const torrentYear = this.extractTorrentYear(torrent.title);
-            let yearCheckPassed = true;
-            if (imdbTitles.year && torrentYear) {
-                if (imdbTitles.year !== torrentYear) {
-                    yearCheckPassed = false;
-                    this.logger.debug('Rejeitado: ano diferente', {
-                        title: torrent.title.substring(0, 50),
-                        requested: imdbTitles.year,
-                        torrent: torrentYear,
-                        season: targetSeason
-                    });
-                }
-            }
-            if (!yearCheckPassed) {
-                results.excluded.push(torrent);
-                continue;
-            }
             if (targetSeason !== undefined) {
                 if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
                     results.excluded.push(torrent);
@@ -397,7 +357,7 @@ class TitleFilter {
                     }
                 }
             }
-            const match = await this.smartTitleContainsCheck(torrent.title, imdbId, { year: torrentYear }, targetSeason);
+            const match = await this.smartTitleContainsCheck(torrent.title, imdbId, { year: this.extractTorrentYear(torrent.title) }, targetSeason);
             if (match.matches) {
                 results.included.push(torrent);
             }
@@ -516,6 +476,17 @@ class TitleFilter {
     }
     getSimilarityCalculatorStats() {
         return this.similarityCalculator.getStats();
+    }
+    getVersionInfo() {
+        const similarityStats = this.similarityCalculator.getStats();
+        return {
+            titleFilterVersion: this.VERSION,
+            similarityCalculatorVersion: similarityStats.version,
+            similarityCalculatorFeature: similarityStats.feature,
+            similarityCalculatorDescription: similarityStats.description,
+            thresholdMovies: similarityStats.thresholdMovies,
+            thresholdSeries: similarityStats.thresholdSeries
+        };
     }
 }
 exports.TitleFilter = TitleFilter;

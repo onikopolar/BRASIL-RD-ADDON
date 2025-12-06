@@ -16,8 +16,8 @@ class ImdbScraperService {
         if (!this.tmdbApiKey) {
             logger.error('TMDB API KEY não configurada!');
         }
-        logger.info('TMDB Scraper v1.2.0 inicializado', {
-            feature: 'Suporte a temporadas específicas'
+        logger.info('TMDB Scraper v2.0.0 inicializado', {
+            feature: 'Português primeiro + cache otimizado'
         });
     }
     async getTitlesFromImdbId(imdbId, season) {
@@ -31,6 +31,7 @@ class ImdbScraperService {
             logger.debug('Cache TMDB miss', { imdbId, season });
             const tmdbInfo = await this.findInTMDB(imdbId);
             if (!tmdbInfo) {
+                logger.warn('TMDB: não encontrado', { imdbId });
                 return this.createEmptyResult(imdbId);
             }
             const { tmdbId: tmdbIdNum, mediaType } = tmdbInfo;
@@ -45,6 +46,12 @@ class ImdbScraperService {
                     if (details.release_date) {
                         year = parseInt(details.release_date.substring(0, 4));
                     }
+                    logger.debug('TMDB dados filme', {
+                        imdbId,
+                        original: originalTitle.substring(0, 40),
+                        portugues: portugueseTitle.substring(0, 40),
+                        year
+                    });
                 }
             }
             else if (mediaType === 'tv') {
@@ -59,7 +66,7 @@ class ImdbScraperService {
                             }
                             if (seasonData.air_date) {
                                 year = parseInt(seasonData.air_date.substring(0, 4));
-                                logger.debug('Usando ano da temporada específica', {
+                                logger.debug('TMDB ano temporada específica', {
                                     imdbId,
                                     season,
                                     year,
@@ -69,7 +76,7 @@ class ImdbScraperService {
                         }
                     }
                     catch (seasonError) {
-                        logger.warn('Erro buscar temporada específica, usando dados da série', {
+                        logger.warn('TMDB erro temporada, usando dados série', {
                             imdbId,
                             season,
                             error: seasonError instanceof Error ? seasonError.message : 'Erro desconhecido'
@@ -94,24 +101,39 @@ class ImdbScraperService {
                         }
                     }
                 }
+                logger.debug('TMDB dados série', {
+                    imdbId,
+                    season,
+                    original: originalTitle.substring(0, 40),
+                    portugues: portugueseTitle.substring(0, 40),
+                    year
+                });
             }
             if (!originalTitle) {
+                logger.warn('TMDB: sem título', { imdbId });
                 return this.createEmptyResult(imdbId);
             }
             const normalizedOriginal = this.normalizeTitle(originalTitle);
             const normalizedPortuguese = portugueseTitle ? this.normalizeTitle(portugueseTitle) : '';
-            const allTitles = [normalizedOriginal];
-            if (normalizedPortuguese && normalizedPortuguese !== normalizedOriginal) {
+            const hasPortuguese = !!normalizedPortuguese && normalizedPortuguese !== normalizedOriginal;
+            const portuguesePriority = hasPortuguese;
+            const allTitles = [];
+            if (hasPortuguese) {
                 allTitles.push(normalizedPortuguese);
+                allTitles.push(normalizedOriginal);
+            }
+            else {
+                allTitles.push(normalizedOriginal);
             }
             const uniqueTitles = Array.from(new Set(allTitles.filter(title => title.trim().length > 0)));
             const result = {
                 originalTitle: normalizedOriginal,
-                portugueseTitle: normalizedPortuguese || null,
+                portugueseTitle: hasPortuguese ? normalizedPortuguese : null,
                 allTitles: uniqueTitles,
-                foundInPortuguese: !!normalizedPortuguese,
+                foundInPortuguese: hasPortuguese,
                 year,
-                mediaType
+                mediaType,
+                portuguesePriority
             };
             ImdbScraperService.globalCache.set(cacheKey, {
                 data: result,
@@ -119,19 +141,20 @@ class ImdbScraperService {
                 tmdbId: tmdbIdNum,
                 mediaType
             });
-            logger.debug('Títulos encontrados no TMDB', {
+            logger.info('TMDB títulos obtidos', {
                 imdbId,
                 tmdbId: tmdbIdNum,
                 year,
                 mediaType,
                 season,
-                originalTitle: originalTitle.substring(0, 50),
-                hasYear: !!year
+                portugues: hasPortuguese ? 'SIM' : 'NÃO',
+                tituloPortugues: hasPortuguese ? normalizedPortuguese.substring(0, 50) : 'N/A',
+                tituloOriginal: normalizedOriginal.substring(0, 50)
             });
             return result;
         }
         catch (error) {
-            logger.error('Erro TMDB', {
+            logger.error('TMDB erro geral', {
                 imdbId,
                 season,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -164,7 +187,7 @@ class ImdbScraperService {
             return null;
         }
         catch (error) {
-            logger.error('Erro converter IMDB para TMDB', {
+            logger.error('TMDB erro converter IMDB', {
                 imdbId,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
             });
@@ -184,7 +207,7 @@ class ImdbScraperService {
             return response.data;
         }
         catch (error) {
-            logger.error('Erro buscar detalhes TMDB', {
+            logger.error('TMDB erro detalhes', {
                 tmdbId,
                 mediaType,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -204,7 +227,7 @@ class ImdbScraperService {
             return response.data;
         }
         catch (error) {
-            logger.error('Erro buscar temporada TMDB', {
+            logger.error('TMDB erro temporada', {
                 tmdbId,
                 season,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -213,11 +236,13 @@ class ImdbScraperService {
         }
     }
     createEmptyResult(imdbId) {
+        logger.debug('TMDB resultado vazio', { imdbId });
         return {
             originalTitle: `Unknown Title (${imdbId})`,
             portugueseTitle: null,
             allTitles: [],
-            foundInPortuguese: false
+            foundInPortuguese: false,
+            portuguesePriority: false
         };
     }
     normalizeTitle(title) {
@@ -235,7 +260,7 @@ class ImdbScraperService {
             return titles.portugueseTitle || titles.originalTitle || null;
         }
         catch (error) {
-            logger.error('Erro compatibilidade', {
+            logger.error('TMDB erro compatibilidade', {
                 imdbId,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
             });
@@ -244,6 +269,7 @@ class ImdbScraperService {
     }
     static clearGlobalCache() {
         ImdbScraperService.globalCache.clear();
+        logger.info('TMDB cache limpo');
     }
     static getGlobalCacheStats() {
         return {
@@ -258,7 +284,8 @@ class ImdbScraperService {
         return {
             cacheSize: ImdbScraperService.globalCache.size,
             cacheTTL: this.cacheTTL,
-            version: '1.2.0'
+            version: '2.0.0',
+            feature: 'Português primeiro + cache otimizado'
         };
     }
 }

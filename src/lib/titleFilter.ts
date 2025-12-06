@@ -1,6 +1,5 @@
 import { Logger } from '../utils/logger';
 import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService';
-
 import {
   TitleCleaner,
   LanguageDetector,
@@ -10,9 +9,7 @@ import {
   SeriesMetadata,
   TitleMatchResult,
   SeriesConfusion,
-  SmartTitleMatch,
-  DeduplicationCacheEntry,
-  ImdbTitleCacheEntry
+  SmartTitleMatch
 } from './title-filter';
 
 export class TitleFilter {
@@ -29,11 +26,15 @@ export class TitleFilter {
   private readonly DEDUP_CACHE_TTL = 10 * 60 * 1000;
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
 
+  // Versionamento Semântico
+  private readonly VERSION = '2.4.0';
+
   constructor() {
     this.logger = new Logger('TitleFilter');
-    this.logger.info('TitleFilter v2.2.0 inicializado (FIX: ano correto para temporadas específicas)');
-    this.imdbScraper = new ImdbScraperService();
+    this.logger.info(`TitleFilter v${this.VERSION} iniciado`);
+    this.logger.info(`SimilarityCalculator v20.0.0 integrado - Tecnologia de Contexto Completo`);
     
+    this.imdbScraper = new ImdbScraperService();
     this.titleCleaner = new TitleCleaner();
     this.languageDetector = new LanguageDetector();
     this.similarityCalculator = new SimilarityCalculator(undefined, true);
@@ -142,9 +143,7 @@ export class TitleFilter {
     return undefined;
   }
 
-  // FIX CRÍTICO: Adicionar parâmetro season para obter ano correto da temporada
   private async getImdbTitlesWithCache(imdbId: string, season?: number): Promise<ImdbTitles | null> {
-    // Cache diferenciado por season
     const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
     const cachedEntry = this.cacheManager.getImdbTitlesFromCache(cacheKey);
     
@@ -154,21 +153,19 @@ export class TitleFilter {
     }
     
     try {
-      this.logger.debug('Cache IMDB miss - buscando TMDB', { imdbId, season });
+      this.logger.debug('Cache IMDB miss', { imdbId, season });
       
-      // FIX: Passar season para o TMDBScraper para obter ano correto
       const titles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
       
       if (titles.allTitles.length > 0) {
-        // FIX: Usar cacheKey diferenciada por season
         this.cacheManager.saveImdbTitlesToCache(cacheKey, titles);
         
         this.logger.debug('TMDB dados carregados', { 
           imdbId, 
           season,
           year: titles.year,
-          mediaType: titles.mediaType,
-          hasPortuguese: titles.foundInPortuguese
+          tipo: titles.mediaType,
+          portugues: titles.foundInPortuguese
         });
         
         return titles;
@@ -222,7 +219,7 @@ export class TitleFilter {
         };
       }
 
-      // 2. Obtém títulos do TMDB com season específico (FIX CRÍTICO)
+      // 2. Obtém títulos do TMDB com season
       const imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         this.logger.warn('TMDB: sem dados', {
@@ -238,49 +235,24 @@ export class TitleFilter {
         };
       }
 
-      // LOG PARA DEBUG: Mostrar ano obtido
+      // 3. Log TMDB ano
       if (imdbTitles.year) {
-        this.logger.debug('TMDB ano usado para validação', {
+        this.logger.debug('TMDB ano', {
           imdbId,
           season: targetSeason,
           year: imdbTitles.year,
-          mediaType: imdbTitles.mediaType
+          tipo: imdbTitles.mediaType
         });
       }
 
-      // 3. Validações
+      // 4. Extrai metadados
       const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
       const torrentYear = this.extractTorrentYear(torrentTitle);
       
-      // VALIDAÇÃO DE ANO: deve ser exato (FIX CRÍTICO)
-      if (imdbTitles.year && torrentYear) {
-        const yearDifference = Math.abs(imdbTitles.year - torrentYear);
-        const isYearMatch = imdbTitles.year === torrentYear;
-        
-        if (!isYearMatch) {
-          this.logger.warn('Ano diferente', {
-            requested: imdbTitles.year,
-            torrent: torrentYear,
-            difference: yearDifference,
-            season: targetSeason,
-            mediaType: imdbTitles.mediaType
-          });
-          
-          return {
-            matches: false,
-            similarity: 0.3,
-            torrentMetadata,
-            reason: `Ano errado: solicitado ${imdbTitles.year} ≠ torrent ${torrentYear}`
-          };
-        } else {
-          this.logger.debug('Ano válido', {
-            year: torrentYear,
-            mediaType: imdbTitles.mediaType
-          });
-        }
-      }
+      // NOTA: SimilarityCalculator v20.0.0 tem validação inteligente de ano
+      // Ano é importante mas não crítico se contexto for forte
 
-      // Valida temporada/episódio
+      // 5. Valida temporada/episódio
       if (targetSeason !== undefined) {
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
           this.logger.warn('Temporada diferente', {
@@ -324,7 +296,7 @@ export class TitleFilter {
         }
       }
 
-      // 4. Similaridade
+      // 6. Similaridade (SimilarityCalculator v20.0.0)
       const smartMatch = await this.smartTitleContainsCheck(
         torrentTitle,
         imdbId,
@@ -332,7 +304,7 @@ export class TitleFilter {
         targetSeason
       );
 
-      // 5. Resultado
+      // 7. Resultado
       const result = {
         matches: smartMatch.matches,
         matchedTitle: imdbTitles.portugueseTitle || imdbTitles.originalTitle,
@@ -342,10 +314,10 @@ export class TitleFilter {
         reason: smartMatch.reason
       };
 
-      this.logger.debug('Resultado validação', {
+      this.logger.debug('Resultado', {
         matches: result.matches,
-        similarity: result.similarity,
-        reason: result.reason
+        similaridade: result.similarity,
+        motivo: result.reason
       });
 
       return result;
@@ -456,7 +428,7 @@ export class TitleFilter {
       return [];
     }
 
-    // 3. Obtém dados TMDB com season específico (FIX CRÍTICO)
+    // 3. Obtém dados TMDB
     let imdbTitles: ImdbTitles | null;
     try {
       imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
@@ -465,11 +437,11 @@ export class TitleFilter {
         return [];
       }
       
-      this.logger.debug('TMDB dados obtidos', {
+      this.logger.debug('TMDB dados', {
         imdbId,
         season: targetSeason,
         year: imdbTitles.year,
-        mediaType: imdbTitles.mediaType
+        tipo: imdbTitles.mediaType
       });
     } catch (error) {
       this.logger.error('Erro TMDB', {
@@ -484,28 +456,7 @@ export class TitleFilter {
     // 4. Processa torrents
     for (const torrent of portugueseTorrents) {
       const torrentMetadata = this.extractSeriesMetadata(torrent.title);
-      const torrentYear = this.extractTorrentYear(torrent.title);
       
-      // VALIDAÇÃO DE ANO: deve ser exato (FIX CRÍTICO)
-      let yearCheckPassed = true;
-      if (imdbTitles.year && torrentYear) {
-        if (imdbTitles.year !== torrentYear) {
-          yearCheckPassed = false;
-          
-          this.logger.debug('Rejeitado: ano diferente', {
-            title: torrent.title.substring(0, 50),
-            requested: imdbTitles.year,
-            torrent: torrentYear,
-            season: targetSeason
-          });
-        }
-      }
-
-      if (!yearCheckPassed) {
-        results.excluded.push(torrent);
-        continue;
-      }
-
       // Valida temporada/episódio
       if (targetSeason !== undefined) {
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
@@ -529,11 +480,11 @@ export class TitleFilter {
         }
       }
 
-      // Similaridade
+      // Similaridade (SimilarityCalculator v20.0.0)
       const match = await this.smartTitleContainsCheck(
         torrent.title,
         imdbId,
-        { year: torrentYear },
+        { year: this.extractTorrentYear(torrent.title) },
         targetSeason
       );
 
@@ -715,6 +666,19 @@ export class TitleFilter {
 
   getSimilarityCalculatorStats() {
     return this.similarityCalculator.getStats();
+  }
+
+  // Novo método: obter versão completa
+  getVersionInfo() {
+    const similarityStats = this.similarityCalculator.getStats();
+    return {
+      titleFilterVersion: this.VERSION,
+      similarityCalculatorVersion: similarityStats.version,
+      similarityCalculatorFeature: similarityStats.feature,
+      similarityCalculatorDescription: similarityStats.description,
+      thresholdMovies: similarityStats.thresholdMovies,
+      thresholdSeries: similarityStats.thresholdSeries
+    };
   }
 }
 
