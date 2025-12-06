@@ -16,11 +16,8 @@ const logger = new Logger('Main');
 const cacheService = new CacheService();
 const app = express();
 
-// Version: 2.2.0 - Fix ordem das rotas para Web Auth funcionar
-logger.info('Brasil RD Server v2.2.0 iniciando - Fix ordem rotas Web Auth');
-
-// Cache para links já resolvidos
-const CACHE_TTL = 24 * 60 * 60 * 1000;
+// Version: 3.0.0 - Fix rota Torrentio para Stremio Web
+logger.info('Brasil RD Server v3.0.0 iniciando - Fix rota Torrentio');
 
 // Configuração do Express
 app.use(cors());
@@ -31,15 +28,12 @@ const videosPath = path.join(__dirname, 'videos');
 app.use('/videos', express.static(videosPath));
 app.use('/static/videos', express.static(videosPath));
 
-logger.debug('Vídeos estáticos configurados', {
-    path: videosPath,
-    endpoints: ['/videos/*.mp4', '/static/videos/*.mp4']
-});
+logger.debug('Vídeos estáticos configurados');
 
 // Inicialização do Banco de Dados
 async function initializeDatabase() {
     try {
-        logger.info('Iniciando sincronização do banco de dados...');
+        logger.info('Iniciando banco de dados...');
         
         const syncOptions = process.env.NODE_ENV === 'development' 
             ? { alter: true }
@@ -47,29 +41,27 @@ async function initializeDatabase() {
             
         await sequelize.sync(syncOptions);
         
-        logger.info('Banco de dados sincronizado', {
+        logger.info('Banco sincronizado', {
             tables: ['torrents', 'files', 'subtitles'],
-            environment: process.env.NODE_ENV || 'production'
+            env: process.env.NODE_ENV || 'production'
         });
         
         await sequelize.authenticate();
-        logger.info('Conexão com banco de dados estabelecida');
+        logger.info('Conexão BD estabelecida');
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        logger.error('Falha na inicialização do banco de dados', {
-            error: errorMessage
-        });
+        logger.error('Falha BD', { error: errorMessage });
         
         if (process.env.NODE_ENV === 'production') {
-            logger.warn('Continuando sem banco de dados - funcionalidades limitadas');
+            logger.warn('Continuando sem BD - funcionalidades limitadas');
         } else {
             throw error;
         }
     }
 }
 
-// Middleware de cache para respostas HTTP
+// Middleware cache
 const cacheMaxAge = 600;
 app.use((req: any, res: any, next: any) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
@@ -78,67 +70,118 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-// Rota de configuração HTML
+// Rota configuração HTML
 app.get('/configure', (req: any, res: any) => {
-    logger.debug('Página de configuração solicitada', { ip: req.ip });
+    logger.debug('Página configuração solicitada', { ip: req.ip });
     res.setHeader('content-type', 'text/html');
     res.end(configureTemplate(manifest));
 });
 
-// Função principal de inicialização
+// ROTA TORRENTIO FIX - Deve vir ANTES do Stremio Router
+app.get('/realdebrid=:apiKey/stream/:type/:id.json', async (req: any, res: any) => {
+    try {
+        const { apiKey, type, id } = req.params;
+        
+        // Log seguro
+        const safeApiKey = apiKey.length > 8 
+            ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
+            : '***';
+        
+        logger.debug('Rota Torrentio chamada', {
+            apiKey: safeApiKey,
+            type,
+            id,
+            ip: req.ip
+        });
+        
+        // Validação básica
+        if (!apiKey || apiKey.length < 10) {
+            logger.warn('API Key inválida na rota Torrentio');
+            return res.json({ streams: [] });
+        }
+        
+        // Importa StreamHandler dinamicamente para evitar circular dependency
+        const { StreamHandler } = await import('./services/StreamHandler');
+        const streamHandler = new StreamHandler();
+        
+        // Cria request
+        const streamRequest = {
+            type: type as 'movie' | 'series',
+            id: decodeURIComponent(id),
+            apiKey: apiKey,
+            config: {
+                quality: 'Todas as Qualidades',
+                language: 'pt-BR',
+                streamType: 'direct',
+                maxResults: '25'
+            }
+        };
+        
+        // Processa stream
+        const result = await streamHandler.handleStreamRequest(streamRequest);
+        
+        logger.info('Streams retornados via rota Torrentio', {
+            streamsCount: result.streams.length
+        });
+        
+        res.json(result);
+        
+    } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+        logger.error('Erro rota Torrentio', { error: errorMsg });
+        res.json({ streams: [] });
+    }
+});
+
+// Função principal
 async function startServer() {
     try {
-        logger.info('Iniciando servidor Brasil RD v2.2.0...');
+        logger.info('Iniciando servidor v3.0.0...');
         
-        // 1. Inicializar banco de dados
+        // 1. Banco de dados
         await initializeDatabase();
         
-        // 2. Configurar rotas customizadas PRIMEIRO (FIX CRÍTICO)
-        // Isso garante que /api/auth funcione antes do Stremio Router capturar tudo
-        logger.debug('Configurando rotas customizadas (antes do Stremio Router)');
+        // 2. Rotas customizadas PRIMEIRO
+        logger.debug('Configurando rotas customizadas');
         setupBasicRoutes(app, manifest);
         setupResolveRoutes(app);
         setupStaticRoutes(app);
         
-        // 3. Configurar sistema Stremio
+        // 3. Sistema Stremio
         logger.debug('Configurando sistema Stremio');
         const builder = createStremioBuilder(manifest);
         const stremioRouter = getStremioRouter(builder);
         
-        // 4. Aplicar rotas Stremio
+        // 4. Aplica rotas Stremio
         app.use(stremioRouter);
         logger.debug('Stremio Router configurado');
         
-        // 5. Iniciar servidor HTTP/HTTPS
+        // 5. Inicia servidor
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
         
-        logger.info('Servidor Brasil RD v2.2.0 inicializado com sucesso', {
+        logger.info('Servidor v3.0.0 inicializado', {
             port,
             features: [
                 'Stremio Addon',
                 'Real-Debrid Integration',
                 'Web Auth System',
                 'Database Support',
-                'Caching System'
+                'Caching System',
+                'Torrentio Route Fix'
             ],
-            criticalFix: 'Ordem das rotas corrigida - Web Auth agora funciona',
-            webAuthEndpoint: 'POST /api/auth',
+            torrentioRoute: 'GET /realdebrid=:apiKey/stream/:type/:id.json',
             configurePage: 'GET /configure'
         });
         
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        logger.error('Falha na inicialização do servidor', {
-            error: errorMessage
-        });
-        
+        logger.error('Falha inicialização', { error: errorMessage });
         process.exit(1);
     }
 }
 
-// Iniciar aplicação
+// Inicia aplicação
 startServer();
 
-// Log de exportação
-logger.debug('Server.ts v2.2.0 exportado - Fix ordem rotas aplicado');
+logger.debug('Server.ts v3.0.0 exportado - Rota Torrentio adicionada');
