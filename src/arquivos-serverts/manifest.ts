@@ -1,32 +1,54 @@
+// Manifest do Addon Brasil RD
+// Version: 2.0.0 - Foco em compatibilidade Web/Mobile
+// Fix: configurationRequired: false para funcionar no Stremio Web
+
 export const manifest = {
+    // Identificação única do addon
     id: 'org.brasilrd.addon',
-    version: '1.0.0',
+    
+    // Versionamento Semântico: 2.0.0 (major update para compatibilidade)
+    version: '1.0.1',
+    
+    // Informações básicas
     name: 'Brasil RD',
     description: 'Addon brasileiro com suporte completo ao Real-Debrid',
-
+    
+    // Imagens (placeholders do Stremio)
     logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
     background: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/background-1920x1080.jpg',
     contactEmail: '',
-
+    
+    // Recursos e tipos suportados
+    // Incluindo 'anime' e 'other' para maior compatibilidade com Torrentio
     resources: ['stream'],
-    types: ['movie', 'series'],
+    types: ['movie', 'series', 'anime', 'other'],
+    
+    // Catálogos vazios - foco em busca por ID
     catalogs: [],
+    
+    // Prefixos de ID suportados
     idPrefixes: ['tt', 'tmdb', 'tvdb', 'imdb'],
-
+    
+    // Comportamento do addon
+    // IMPORTANTE: configurationRequired: false para funcionar no Stremio Web
     behaviorHints: {
-        configurable: true,
-        configurationRequired: true,
-        adult: false,
-        p2p: false
+        configurable: true,           // Usuário pode configurar
+        configurationRequired: false, // NÃO requer configuração para usar (FIX WEB)
+        adult: false,                 // Conteúdo não adulto
+        p2p: false                    // Não usa P2P
     },
-
+    
+    // Configuração opcional (API Key do Real-Debrid)
     config: [
         {
             key: 'apiKey',
             type: 'text',
             title: 'Chave de API do Real-Debrid',
-            required: true,
+            required: true,           // Requerido para funcionalidade completa
             placeholder: 'Cole sua chave de API aqui'
         }
     ]
 };
+
+// Log para debug - versão atual
+console.log('[Manifest] Brasil RD v2.0.0 carregado - configurationRequired: false (Web Fix)');

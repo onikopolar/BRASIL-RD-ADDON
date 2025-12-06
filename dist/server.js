@@ -19,14 +19,15 @@ const logger_1 = require("./utils/logger");
 const logger = new logger_1.Logger('Main');
 const cacheService = new CacheService_1.CacheService();
 const app = (0, express_1.default)();
+logger.info('Brasil RD Server v2.2.0 iniciando - Fix ordem rotas Web Auth');
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 const videosPath = path_1.default.join(__dirname, 'videos');
 app.use('/videos', express_1.default.static(videosPath));
 app.use('/static/videos', express_1.default.static(videosPath));
-logger.info('Servindo vídeos informativos', {
-    videoPath: videosPath,
+logger.debug('Vídeos estáticos configurados', {
+    path: videosPath,
     endpoints: ['/videos/*.mp4', '/static/videos/*.mp4']
 });
 async function initializeDatabase() {
@@ -36,9 +37,8 @@ async function initializeDatabase() {
             ? { alter: true }
             : {};
         await models_1.sequelize.sync(syncOptions);
-        logger.info('Banco de dados sincronizado com sucesso', {
+        logger.info('Banco de dados sincronizado', {
             tables: ['torrents', 'files', 'subtitles'],
-            options: syncOptions,
             environment: process.env.NODE_ENV || 'production'
         });
         await models_1.sequelize.authenticate();
@@ -46,9 +46,8 @@ async function initializeDatabase() {
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        logger.error('Falha crítica na inicialização do banco de dados', {
-            error: errorMessage,
-            action: 'Verifique as credenciais do banco e se o PostgreSQL está rodando'
+        logger.error('Falha na inicialização do banco de dados', {
+            error: errorMessage
         });
         if (process.env.NODE_ENV === 'production') {
             logger.warn('Continuando sem banco de dados - funcionalidades limitadas');
@@ -66,44 +65,46 @@ app.use((req, res, next) => {
     next();
 });
 app.get('/configure', (req, res) => {
+    logger.debug('Página de configuração solicitada', { ip: req.ip });
     res.setHeader('content-type', 'text/html');
     res.end((0, configureTemplate_1.configureTemplate)(manifest_1.manifest));
 });
 async function startServer() {
     try {
+        logger.info('Iniciando servidor Brasil RD v2.2.0...');
         await initializeDatabase();
-        const builder = (0, streamHandlerBuilder_1.createStremioBuilder)(manifest_1.manifest);
-        const stremioRouter = (0, streamHandlerBuilder_1.getStremioRouter)(builder);
-        app.use(stremioRouter);
+        logger.debug('Configurando rotas customizadas (antes do Stremio Router)');
         (0, basicRoutes_1.setupBasicRoutes)(app, manifest_1.manifest);
         (0, resolveRoutes_1.setupResolveRoutes)(app);
         (0, staticRoutes_1.setupStaticRoutes)(app);
+        logger.debug('Configurando sistema Stremio');
+        const builder = (0, streamHandlerBuilder_1.createStremioBuilder)(manifest_1.manifest);
+        const stremioRouter = (0, streamHandlerBuilder_1.getStremioRouter)(builder);
+        app.use(stremioRouter);
+        logger.debug('Stremio Router configurado');
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_1.createServer)(app, port);
-        logger.info('Servidor inicializado com sucesso', {
+        logger.info('Servidor Brasil RD v2.2.0 inicializado com sucesso', {
             port,
             features: [
                 'Stremio Addon',
                 'Real-Debrid Integration',
-                'Static Response System com Vídeos',
+                'Web Auth System',
                 'Database Support',
                 'Caching System'
             ],
-            video_endpoints: [
-                '/videos/downloading_v2.mp4',
-                '/videos/download_failed_v2.mp4',
-                '/videos/failed_access_v2.mp4',
-                '/static/videos/*.mp4'
-            ]
+            criticalFix: 'Ordem das rotas corrigida - Web Auth agora funciona',
+            webAuthEndpoint: 'POST /api/auth',
+            configurePage: 'GET /configure'
         });
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
         logger.error('Falha na inicialização do servidor', {
-            error: errorMessage,
-            stack: error instanceof Error ? error.stack : undefined
+            error: errorMessage
         });
         process.exit(1);
     }
 }
 startServer();
+logger.debug('Server.ts v2.2.0 exportado - Fix ordem rotas aplicado');

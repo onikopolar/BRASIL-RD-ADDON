@@ -3,19 +3,19 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.manifest = void 0;
 exports.manifest = {
     id: 'org.brasilrd.addon',
-    version: '1.0.0',
+    version: '1.0.1',
     name: 'Brasil RD',
     description: 'Addon brasileiro com suporte completo ao Real-Debrid',
     logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
     background: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/background-1920x1080.jpg',
     contactEmail: '',
     resources: ['stream'],
-    types: ['movie', 'series'],
+    types: ['movie', 'series', 'anime', 'other'],
     catalogs: [],
     idPrefixes: ['tt', 'tmdb', 'tvdb', 'imdb'],
     behaviorHints: {
         configurable: true,
-        configurationRequired: true,
+        configurationRequired: false,
         adult: false,
         p2p: false
     },
@@ -29,3 +29,4 @@ exports.manifest = {
         }
     ]
 };
+console.log('[Manifest] Brasil RD v2.0.0 carregado - configurationRequired: false (Web Fix)');
