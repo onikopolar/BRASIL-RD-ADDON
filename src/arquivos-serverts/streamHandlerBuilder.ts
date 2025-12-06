@@ -5,73 +5,77 @@ import { StreamRequest } from '../types';
 
 const logger = new Logger('StreamHandlerBuilder');
 
-// Version: 2.3.0 - Suporte a sistema Torrentio (realdebrid=API_KEY na URL)
+// Version: 3.0.0 - Fix mensagens localhost + otimização
 export const createStremioBuilder = (manifest: any) => {
     const builder = new addonBuilder(manifest as any);
     
-    logger.info('StreamHandlerBuilder v2.3.0 - Sistema Torrentio-style');
+    logger.info('StreamHandlerBuilder v3.0.0 - Sistema Torrentio-style otimizado');
 
-    // Handler principal de streams
+    // Handler principal
     builder.defineStreamHandler(async (args: any) => {
         const requestStartTime = Date.now();
         
-        // Log completo para debug
-        logger.debug('Request recebido', {
+        // Debug inicial
+        logger.debug('DEBUG: Args recebidos', {
             type: args.type,
             id: args.id,
-            hasConfig: !!args.config,
-            hasExtra: !!args.extra
+            configKeys: args.config ? Object.keys(args.config) : [],
+            extraKeys: args.extra ? Object.keys(args.extra) : []
         });
 
-        // SISTEMA TORRENTIO-STYLE: Extrai API Key de múltiplas fontes
+        // Extrai API Key
         let apiKey = null;
         let authSource = 'none';
 
-        // FONTE 1: Sistema Torrentio (realdebrid=API_KEY na rota)
-        // Quando addon é instalado via: stremio://host/realdebrid=API_KEY/manifest.json
-        // O Stremio SDK converte para args.config.realdebrid
+        // Fonte 1: Sistema Torrentio
         if (args.config?.realdebrid) {
             apiKey = args.config.realdebrid;
             authSource = 'torrentio-route';
-            logger.debug('API Key encontrada via rota Torrentio-style', { source: authSource });
+            logger.debug('API Key via Torrentio-style', { source: authSource });
         }
         
-        // FONTE 2: Sistema padrão Stremio (apiKey no config)
+        // Fonte 2: Stremio padrão
         else if (args.config?.apiKey) {
             apiKey = args.config.apiKey;
             authSource = 'stremio-config';
-            logger.debug('API Key encontrada via config Stremio', { source: authSource });
+            logger.debug('API Key via config Stremio', { source: authSource });
         }
         
-        // FONTE 3: Sistema antigo (extra)
+        // Fonte 3: Legacy
         else if (args.extra?.apiKey) {
             apiKey = args.extra.apiKey;
             authSource = 'legacy-extra';
-            logger.debug('API Key encontrada via extra (legacy)', { source: authSource });
+            logger.debug('API Key via extra', { source: authSource });
         }
         
-        // FONTE 4: Query parameter para testes
+        // Fonte 4: Query teste
         else if (args.query?.apiKey) {
             apiKey = args.query.apiKey;
             authSource = 'test-query';
-            logger.debug('API Key via query parameter (teste)', { source: authSource });
+            logger.debug('API Key via query', { source: authSource });
         }
 
-        // VALIDAÇÃO: Se não encontrou API Key
+        // Validação API Key
         if (!apiKey) {
-            logger.warn('Falha de autenticação', {
+            // URL dinâmica baseada no ambiente
+            const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN 
+                ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
+                : process.env.NODE_ENV === 'production' 
+                    ? 'https://brasil-rd-addon.up.railway.app'
+                    : 'http://localhost:7000';
+            
+            const stremioUrl = baseUrl.replace('https://', '').replace('http://', '');
+            
+            logger.warn('Falha autenticação', {
                 type: args.type,
                 id: args.id,
-                reason: 'API Key não fornecida',
-                suggestions: [
-                    'Use: stremio://localhost:7000/realdebrid=SUA_API_KEY/manifest.json',
-                    'Configure via: http://localhost:7000/configure'
-                ]
+                reason: 'API Key não fornecida'
             });
+            
             return { streams: [] };
         }
 
-        // Log seguro da API Key
+        // Log seguro
         const safeApiKey = apiKey.length > 8 
             ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
             : '***';
@@ -83,7 +87,7 @@ export const createStremioBuilder = (manifest: any) => {
             keyPreview: safeApiKey
         });
 
-        // Cria requisição de stream
+        // Cria request
         const streamRequest: StreamRequest = {
             type: args.type as 'movie' | 'series',
             id: args.id,
@@ -103,28 +107,25 @@ export const createStremioBuilder = (manifest: any) => {
         });
 
         try {
-            // Processa a requisição
+            // Processa
             const streamHandler = new StreamHandler();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             const processingTime = Date.now() - requestStartTime;
 
             logger.info('Streams processados', {
-                requestId: args.id,
                 streamsCount: result.streams.length,
                 processingTime: `${processingTime}ms`,
                 authSource: authSource
             });
 
-            // Log de resultados
+            // Log resultados
             if (result.streams.length > 0) {
                 logger.debug('Streams disponíveis', {
-                    count: result.streams.length,
-                    samples: result.streams.slice(0, 2).map(s => s.name)
+                    count: result.streams.length
                 });
             } else {
                 logger.warn('Nenhum stream retornado', {
-                    requestId: args.id,
-                    type: args.type
+                    id: args.id
                 });
             }
 
@@ -134,10 +135,10 @@ export const createStremioBuilder = (manifest: any) => {
             const errorTime = Date.now() - requestStartTime;
             const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
 
-            logger.error('Erro no processamento', {
+            logger.error('Erro processamento', {
                 error: errorMsg,
-                request: { type: args.type, id: args.id },
-                authSource: authSource,
+                type: args.type,
+                id: args.id,
                 processingTime: `${errorTime}ms`
             });
 
@@ -153,4 +154,4 @@ export const getStremioRouter = (builder: any) => {
 };
 
 // Log inicial
-logger.info('StreamHandlerBuilder v2.3.0 pronto - Sistema Torrentio-style ativo');
+logger.info('StreamHandlerBuilder v3.0.0 pronto - Fix mensagens localhost');
