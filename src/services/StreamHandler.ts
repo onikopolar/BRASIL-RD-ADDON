@@ -84,7 +84,7 @@ export class StreamHandler {
     this.torrentScraper = new TorrentScraperService();
     this.imdbScraper = new ImdbScraperService();
     this.logger = new Logger('StreamHandler');
-    this.logger.info('v4.2.0 inicializado');
+    this.logger.info('v5.0.0 inicializado - Fix completo TMDB Season');
     this.staticResponseService = new StaticResponseService(baseUrl);
     this.qualityDetector = new QualityDetector();
     this.titleFilter = new TitleFilter();
@@ -442,8 +442,21 @@ export class StreamHandler {
       let searchTitle: string | null = null;
       let imdbTitles: ImdbTitles | null = null;
 
+      // FIX CRÍTICO: Passar season para TMDBScraper
+      const season = match ? parseInt(match[1]) : undefined;
+
       if (imdbId) {
-        imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
+        imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
+        
+        if (imdbTitles && season && imdbTitles.year) {
+          this.logger.debug('TMDB: usando ano da temporada', {
+            imdbId,
+            season,
+            year: imdbTitles.year,
+            note: season > 1 ? 'Ano diferente da 1ª temporada - NORMAL' : 'Ano da 1ª temporada'
+          });
+        }
+        
         if (imdbTitles && imdbTitles.allTitles.length > 0) searchTitle = imdbTitles.allTitles[0];
       }
 
@@ -455,7 +468,13 @@ export class StreamHandler {
         searchQuery = `${searchTitle} Temporada ${season}`;
       }
 
-      this.logger.debug('Iniciando scraping', { searchQuery, type, imdbId, hasImdbTitles: !!imdbTitles });
+      this.logger.debug('Iniciando scraping', {
+        searchQuery,
+        type,
+        imdbId,
+        season,
+        hasImdbTitles: !!imdbTitles
+      });
 
       const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, type, match ? parseInt(match[1]) : undefined);
       this.logger.debug('Resultados scraping', { encontrados: torrentResults.length, query: searchQuery });
@@ -463,7 +482,6 @@ export class StreamHandler {
       if (torrentResults.length === 0) return [];
 
       const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
-      const season = match ? parseInt(match[1]) : undefined;
       const episode = match ? parseInt(match[2]) : undefined;
       
       const filteredTorrents = await this.filterAndValidateTorrents(
@@ -482,12 +500,6 @@ export class StreamHandler {
 
       if (filteredTorrents.valid.length === 0) return [];
 
-      // CRITICAL FIX: Always call saveValidTorrentsToCatalog when there are valid torrents
-      this.logger.debug('DEBUG - SALVANDO NO CATÁLOGO', {
-        count: filteredTorrents.valid.length,
-        type: request.type
-      });
-      
       await this.saveValidTorrentsToCatalog(filteredTorrents.valid, request, season, episode, imdbTitles);
 
       const streams = await this.processTorrentsWithOptimization(filteredTorrents.valid, request, season, episode);
@@ -553,7 +565,13 @@ export class StreamHandler {
           imdbId: imdbId
         });
 
-        const titleMatchResult = await this.titleFilter.doTitlesMatch(torrent.title, imdbId, season, episode);
+        // FIX: Passar mediaType para TitleFilter
+const titleMatchResult = await this.titleFilter.doTitlesMatch(
+  torrent.title, 
+  imdbId, 
+  season, 
+  episode
+);
         
         if (titleMatchResult.matches) {
           this.logger.debug('Válido', {
@@ -613,17 +631,8 @@ export class StreamHandler {
       return;
     }
 
-    this.logger.debug('Salvando magnets', {
-      count: validTorrents.length,
-      type: request.type
-    });
-
     for (const torrent of validTorrents) {
       try {
-        this.logger.debug('Chamando autoAddMagnet', {
-          title: torrent.title.substring(0, 60)
-        });
-        
         const result = await this.autoMagnetService.autoAddMagnet(
           torrent.magnet,
           torrent.title,
@@ -724,8 +733,18 @@ export class StreamHandler {
     });
 
     try {
-      this.logger.debug('Buscando títulos IMDB', { imdbId });
-      const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
+      // FIX CRÍTICO: Passar season para TMDBScraper
+      this.logger.debug('Buscando títulos IMDB', { imdbId, season });
+      const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
+      
+      if (imdbTitles && imdbTitles.year && season > 1) {
+        this.logger.debug('TMDB: usando ano da temporada específica', {
+          imdbId,
+          season,
+          year: imdbTitles.year,
+          note: 'Temporada > 1: ano diferente da 1ª temporada - CORRETO'
+        });
+      }
       
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         this.logger.debug('Sem títulos IMDB', { imdbId });
@@ -741,8 +760,6 @@ export class StreamHandler {
         episode
       });
 
-      this.logger.debug('Chamando scraper', { searchQuery });
-      
       const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, 'series', season);
       
       this.logger.debug('Resultados scraping', {
@@ -755,21 +772,7 @@ export class StreamHandler {
         return null;
       }
 
-      this.logger.debug('Deduplicando', { antes: torrentResults.length });
-      
       const deduplicatedTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
-      
-      this.logger.debug('Após deduplicação', {
-        antes: torrentResults.length,
-        depois: deduplicatedTorrents.length
-      });
-
-      this.logger.debug('Filtrando', {
-        total: deduplicatedTorrents.length,
-        imdbId,
-        season,
-        episode
-      });
       
       const filteredTorrents = await this.filterAndValidateTorrents(
         deduplicatedTorrents, 
@@ -795,12 +798,6 @@ export class StreamHandler {
         });
         return null;
       }
-
-      this.logger.debug('Selecionando melhor', {
-        opcoes: filteredTorrents.valid.length,
-        season,
-        episode
-      });
       
       const bestTorrent = filteredTorrents.valid.reduce((best, current) =>
         current.seeders > best.seeders ? current : best
@@ -810,12 +807,6 @@ export class StreamHandler {
         title: bestTorrent.title.substring(0, 60),
         seeders: bestTorrent.seeders,
         quality: bestTorrent.quality
-      });
-
-      this.logger.debug('Criando streams', {
-        title: bestTorrent.title.substring(0, 60),
-        season,
-        episode
       });
       
       const streams = this.streamFormatter.createMultipleQualityStreams(
@@ -835,13 +826,6 @@ export class StreamHandler {
         hasStreams: streams.length > 0
       });
 
-      // CRITICAL FIX: Call saveValidTorrentsToCatalog for specific episode
-      this.logger.debug('DEBUG - EPISODE: SALVANDO CATÁLOGO', {
-        count: filteredTorrents.valid.length,
-        season,
-        episode
-      });
-      
       await this.saveValidTorrentsToCatalog(filteredTorrents.valid, request, season, episode, imdbTitles);
 
       const result = streams.length > 0 ? streams : null;
@@ -906,7 +890,7 @@ export class StreamHandler {
       servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
       scrapingCacheSize: this.scrapingCache.size,
-      version: '4.2.0'
+      version: '5.0.0'
     };
   }
 }

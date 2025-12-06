@@ -133,7 +133,7 @@ export class StreamFormatter {
     // Enriquecer com metadados
     if (metadata) {
       if (metadata.isCompleteSeason) {
-        finalDescription += ' | ✅ Temporada Completa';
+        finalDescription += ' | Temporada Completa';
       }
       if (metadata.isPackage) {
         finalDescription += ' | 📦 Pacote';

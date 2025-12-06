@@ -91,7 +91,7 @@ class StreamFormatter {
         let finalDescription = description;
         if (metadata) {
             if (metadata.isCompleteSeason) {
-                finalDescription += ' | ✅ Temporada Completa';
+                finalDescription += ' | Temporada Completa';
             }
             if (metadata.isPackage) {
                 finalDescription += ' | 📦 Pacote';
