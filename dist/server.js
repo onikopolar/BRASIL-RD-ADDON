@@ -1,4 +1,37 @@
 "use strict";
+var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    var desc = Object.getOwnPropertyDescriptor(m, k);
+    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
+      desc = { enumerable: true, get: function() { return m[k]; } };
+    }
+    Object.defineProperty(o, k2, desc);
+}) : (function(o, m, k, k2) {
+    if (k2 === undefined) k2 = k;
+    o[k2] = m[k];
+}));
+var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
+    Object.defineProperty(o, "default", { enumerable: true, value: v });
+}) : function(o, v) {
+    o["default"] = v;
+});
+var __importStar = (this && this.__importStar) || (function () {
+    var ownKeys = function(o) {
+        ownKeys = Object.getOwnPropertyNames || function (o) {
+            var ar = [];
+            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
+            return ar;
+        };
+        return ownKeys(o);
+    };
+    return function (mod) {
+        if (mod && mod.__esModule) return mod;
+        var result = {};
+        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
+        __setModuleDefault(result, mod);
+        return result;
+    };
+})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -19,38 +52,41 @@ const logger_1 = require("./utils/logger");
 const logger = new logger_1.Logger('Main');
 const cacheService = new CacheService_1.CacheService();
 const app = (0, express_1.default)();
-logger.info('Brasil RD Server v2.2.0 iniciando - Fix ordem rotas Web Auth');
-const CACHE_TTL = 24 * 60 * 60 * 1000;
+logger.info('Brasil RD Server v4.0.0 iniciando - Fix completo');
+app.use((req, res, next) => {
+    if (req.path.includes('/realdebrid=')) {
+        logger.debug('INTERCEPTOR: Rota Torrentio detectada', {
+            path: req.path,
+            method: req.method,
+            originalUrl: req.originalUrl
+        });
+        req._torrentioHandled = true;
+    }
+    next();
+});
 app.use((0, cors_1.default)());
 app.use(express_1.default.json());
 const videosPath = path_1.default.join(__dirname, 'videos');
 app.use('/videos', express_1.default.static(videosPath));
 app.use('/static/videos', express_1.default.static(videosPath));
-logger.debug('Vídeos estáticos configurados', {
-    path: videosPath,
-    endpoints: ['/videos/*.mp4', '/static/videos/*.mp4']
-});
+logger.debug('Vídeos estáticos OK');
 async function initializeDatabase() {
     try {
-        logger.info('Iniciando sincronização do banco de dados...');
-        const syncOptions = process.env.NODE_ENV === 'development'
-            ? { alter: true }
-            : {};
+        logger.info('Iniciando BD...');
+        const syncOptions = process.env.NODE_ENV === 'development' ? { alter: true } : {};
         await models_1.sequelize.sync(syncOptions);
-        logger.info('Banco de dados sincronizado', {
-            tables: ['torrents', 'files', 'subtitles'],
-            environment: process.env.NODE_ENV || 'production'
+        logger.info('BD sincronizado', {
+            tables: ['torrents', 'files', 'subtitles']
         });
         await models_1.sequelize.authenticate();
-        logger.info('Conexão com banco de dados estabelecida');
+        logger.info('Conexão BD OK');
     }
     catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        logger.error('Falha na inicialização do banco de dados', {
-            error: errorMessage
+        logger.error('Falha BD', {
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         if (process.env.NODE_ENV === 'production') {
-            logger.warn('Continuando sem banco de dados - funcionalidades limitadas');
+            logger.warn('Continuando sem BD');
         }
         else {
             throw error;
@@ -65,15 +101,69 @@ app.use((req, res, next) => {
     next();
 });
 app.get('/configure', (req, res) => {
-    logger.debug('Página de configuração solicitada', { ip: req.ip });
+    logger.debug('Página configuração', { ip: req.ip });
     res.setHeader('content-type', 'text/html');
     res.end((0, configureTemplate_1.configureTemplate)(manifest_1.manifest));
 });
+app.get('/realdebrid=:apiKey/manifest.json', (req, res) => {
+    const { apiKey } = req.params;
+    const safeKey = apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4);
+    logger.debug('Rota Manifest Torrentio', { apiKey: safeKey });
+    res.json(manifest_1.manifest);
+});
+app.get('/realdebrid=:apiKey/stream/:type/:id.json', async (req, res) => {
+    try {
+        const { apiKey, type, id } = req.params;
+        const safeKey = apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4);
+        logger.debug('ROTA TORRENTIO STREAM INICIADA', {
+            apiKey: safeKey,
+            type,
+            id,
+            ip: req.ip
+        });
+        if (!apiKey || apiKey.length < 10) {
+            logger.warn('API Key inválida');
+            return res.json({ streams: [] });
+        }
+        const { StreamHandler } = await Promise.resolve().then(() => __importStar(require('./services/StreamHandler')));
+        const streamHandler = new StreamHandler();
+        const streamRequest = {
+            type: type,
+            id: decodeURIComponent(id),
+            apiKey: apiKey,
+            config: {
+                quality: 'Todas as Qualidades',
+                language: 'pt-BR',
+                streamType: 'direct',
+                maxResults: '25'
+            }
+        };
+        const result = await streamHandler.handleStreamRequest(streamRequest);
+        logger.info('ROTA TORRENTIO STREAM FINALIZADA', {
+            streamsCount: result.streams.length,
+            id: id
+        });
+        return res.json(result);
+    }
+    catch (error) {
+        logger.error('Erro rota Torrentio', {
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
+        });
+        return res.json({ streams: [] });
+    }
+});
+app.use((req, res, next) => {
+    if (req._torrentioHandled) {
+        logger.debug('Rota já tratada pelo Torrentio - pulando Stremio Router');
+        return next('route');
+    }
+    next();
+});
 async function startServer() {
     try {
-        logger.info('Iniciando servidor Brasil RD v2.2.0...');
+        logger.info('Iniciando servidor v4.0.0...');
         await initializeDatabase();
-        logger.debug('Configurando rotas customizadas (antes do Stremio Router)');
+        logger.debug('Configurando rotas customizadas');
         (0, basicRoutes_1.setupBasicRoutes)(app, manifest_1.manifest);
         (0, resolveRoutes_1.setupResolveRoutes)(app);
         (0, staticRoutes_1.setupStaticRoutes)(app);
@@ -84,27 +174,29 @@ async function startServer() {
         logger.debug('Stremio Router configurado');
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_1.createServer)(app, port);
-        logger.info('Servidor Brasil RD v2.2.0 inicializado com sucesso', {
+        logger.info('Servidor v4.0.0 inicializado', {
             port,
             features: [
                 'Stremio Addon',
                 'Real-Debrid Integration',
                 'Web Auth System',
                 'Database Support',
-                'Caching System'
+                'Caching System',
+                'Torrentio Route Fix COMPLETO'
             ],
-            criticalFix: 'Ordem das rotas corrigida - Web Auth agora funciona',
-            webAuthEndpoint: 'POST /api/auth',
+            rotasTorrentio: [
+                'GET /realdebrid=:apiKey/manifest.json',
+                'GET /realdebrid=:apiKey/stream/:type/:id.json'
+            ],
             configurePage: 'GET /configure'
         });
     }
     catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        logger.error('Falha na inicialização do servidor', {
-            error: errorMessage
+        logger.error('Falha inicialização', {
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         process.exit(1);
     }
 }
 startServer();
-logger.debug('Server.ts v2.2.0 exportado - Fix ordem rotas aplicado');
+logger.debug('Server.ts v4.0.0 exportado - Fix completo aplicado');
