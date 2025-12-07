@@ -7,6 +7,7 @@ export interface Stream {
     notWebReady?: boolean;
     bingeGroup?: string;
     filename?: string;
+    streamQuality?: string; // Adicionado para compatibilidade com StreamFormatter v1.3.3
   };
   status?: string;
   torrentId?: string;
@@ -44,8 +45,8 @@ export interface CuratedMagnet {
   category: string;
   language: string;
   addedAt: string;
-  season?: number;      // ✅ NOVO: Temporada (para séries)
-  episode?: number;     // ✅ NOVO: Episódio (para séries)
+  season?: number;
+  episode?: number;
 }
 
 export interface RDFile {

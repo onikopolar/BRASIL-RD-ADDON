@@ -30,18 +30,19 @@
       "@services/*": ["./src/services/*"],
       "@utils/*": ["./src/utils/*"],
       "@types/*": ["./src/types/*"]
-    }
+    },
+    "typeRoots": ["./node_modules/@types", "./src/types"]
   },
   "include": [
     "src/**/*.ts",
-    "src/**/*.tsx"
+    "src/**/*.tsx",
+    "src/**/*.d.ts"
   ],
   "exclude": [
     "node_modules",
     "dist",
     "**/*.test.ts",
-    "**/*.spec.ts",
-    "**/*.d.ts"
+    "**/*.spec.ts"
   ],
   "ts-node": {
     "require": ["tsconfig-paths/register"]

@@ -11,6 +11,7 @@ import {
     episodePatterns
 } from './scraperConfigs';
 import { QualityDetector } from '../../lib/qualityDetector';
+import { queueService } from '../QueueService';
 
 const logger = new Logger('TorrentScraperService');
 
@@ -25,7 +26,7 @@ export class TorrentScraperService {
 
     constructor() {
         this.qualityDetector = new QualityDetector();
-        logger.info('TorrentScraperService iniciado');
+        logger.info('TorrentScraperService v2.0.0 iniciado - Sistema de filas integrado');
     }
 
     async searchTorrents(
@@ -35,7 +36,7 @@ export class TorrentScraperService {
     ): Promise<TorrentResult[]> {
         const startTime = Date.now();
         
-        logger.info('Iniciando busca', {
+        logger.info('Iniciando busca com filas', {
             query,
             type,
             targetSeason,
@@ -43,24 +44,28 @@ export class TorrentScraperService {
         });
 
         try {
-            // Buscar apenas com query principal (otimização)
             const mainQuery = query;
-            
             const allPromises: Promise<TorrentResult[]>[] = [];
             
-            // TorrentIndexer
+            // TorrentIndexer em fila específica
             if (torrentIndexerConfig.enabled) {
                 allPromises.push(
-                    this.searchTorrentIndexer(mainQuery, type, targetSeason)
-                        .catch(() => [])
+                    queueService.executeInQueue(
+                        'torrent-indexer',
+                        () => this.searchTorrentIndexer(mainQuery, type, targetSeason),
+                        `TorrentIndexer:${mainQuery.substring(0, 20)}`
+                    ).catch(() => [])
                 );
             }
             
-            // Todos providers em paralelo
+            // Providers em filas paralelas com limite de concorrência
             for (const provider of this.providers) {
                 allPromises.push(
-                    this.searchProvider(provider, mainQuery, type, targetSeason)
-                        .catch(() => [])
+                    queueService.executeInQueue(
+                        'scraper-providers',
+                        () => this.searchProvider(provider, mainQuery, type, targetSeason),
+                        `${provider.name}:${mainQuery.substring(0, 20)}`
+                    ).catch(() => [])
                 );
             }
             
@@ -79,7 +84,7 @@ export class TorrentScraperService {
             const bestResults = await Promise.race([searchPromise, timeoutPromise]);
             
             const duration = Date.now() - startTime;
-            logger.info('Busca finalizada', {
+            logger.info('Busca finalizada com filas', {
                 query,
                 total: bestResults.length,
                 tempo: `${duration}ms`
@@ -88,9 +93,9 @@ export class TorrentScraperService {
             return bestResults;
 
         } catch (error) {
-            logger.error('Erro na busca', {
+            logger.error('Erro na busca com filas', {
                 query,
-                error: error instanceof Error ? error.message : 'Unknown'
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return [];
         }
@@ -145,7 +150,6 @@ export class TorrentScraperService {
             const html = await this.fetchWithRetry(searchUrl, provider.timeout);
             const rawResults = this.parseHtmlResults(html, provider, type);
             
-            // Otimização: não buscar magnets para todos (apenas se necessário)
             if (rawResults.length > 0) {
                 const resultsWithMagnets = await this.enrichWithMagnets(rawResults, provider, html);
                 return resultsWithMagnets;
@@ -208,12 +212,10 @@ export class TorrentScraperService {
         return results.filter(result => {
             const titleLower = result.title.toLowerCase();
             
-            // Filtrar promocional
             if (this.promotionalKeywords.some(keyword => titleLower.includes(keyword))) {
                 return false;
             }
 
-            // Filtrar qualidade
             if (!this.qualityDetector.isValidQuality(result.quality)) {
                 return false;
             }
@@ -250,13 +252,13 @@ export class TorrentScraperService {
                         return b.seeders - a.seeders;
                     }
                     return 0;
-                }).slice(0, 2); // Apenas 2 por qualidade
+                }).slice(0, 2);
                 
                 bestResults.push(...bestInQuality);
             }
         }
         
-        return bestResults.slice(0, 8); // Máximo 8 resultados
+        return bestResults.slice(0, 8);
     }
 
     private parseAPIResults(posts: any[], provider: ScraperProvider, type: 'movie' | 'series'): TorrentResult[] {
@@ -336,7 +338,7 @@ export class TorrentScraperService {
             }
         });
 
-        return results.slice(0, 10); // Limitar a 10 resultados por provider
+        return results.slice(0, 10);
     }
 
     private async enrichWithMagnets(
@@ -344,7 +346,6 @@ export class TorrentScraperService {
         provider: ScraperProvider,
         originalHtml: string
     ): Promise<TorrentResult[]> {
-        // Otimização: apenas os primeiros 5 resultados
         const limitedResults = results.slice(0, 5);
         const enrichedResults: TorrentResult[] = [];
 
@@ -360,7 +361,6 @@ export class TorrentScraperService {
                 let magnetLink = '';
 
                 if (detailUrl) {
-                    // Timeout curto para detalhes
                     const html = await axios.get(detailUrl, {
                         timeout: 3000,
                         headers: this.getRequestHeaders()
@@ -527,7 +527,6 @@ export class TorrentScraperService {
     }
 
     private async fetchWithRetry(url: string, timeout: number): Promise<string> {
-        // Apenas 1 retry (otimização)
         try {
             const response = await axios.get(url, {
                 timeout,
@@ -540,7 +539,6 @@ export class TorrentScraperService {
             }
             throw new Error(`HTTP ${response.status}`);
         } catch (error) {
-            // Única tentativa de retry
             await this.delay(1000);
             try {
                 const response = await axios.get(url, {

@@ -43,6 +43,7 @@ const cheerio = __importStar(require("cheerio"));
 const scraperProviders_1 = require("./scraperProviders");
 const scraperConfigs_1 = require("./scraperConfigs");
 const qualityDetector_1 = require("../../lib/qualityDetector");
+const QueueService_1 = require("../QueueService");
 const logger = new logger_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor() {
@@ -53,11 +54,11 @@ class TorrentScraperService {
         this.promotionalKeywords = scraperConfigs_1.promotionalKeywords;
         this.episodePatterns = scraperConfigs_1.episodePatterns;
         this.qualityDetector = new qualityDetector_1.QualityDetector();
-        logger.info('TorrentScraperService iniciado');
+        logger.info('TorrentScraperService v2.0.0 iniciado - Sistema de filas integrado');
     }
     async searchTorrents(query, type = 'movie', targetSeason) {
         const startTime = Date.now();
-        logger.info('Iniciando busca', {
+        logger.info('Iniciando busca com filas', {
             query,
             type,
             targetSeason,
@@ -67,12 +68,10 @@ class TorrentScraperService {
             const mainQuery = query;
             const allPromises = [];
             if (scraperProviders_1.torrentIndexerConfig.enabled) {
-                allPromises.push(this.searchTorrentIndexer(mainQuery, type, targetSeason)
-                    .catch(() => []));
+                allPromises.push(QueueService_1.queueService.executeInQueue('torrent-indexer', () => this.searchTorrentIndexer(mainQuery, type, targetSeason), `TorrentIndexer:${mainQuery.substring(0, 20)}`).catch(() => []));
             }
             for (const provider of this.providers) {
-                allPromises.push(this.searchProvider(provider, mainQuery, type, targetSeason)
-                    .catch(() => []));
+                allPromises.push(QueueService_1.queueService.executeInQueue('scraper-providers', () => this.searchProvider(provider, mainQuery, type, targetSeason), `${provider.name}:${mainQuery.substring(0, 20)}`).catch(() => []));
             }
             const timeoutPromise = new Promise((_, reject) => {
                 setTimeout(() => reject(new Error('Timeout 8s')), 8000);
@@ -85,7 +84,7 @@ class TorrentScraperService {
             });
             const bestResults = await Promise.race([searchPromise, timeoutPromise]);
             const duration = Date.now() - startTime;
-            logger.info('Busca finalizada', {
+            logger.info('Busca finalizada com filas', {
                 query,
                 total: bestResults.length,
                 tempo: `${duration}ms`
@@ -93,9 +92,9 @@ class TorrentScraperService {
             return bestResults;
         }
         catch (error) {
-            logger.error('Erro na busca', {
+            logger.error('Erro na busca com filas', {
                 query,
-                error: error instanceof Error ? error.message : 'Unknown'
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return [];
         }
