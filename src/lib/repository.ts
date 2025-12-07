@@ -1,7 +1,7 @@
 import { Op } from 'sequelize';
 import { Torrent, File, Subtitle } from '../database/models';
 
-// ✅ Exportar os models também
+// Exportar os models também
 export { Torrent, File, Subtitle };
 
 // Funções de query baseadas no Torrentio

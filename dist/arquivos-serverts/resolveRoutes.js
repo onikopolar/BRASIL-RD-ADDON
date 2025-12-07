@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupResolveRoutes = void 0;
 const AutoMagnetService_1 = require("../services/AutoMagnetService");
 const RealDebridService_1 = require("../services/RealDebridService");
+const RdTorrentCacheService_1 = require("../services/RdTorrentCacheService");
 const CacheService_1 = require("../services/CacheService");
 const StaticResponseService_1 = require("../services/StaticResponseService");
 const logger_1 = require("../utils/logger");
@@ -10,7 +11,9 @@ const statusHelpers_1 = require("./statusHelpers");
 const logger = new logger_1.Logger('ResolveRoutes');
 const autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
 const cacheService = new CacheService_1.CacheService();
+const rdTorrentCacheService = new RdTorrentCacheService_1.RdTorrentCacheService();
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+const VERSION = '1.2.0';
 function createStreamFromStaticResponse(staticResponseService, staticResponse, requestId, season, episode) {
     const informativeStream = staticResponseService.createInformativeStream(staticResponse, requestId);
     let titleSuffix = '';
@@ -34,10 +37,13 @@ function createStreamFromStaticResponse(staticResponseService, staticResponse, r
     logger.info('Stream informativo criado', {
         staticResponse,
         requestId,
-        videoUrl: stream.url,
         hasSeasonEpisode: season !== undefined
     });
     return stream;
+}
+function extractMagnetHash(magnet) {
+    const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
+    return match ? match[1].toLowerCase() : null;
 }
 const setupResolveRoutes = (app) => {
     app.get('/resolve/:magnet', async (req, res) => {
@@ -49,8 +55,8 @@ const setupResolveRoutes = (app) => {
         const cacheKey = `resolve:${encodedMagnet}:${apiKey}:${season || 'all'}:${episode || 'all'}:${type}`;
         const cachedDirectLink = cacheService.get(cacheKey);
         if (cachedDirectLink) {
-            logger.info('Cache HIT', {
-                cacheKey,
+            logger.info('Cache HIT - Camada 3', {
+                cacheKey: cacheKey.substring(0, 50) + '...',
                 season,
                 episode,
                 type
@@ -59,8 +65,9 @@ const setupResolveRoutes = (app) => {
         }
         try {
             const magnet = Buffer.from(encodedMagnet, 'base64').toString();
+            const magnetHash = extractMagnetHash(magnet);
             logger.info('Resolvendo magnet', {
-                magnet: magnet.substring(0, 100) + '...',
+                magnetHash: magnetHash?.substring(0, 16) || 'unknown',
                 apiKey: apiKey ? apiKey.substring(0, 8) + '...' : 'none',
                 season,
                 episode,
@@ -88,12 +95,69 @@ const setupResolveRoutes = (app) => {
                 imdbSeason: season,
                 imdbEpisode: episode
             };
-            const rdResult = await autoMagnetService.processRealDebridOnClick(magnetData, apiKey);
-            logger.info('rdResult recebido', {
+            let rdResult;
+            if (magnetHash) {
+                const rdService = new RealDebridService_1.RealDebridService();
+                const torrentInfo = await rdTorrentCacheService.getTorrentId(magnetHash, apiKey, rdService);
+                if (torrentInfo.fromCache) {
+                    logger.debug('Cache de torrent HIT - Camada 1', {
+                        magnetHash,
+                        torrentId: torrentInfo.torrentId,
+                        status: torrentInfo.status
+                    });
+                }
+                if (torrentInfo.torrentId) {
+                    const streamLinkResult = await rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, rdService);
+                    if (streamLinkResult.fromCache) {
+                        logger.debug('Cache de stream link HIT - Camada 2', {
+                            torrentId: torrentInfo.torrentId,
+                            season,
+                            episode
+                        });
+                    }
+                    const torrentDetails = await rdService.getTorrentInfo(torrentInfo.torrentId, apiKey);
+                    if (torrentInfo.status !== torrentDetails.status) {
+                        rdTorrentCacheService.updateTorrentStatus(magnetHash, apiKey, torrentDetails.status);
+                    }
+                    rdResult = {
+                        success: true,
+                        status: torrentDetails.status,
+                        streamLink: streamLinkResult.streamLink || undefined,
+                        message: (0, statusHelpers_1.getStatusMessage)(torrentDetails.status, torrentDetails.progress),
+                        torrentId: torrentInfo.torrentId
+                    };
+                    logger.info('Resultado do cache inteligente', {
+                        magnetHash,
+                        torrentId: torrentInfo.torrentId,
+                        status: torrentDetails.status,
+                        hasStreamLink: !!streamLinkResult.streamLink,
+                        fromCacheLevel: streamLinkResult.fromCache ? '2' : '1'
+                    });
+                }
+                else {
+                    logger.debug('Torrent nao encontrado, processando normalmente', { magnetHash });
+                    const processResult = await autoMagnetService.processRealDebridOnClick(magnetData, apiKey);
+                    rdResult = processResult;
+                    if (processResult.success && processResult.torrentId) {
+                        const torrentId = processResult.torrentId;
+                        rdTorrentCacheService.updateTorrentStatus(magnetHash, apiKey, processResult.status);
+                        logger.info('Novo torrent salvo no cache', {
+                            magnetHash,
+                            torrentId,
+                            status: processResult.status
+                        });
+                    }
+                }
+            }
+            else {
+                const processResult = await autoMagnetService.processRealDebridOnClick(magnetData, apiKey);
+                rdResult = processResult;
+            }
+            logger.info('Resultado RD recebido', {
                 status: rdResult.status,
                 hasStreamLink: !!rdResult.streamLink,
                 success: rdResult.success,
-                message: rdResult.message,
+                torrentId: rdResult.torrentId || 'none',
                 season,
                 episode,
                 type
@@ -102,11 +166,11 @@ const setupResolveRoutes = (app) => {
                 throw new Error(rdResult.message || 'Falha ao processar com Real-Debrid');
             }
             if ((rdResult.status === 'ready' || rdResult.status === 'downloaded') && rdResult.streamLink) {
-                logger.info('Stream instantâneo', {
+                logger.info('Stream instantaneo disponivel', {
                     season,
                     episode,
                     type,
-                    isSeries: isSeries ? 'SIM' : 'NÃO'
+                    isSeries: isSeries ? 'SIM' : 'NAO'
                 });
                 cacheService.set(cacheKey, rdResult.streamLink, CACHE_TTL);
                 return res.redirect(302, rdResult.streamLink);
@@ -143,7 +207,7 @@ const setupResolveRoutes = (app) => {
                 return res.json({ streams: [stream] });
             }
             else {
-                logger.error('Status não reconhecido', {
+                logger.error('Status nao reconhecido', {
                     status: rdResult.status,
                     streamLinkPresent: !!rdResult.streamLink,
                     season,
@@ -159,8 +223,8 @@ const setupResolveRoutes = (app) => {
             }
         }
         catch (error) {
-            logger.error('Erro na resolução', {
-                error: error instanceof Error ? error.message : 'Unknown error',
+            logger.error('Erro na resolucao', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido',
                 encodedMagnet: encodedMagnet.substring(0, 50) + '...',
                 season,
                 episode,
@@ -186,7 +250,7 @@ const setupResolveRoutes = (app) => {
             if (!apiKey) {
                 return res.status(400).json({
                     success: false,
-                    error: 'API key do Real-Debrid é obrigatória'
+                    error: 'API key do Real-Debrid é obrigatoria'
                 });
             }
             const rdService = new RealDebridService_1.RealDebridService();
@@ -194,7 +258,7 @@ const setupResolveRoutes = (app) => {
             if (!magnetHash) {
                 return res.status(400).json({
                     success: false,
-                    error: 'Magnet link inválido'
+                    error: 'Magnet link invalido'
                 });
             }
             const existingTorrent = await rdService.findExistingTorrent(magnetHash, apiKey);
@@ -218,7 +282,7 @@ const setupResolveRoutes = (app) => {
                     status: 'not_found',
                     progress: 0,
                     downloaded: false,
-                    message: 'Torrent não encontrado no Real-Debrid',
+                    message: 'Torrent nao encontrado no Real-Debrid',
                     isSeries: season !== undefined,
                     targetSeason: season,
                     targetEpisode: episode
@@ -227,26 +291,57 @@ const setupResolveRoutes = (app) => {
         }
         catch (error) {
             logger.error('Erro status', {
-                error: error instanceof Error ? error.message : 'Unknown error',
+                error: error instanceof Error ? error.message : 'Erro desconhecido',
                 season,
                 episode
             });
             res.status(500).json({
                 success: false,
-                error: 'Falha: ' + (error instanceof Error ? error.message : 'Unknown error'),
+                error: 'Falha: ' + (error instanceof Error ? error.message : 'Erro desconhecido'),
                 isSeries: season !== undefined,
                 targetSeason: season,
                 targetEpisode: episode
             });
         }
     });
-    logger.info('ResolveRoutes v1.0.0 - Streams informativos otimizados', {
-        features: [
-            'Vídeos locais src/videos/ para status downloading/queued',
-            'Cache 24h para links prontos',
+    app.get('/resolve/cache/stats', async (req, res) => {
+        try {
+            const cacheStats = rdTorrentCacheService.getStats();
+            res.json({
+                success: true,
+                serviceVersion: VERSION,
+                cacheStats: cacheStats
+            });
+        }
+        catch (error) {
+            logger.error('Erro obtendo estatisticas do cache', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
+            res.status(500).json({
+                success: false,
+                error: 'Falha ao obter estatisticas do cache'
+            });
+        }
+    });
+    logger.info(`ResolveRoutes v${VERSION} - Cache inteligente de 2 camadas integrado`, {
+        mudancas: [
+            'Integracao com RdTorrentCacheService',
+            'Cache de 2 camadas: hash->torrent_id (30 dias) + torrent_id->stream_link (24h)',
+            'Reducao drastica de chamadas ao Real-Debrid API',
+            'Reutilizacao inteligente de torrents entre usuarios',
+            'Cache compartilhado por hash de magnet',
+            'Manutencao automatica de cache expirado'
+        ],
+        recursos: [
+            'Camada 1: Cache torrent ID por 30 dias',
+            'Camada 2: Cache stream link por 24 horas',
+            'Camada 3: Cache completo como fallback',
+            'Lock automatico por magnet hash',
+            'Estatisticas de cache via /resolve/cache/stats',
+            'Videos locais para status downloading/queued',
             'Streams no formato Stremio',
             'Status em tempo real',
-            'Suporte a filmes e séries'
+            'Suporte a filmes e series'
         ]
     });
 };

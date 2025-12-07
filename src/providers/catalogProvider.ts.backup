@@ -1,0 +1,866 @@
+import { CuratedMagnetService } from '../services/CuratedMagnetService';
+import { QualityDetector } from '../lib/qualityDetector';
+import { StreamFormatter } from '../lib/streamFormatter';
+import { Stream } from '../types/index';
+import { extractHashFromMagnet } from '../lib/magnetHelper';
+import { Logger } from '../utils/logger';
+import { RealDebridService } from '../services/RealDebridService';
+import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor';
+import { EnhancedSeriesMetadata } from '../lib/title-filter/interfaces';
+import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../lib/repository';
+
+export class CatalogProvider {
+  private readonly logger: Logger;
+  private readonly qualityDetector: QualityDetector;
+  private readonly streamFormatter: StreamFormatter;
+  private readonly rdService: RealDebridService;
+  private readonly metadataExtractor: MetadataExtractor;
+
+  // Mapa: Status RD -> Video estatico
+  private readonly staticVideoMap: Record<string, { video: string; description: string }> = {
+    'downloading': { video: 'downloading_v2.mp4', description: 'Download em andamento no Real-Debrid' },
+    'queued': { video: 'downloading_v2.mp4', description: 'Na fila do Real-Debrid' },
+    'uploading': { video: 'downloading_v2.mp4', description: 'Upload em andamento' },
+    'magnet_conversion': { video: 'downloading_v2.mp4', description: 'Convertendo magnet link' },
+    'waiting_files_selection': { video: 'downloading_v2.mp4', description: 'Aguardando selecao de arquivos' },
+    'error': { video: 'download_failed_v2.mp4', description: 'Erro no download' },
+    'magnet_error': { video: 'failed_access_v2.mp4', description: 'Erro no magnet link' }
+  };
+
+  constructor(
+    private readonly magnetService: CuratedMagnetService
+  ) {
+    this.logger = new Logger('CatalogProvider');
+    this.qualityDetector = new QualityDetector();
+    this.streamFormatter = new StreamFormatter();
+    this.rdService = new RealDebridService();
+    this.metadataExtractor = new MetadataExtractor();
+    
+    // FIX: Atualizacao para versao 3.0.1 - Corrige deduplicacao por URL
+    this.logger.info('CatalogProvider v3.0.1 - Corrige deduplicacao de streams', {
+      version: '3.0.1',
+      fix: 'Corrige metodo deduplicateStreamsByUrl que usava infoHash removido',
+      breakingChange: false,
+      metodoCorrigido: 'deduplicateStreamsByUrl agora usa URL Real-Debrid',
+      motivo: 'Streams agora sao 100% Real-Debrid sem infoHash'
+    });
+  }
+
+  // Principal: Obtem streams do catalogo
+  async getStreamsFromCatalog(request: any): Promise<Stream[]> {
+    this.logger.debug('Busca no catalogo iniciada', {
+      requestId: request.id,
+      type: request.type,
+      temApiKey: !!request.apiKey
+    });
+
+    // 1. Banco PostgreSQL (prioridade)
+    const dbStreams = await this.getStreamsFromDatabase(request);
+    
+    // 2. magnets.json (fallback)
+    const jsonStreams = await this.getStreamsFromJson(request);
+    
+    // 3. Combinar e deduplicar
+    const allStreams = [...dbStreams, ...jsonStreams];
+    const uniqueStreams = this.deduplicateStreamsByUrl(allStreams);
+    
+    this.logger.info('Resultados catalogo obtidos', {
+      total: uniqueStreams.length,
+      doBanco: dbStreams.length,
+      doJson: jsonStreams.length,
+      duplicadosRemovidos: allStreams.length - uniqueStreams.length
+    });
+    
+    return uniqueStreams;
+  }
+
+  // Banco de dados: Busca torrents no PostgreSQL
+  private async getStreamsFromDatabase(request: any): Promise<Stream[]> {
+    const imdbId = request.imdbId || request.id;
+    
+    this.logger.debug('Buscando no banco de dados', {
+      imdbId,
+      type: request.type,
+      temporada: request.season,
+      episodio: request.episode
+    });
+
+    try {
+      let dbEntries: any[] = [];
+      if (request.type === 'movie') {
+        dbEntries = await getImdbIdMovieEntries(imdbId);
+      } else if (request.type === 'series' && request.season !== undefined) {
+        dbEntries = await getImdbIdSeriesEntries(imdbId, request.season, request.episode);
+      }
+
+      this.logger.debug('Resultados banco encontrados', {
+        imdbId,
+        entradasEncontradas: dbEntries.length,
+        type: request.type
+      });
+
+      if (dbEntries.length === 0) {
+        return [];
+      }
+
+      const torrentData = await this.processDatabaseTorrents(dbEntries, request);
+      const sortedTorrents = this.sortTorrentsHierarchically(torrentData);
+      const streams = await this.createStreamsFromDbTorrents(sortedTorrents, request);
+
+      this.logger.info('Streams criados do banco', {
+        imdbId,
+        torrents: dbEntries.length,
+        streams: streams.length,
+        qualidades: this.getQualityDistribution(torrentData)
+      });
+
+      return streams;
+
+    } catch (error) {
+      this.logger.error('Erro na busca no banco', {
+        imdbId,
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+      return [];
+    }
+  }
+
+  // Processar torrents do banco
+  private async processDatabaseTorrents(dbEntries: any[], request: any): Promise<any[]> {
+    const torrents: any[] = [];
+
+    for (const entry of dbEntries) {
+      try {
+        const torrent = entry.Torrent;
+        const magnet = torrent.magnetLink || '';
+        const magnetHash = extractHashFromMagnet(magnet);
+        
+        if (!magnetHash) {
+          this.logger.warn('Torrent sem hash valido', { 
+            titulo: torrent.title.substring(0, 60) 
+          });
+          continue;
+        }
+
+        const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
+        const quality = this.qualityDetector.extractBestQuality(torrent.title) || 'HD';
+        const seeds = torrent.seeders || 50;
+        const size = torrent.size ? this.formatSize(torrent.size) : 'N/A';
+        const language = torrent.languages || 'PT-BR';
+        const qualityScore = this.getQualityScore(quality);
+
+        torrents.push({
+          torrent,
+          metadata,
+          quality,
+          qualityScore,
+          seeds,
+          size,
+          language,
+          magnet,
+          magnetHash,
+          title: torrent.title,
+          requestType: request.type,
+          season: request.season,
+          episode: request.episode
+        });
+
+      } catch (error) {
+        this.logger.warn('Erro ao processar torrent do banco', {
+          error: error instanceof Error ? error.message : 'Erro desconhecido'
+        });
+      }
+    }
+
+    return torrents;
+  }
+
+  // Criar streams a partir de torrents do banco
+  private async createStreamsFromDbTorrents(torrents: any[], request: any): Promise<Stream[]> {
+    const streams: Stream[] = [];
+    const apiKey = request.apiKey || '';
+
+    for (const torrentData of torrents) {
+      try {
+        this.logger.debug('Processando torrent do banco', {
+          titulo: torrentData.title.substring(0, 80),
+          qualidade: torrentData.quality,
+          seeds: torrentData.seeds,
+          magnetHash: torrentData.magnetHash?.substring(0, 16)
+        });
+
+        // Verificar Real-Debrid se tiver API key
+        if (apiKey && torrentData.magnetHash) {
+          try {
+            const existingTorrent = await this.rdService.findExistingTorrent(torrentData.magnetHash, apiKey);
+            
+            if (existingTorrent) {
+              this.logger.info('Torrent encontrado no Real-Debrid', {
+                titulo: torrentData.title.substring(0, 60),
+                statusRd: existingTorrent.status,
+                progresso: existingTorrent.progress || 0
+              });
+
+              const torrentInfo = await this.rdService.getTorrentInfo(existingTorrent.id, apiKey);
+              
+              this.logger.debug('Status Real-Debrid verificado', {
+                status: torrentInfo.status,
+                progresso: torrentInfo.progress
+              });
+
+              const mappedStatus = this.mapRdStatus(torrentInfo.status);
+              
+              if (mappedStatus === 'downloaded') {
+                const streamLink = await this.rdService.getStreamLinkForTorrent(
+                  existingTorrent.id,
+                  apiKey,
+                  torrentData.season,
+                  torrentData.episode
+                );
+                
+                if (streamLink) {
+                  this.logger.info('Link direto Real-Debrid encontrado', {
+                    titulo: torrentData.title.substring(0, 60),
+                    qualidade: torrentData.quality
+                  });
+
+                  // Delegar para StreamFormatter
+                  const formattedTorrent = {
+                    title: torrentData.title,
+                    magnet: torrentData.magnet,
+                    seeders: torrentData.seeds,
+                    size: torrentData.size,
+                    quality: torrentData.quality,
+                    language: torrentData.language
+                  };
+                  
+                  const streamArrays = this.streamFormatter.createMultipleQualityStreams(
+                    formattedTorrent,
+                    request,
+                    streamLink,
+                    torrentData.requestType,
+                    torrentData.season,
+                    torrentData.episode,
+                    true
+                  );
+                  
+                  streams.push(...streamArrays);
+                  continue;
+                }
+              } 
+              else if (mappedStatus === 'downloading' || mappedStatus === 'queued') {
+                const staticStream = this.createStaticVideoStreamFromDbTorrent(
+                  torrentData,
+                  torrentInfo.status,
+                  torrentInfo.progress || 0,
+                  request
+                );
+                
+                streams.push(staticStream);
+                continue;
+              }
+              else if (mappedStatus === 'error') {
+                const errorStream = this.createErrorVideoStreamFromDbTorrent(
+                  torrentData,
+                  torrentInfo.status,
+                  request
+                );
+                
+                streams.push(errorStream);
+                continue;
+              }
+            }
+          } catch (rdError) {
+            this.logger.warn('Erro ao verificar Real-Debrid', {
+              titulo: torrentData.title.substring(0, 60),
+              error: rdError instanceof Error ? rdError.message : 'Erro desconhecido'
+            });
+          }
+        }
+
+        // Delegar para StreamFormatter quando nao tem link Real-Debrid
+        const formattedTorrent = {
+          title: torrentData.title,
+          magnet: torrentData.magnet,
+          seeders: torrentData.seeds,
+          size: torrentData.size,
+          quality: torrentData.quality,
+          language: torrentData.language
+        };
+        
+        const streamArrays = this.streamFormatter.createMultipleQualityStreams(
+          formattedTorrent,
+          request,
+          null,
+          torrentData.requestType,
+          torrentData.season,
+          torrentData.episode,
+          false
+        );
+
+        streams.push(...streamArrays);
+
+      } catch (error) {
+        this.logger.error('Erro ao criar stream do banco', {
+          titulo: torrentData.title.substring(0, 60),
+          error: error instanceof Error ? error.message : 'Erro desconhecido'
+        });
+      }
+    }
+
+    return streams;
+  }
+
+  // Criar stream com video estatico para torrent do banco
+  private createStaticVideoStreamFromDbTorrent(
+    torrentData: any,
+    rdStatus: string,
+    progress: number,
+    request: any
+  ): Stream {
+    const videoInfo = this.staticVideoMap[rdStatus] || this.staticVideoMap['downloading'];
+    const staticVideoUrl = `${this.getBaseUrl()}/static/videos/${videoInfo.video}`;
+    const statusDescricao = `${videoInfo.description} (${progress}%)`;
+    const baseDescricao = `${torrentData.title}\n${torrentData.seeds} seeds | ${torrentData.size} | ${this.formatLanguage(torrentData.language)}\n${statusDescricao}`;
+
+    this.logger.info('Stream video estatico criado', {
+      titulo: torrentData.title.substring(0, 60),
+      status: rdStatus,
+      progresso: progress,
+      video: videoInfo.video
+    });
+
+    const behaviorHints: any = {
+      notWebReady: false,
+      bingeGroup: `brasil-rd-static-${torrentData.requestType}-${torrentData.quality}`,
+      filename: this.sanitizeFilename(`${torrentData.title} - ${rdStatus}`),
+      isStaticVideo: true,
+      rdStatus: rdStatus,
+      rdProgress: progress
+    };
+
+    return {
+      title: `Brasil RD (${torrentData.quality}) - ${this.getStatusText(rdStatus)}`,
+      name: `Brasil RD (${torrentData.quality})`,
+      description: baseDescricao,
+      sources: [staticVideoUrl],
+      behaviorHints: behaviorHints,
+      status: 'ready'
+    };
+  }
+
+  // Criar stream com video de erro para torrent do banco
+  private createErrorVideoStreamFromDbTorrent(
+    torrentData: any,
+    rdStatus: string,
+    request: any
+  ): Stream {
+    const videoInfo = this.staticVideoMap[rdStatus] || this.staticVideoMap['error'];
+    const staticVideoUrl = `${this.getBaseUrl()}/static/videos/${videoInfo.video}`;
+    const erroDescricao = `Real-Debrid: ${this.getRdStatusDescription(rdStatus)}`;
+    const baseDescricao = `${torrentData.title}\n${torrentData.seeds} seeds | ${torrentData.size} | ${this.formatLanguage(torrentData.language)}\n${erroDescricao}`;
+
+    this.logger.warn('Stream de erro criado', {
+      titulo: torrentData.title.substring(0, 60),
+      status: rdStatus,
+      video: videoInfo.video
+    });
+
+    const behaviorHints: any = {
+      notWebReady: false,
+      bingeGroup: `brasil-rd-error-${torrentData.requestType}-${torrentData.quality}`,
+      filename: this.sanitizeFilename(`${torrentData.title} - ERROR`),
+      isErrorVideo: true,
+      rdStatus: rdStatus
+    };
+
+    return {
+      title: `Brasil RD (${torrentData.quality}) - Erro`,
+      name: `Brasil RD (${torrentData.quality})`,
+      description: baseDescricao,
+      sources: [staticVideoUrl],
+      behaviorHints: behaviorHints,
+      status: 'ready'
+    };
+  }
+
+  // Ordenar torrents hierarquicamente
+  private sortTorrentsHierarchically(torrents: any[]): any[] {
+    return torrents.sort((a, b) => {
+      if (b.qualityScore !== a.qualityScore) {
+        return b.qualityScore - a.qualityScore;
+      }
+      
+      if (b.seeds !== a.seeds) {
+        return b.seeds - a.seeds;
+      }
+      
+      const sizeA = this.parseSizeToBytes(a.size);
+      const sizeB = this.parseSizeToBytes(b.size);
+      if (sizeB !== sizeA) {
+        return sizeB - sizeA;
+      }
+      
+      return a.title.localeCompare(b.title);
+    });
+  }
+
+  // Busca no magnets.json
+  private async getStreamsFromJson(request: any): Promise<Stream[]> {
+    try {
+      const curatedMagnets = this.magnetService.searchMagnets(request);
+
+      this.logger.debug('Resultados JSON obtidos', {
+        magnetsEncontrados: curatedMagnets.length,
+        imdbId: request.imdbId || request.id
+      });
+
+      if (curatedMagnets.length === 0) {
+        return [];
+      }
+
+      const streams: Stream[] = [];
+      
+      for (const magnet of curatedMagnets) {
+        try {
+          const stream = await this.processJsonMagnetWithRdStatus(magnet, request);
+          if (stream) {
+            streams.push(stream);
+          }
+        } catch (error) {
+          this.logger.error('Erro ao processar magnet do JSON', {
+            titulo: magnet.title.substring(0, 60),
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
+          });
+        }
+      }
+
+      this.logger.info('Streams do JSON criados', {
+        quantidade: streams.length
+      });
+
+      return streams;
+
+    } catch (error) {
+      this.logger.error('Erro na busca no JSON', {
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+      return [];
+    }
+  }
+
+  // Processar magnet com verificacao Real-Debrid
+  private async processJsonMagnetWithRdStatus(magnet: any, request: any): Promise<Stream | null> {
+    try {
+      const magnetLink = magnet.magnet || '';
+      const magnetHash = extractHashFromMagnet(magnetLink);
+      
+      if (!magnetHash) {
+        this.logger.warn('Magnet sem hash valido', { titulo: magnet.title.substring(0, 60) });
+        return null;
+      }
+
+      const enhancedMetadata = this.metadataExtractor.extractEnhancedMetadata(magnet.title);
+      const metadataQuality = enhancedMetadata.quality || 'unknown';
+      const extractedQuality = this.qualityDetector.extractQualityFromFilename(magnet.title);
+      const quality = (metadataQuality !== 'unknown' ? metadataQuality : 
+                      (extractedQuality || 'HD')).toString();
+      
+      const season = enhancedMetadata.season || magnet.season;
+      const episode = enhancedMetadata.episode || magnet.episode;
+      const isSeries = request.type === 'series' || enhancedMetadata.mediaType === 'series';
+      
+      const apiKey = request.apiKey || '';
+      
+      // Verificar Real-Debrid se tiver API key
+      if (apiKey) {
+        try {
+          const existingTorrent = await this.rdService.findExistingTorrent(magnetHash, apiKey);
+          
+          if (existingTorrent) {
+            this.logger.info('Torrent encontrado no Real-Debrid', {
+              titulo: magnet.title.substring(0, 60),
+              statusRd: existingTorrent.status,
+              progresso: existingTorrent.progress || 0
+            });
+
+            const torrentInfo = await this.rdService.getTorrentInfo(existingTorrent.id, apiKey);
+            
+            this.logger.debug('Status Real-Debrid verificado', {
+              status: torrentInfo.status,
+              progresso: torrentInfo.progress
+            });
+
+            const mappedStatus = this.mapRdStatus(torrentInfo.status);
+            
+            if (mappedStatus === 'downloaded') {
+              const streamLink = await this.rdService.getStreamLinkForTorrent(
+                existingTorrent.id,
+                apiKey,
+                season,
+                episode
+              );
+              
+              if (streamLink) {
+                this.logger.info('Link direto Real-Debrid encontrado', {
+                  titulo: magnet.title.substring(0, 60),
+                  qualidade: quality
+                });
+
+                // Delegar para StreamFormatter
+                const formattedTorrent = {
+                  title: magnet.title,
+                  magnet: magnetLink,
+                  seeders: magnet.seeds || 0,
+                  size: magnet.size || 'N/A',
+                  quality: quality,
+                  language: magnet.language || 'PT-BR'
+                };
+                
+                const streamArrays = this.streamFormatter.createMultipleQualityStreams(
+                  formattedTorrent,
+                  request,
+                  streamLink,
+                  isSeries ? 'series' : 'movie',
+                  season,
+                  episode,
+                  true
+                );
+                
+                if (streamArrays.length > 0) {
+                  return streamArrays[0];
+                }
+                return null;
+              }
+            } 
+            else if (mappedStatus === 'downloading' || mappedStatus === 'queued') {
+              return this.createStaticVideoStreamFromJsonMagnet(
+                magnet,
+                quality,
+                torrentInfo.status,
+                torrentInfo.progress || 0,
+                isSeries ? 'series' : 'movie',
+                season,
+                episode,
+                enhancedMetadata,
+                request
+              );
+            }
+            else if (mappedStatus === 'error') {
+              return this.createErrorVideoStreamFromJsonMagnet(
+                magnet,
+                quality,
+                torrentInfo.status,
+                isSeries ? 'series' : 'movie',
+                season,
+                episode,
+                enhancedMetadata,
+                request
+              );
+            }
+          }
+        } catch (rdError) {
+          this.logger.warn('Erro ao verificar Real-Debrid', {
+            error: rdError instanceof Error ? rdError.message : 'Erro desconhecido'
+          });
+        }
+      }
+
+      // Delegar para StreamFormatter quando nao tem link Real-Debrid
+      const formattedTorrent = {
+        title: magnet.title,
+        magnet: magnetLink,
+        seeders: magnet.seeds || 0,
+        size: magnet.size || 'N/A',
+        quality: quality,
+        language: magnet.language || 'PT-BR'
+      };
+      
+      const streamArrays = this.streamFormatter.createMultipleQualityStreams(
+        formattedTorrent,
+        request,
+        null,
+        isSeries ? 'series' : 'movie',
+        season,
+        episode,
+        false
+      );
+      
+      if (streamArrays.length > 0) {
+        return streamArrays[0];
+      }
+      return null;
+
+    } catch (error) {
+      this.logger.error('Erro ao processar magnet do JSON', {
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
+      return null;
+    }
+  }
+
+  // Criar stream com video estatico para magnet JSON
+  private createStaticVideoStreamFromJsonMagnet(
+    magnet: any,
+    quality: string,
+    rdStatus: string,
+    progress: number,
+    type: 'movie' | 'series',
+    season: number | undefined,
+    episode: number | undefined,
+    metadata: EnhancedSeriesMetadata,
+    request: any
+  ): Stream {
+    const videoInfo = this.staticVideoMap[rdStatus] || this.staticVideoMap['downloading'];
+    const staticVideoUrl = `${this.getBaseUrl()}/static/videos/${videoInfo.video}`;
+    const statusDescricao = `${videoInfo.description} (${progress}%)`;
+    const baseDescricao = `${magnet.title}\n${magnet.seeds || 0} seeds | ${magnet.size || 'N/A'} | ${this.formatLanguage(magnet.language || 'PT-BR')}\n${statusDescricao}`;
+
+    this.logger.info('Stream video estatico JSON criado', {
+      titulo: magnet.title.substring(0, 60),
+      status: rdStatus,
+      progresso: progress,
+      video: videoInfo.video
+    });
+
+    const behaviorHints: any = {
+      notWebReady: false,
+      bingeGroup: `brasil-rd-static-${type}-${quality}`,
+      filename: this.sanitizeFilename(`${magnet.title} - ${rdStatus}`),
+      isStaticVideo: true,
+      rdStatus: rdStatus,
+      rdProgress: progress
+    };
+
+    return {
+      title: `Brasil RD (${quality}) - ${this.getStatusText(rdStatus)}`,
+      name: `Brasil RD (${quality})`,
+      description: baseDescricao,
+      sources: [staticVideoUrl],
+      behaviorHints: behaviorHints,
+      status: 'ready'
+    };
+  }
+
+  // Criar stream com video de erro para magnet JSON
+  private createErrorVideoStreamFromJsonMagnet(
+    magnet: any,
+    quality: string,
+    rdStatus: string,
+    type: 'movie' | 'series',
+    season: number | undefined,
+    episode: number | undefined,
+    metadata: EnhancedSeriesMetadata,
+    request: any
+  ): Stream {
+    const videoInfo = this.staticVideoMap[rdStatus] || this.staticVideoMap['error'];
+    const staticVideoUrl = `${this.getBaseUrl()}/static/videos/${videoInfo.video}`;
+    const erroDescricao = `Real-Debrid: ${this.getRdStatusDescription(rdStatus)}`;
+    const baseDescricao = `${magnet.title}\n${magnet.seeds || 0} seeds | ${magnet.size || 'N/A'} | ${this.formatLanguage(magnet.language || 'PT-BR')}\n${erroDescricao}`;
+
+    this.logger.warn('Stream de erro JSON criado', {
+      titulo: magnet.title.substring(0, 60),
+      status: rdStatus,
+      video: videoInfo.video
+    });
+
+    const behaviorHints: any = {
+      notWebReady: false,
+      bingeGroup: `brasil-rd-error-${type}-${quality}`,
+      filename: this.sanitizeFilename(`${magnet.title} - ERROR`),
+      isErrorVideo: true,
+      rdStatus: rdStatus
+    };
+
+    return {
+      title: `Brasil RD (${quality}) - Erro`,
+      name: `Brasil RD (${quality})`,
+      description: baseDescricao,
+      sources: [staticVideoUrl],
+      behaviorHints: behaviorHints,
+      status: 'ready'
+    };
+  }
+
+  // FIX: Corrigir metodo deduplicateStreamsByUrl - agora usa URL Real-Debrid
+  private deduplicateStreamsByUrl(streams: Stream[]): Stream[] {
+    const seenUrls = new Set<string>();
+    const uniqueStreams: Stream[] = [];
+    
+    for (const stream of streams) {
+      const streamUrl = stream.sources && stream.sources[0];
+      
+      if (!streamUrl) {
+        this.logger.warn('Stream sem URL encontrado', { name: stream.name });
+        continue;
+      }
+      
+      if (seenUrls.has(streamUrl)) {
+        continue;
+      }
+      
+      seenUrls.add(streamUrl);
+      uniqueStreams.push(stream);
+    }
+    
+    if (streams.length !== uniqueStreams.length) {
+      this.logger.debug('Streams deduplicados por URL', {
+        antes: streams.length,
+        depois: uniqueStreams.length,
+        removidos: streams.length - uniqueStreams.length
+      });
+    }
+    
+    return uniqueStreams;
+  }
+
+  // Mapear status Real-Debrid
+  private mapRdStatus(rdStatus: string): 'downloaded' | 'downloading' | 'queued' | 'error' | 'unknown' {
+    const statusMap: Record<string, 'downloaded' | 'downloading' | 'queued' | 'error' | 'unknown'> = {
+      'downloaded': 'downloaded',
+      'dead': 'downloaded',
+      'downloading': 'downloading',
+      'uploading': 'downloading',
+      'queued': 'queued',
+      'magnet_conversion': 'queued',
+      'waiting_files_selection': 'queued',
+      'error': 'error',
+      'magnet_error': 'error',
+      'virus': 'error',
+      'compressing': 'downloading',
+      'uploaded': 'downloading'
+    };
+    
+    return statusMap[rdStatus] || 'unknown';
+  }
+
+  // Obter URL base
+  private getBaseUrl(): string {
+    const domain = process.env.RAILWAY_STATIC_URL || "localhost:7000";
+    const protocol = process.env.RAILWAY_STATIC_URL ? "https" : "http";
+    return `${protocol}://${domain}`;
+  }
+
+  // Obter texto por status
+  private getStatusText(status: string): string {
+    const textMap: Record<string, string> = {
+      'downloading': 'Processando',
+      'uploading': 'Processando',
+      'queued': 'Na fila',
+      'magnet_conversion': 'Convertendo',
+      'waiting_files_selection': 'Aguardando',
+      'compressing': 'Comprimindo',
+      'uploaded': 'Upload',
+      'error': 'Erro',
+      'magnet_error': 'Erro magnet',
+      'virus': 'Virus'
+    };
+    return textMap[status] || 'Processando';
+  }
+
+  // Obter descricao do status Real-Debrid
+  private getRdStatusDescription(status: string): string {
+    const descriptionMap: Record<string, string> = {
+      'downloading': 'Download em andamento',
+      'uploading': 'Upload em andamento',
+      'queued': 'Na fila de download',
+      'magnet_conversion': 'Convertendo magnet link',
+      'waiting_files_selection': 'Aguardando selecao de arquivos',
+      'error': 'Erro no download',
+      'magnet_error': 'Erro no magnet link',
+      'virus': 'Virus detectado',
+      'compressing': 'Comprimindo arquivos',
+      'uploaded': 'Upload completo'
+    };
+    return descriptionMap[status] || status;
+  }
+
+  // Score de qualidade
+  private getQualityScore(quality: string): number {
+    const scores: Record<string, number> = {
+      '2160p': 100,
+      '4k': 100,
+      '1080p': 80,
+      '720p': 60,
+      'HD': 40,
+      'SD': 20
+    };
+    return scores[quality] || 30;
+  }
+
+  // Distribuicao de qualidades
+  private getQualityDistribution(torrents: any[]): string {
+    const count: Record<string, number> = {};
+    for (const t of torrents) {
+      count[t.quality] = (count[t.quality] || 0) + 1;
+    }
+    return Object.entries(count)
+      .map(([q, c]) => `${q}:${c}`)
+      .join(', ');
+  }
+
+  // Funcoes utilitarias
+  private formatLanguage(language: string): string {
+    if (!language) return 'PT-BR';
+    
+    const langMap: Record<string, string> = {
+      'pt-BR': 'PT-BR',
+      'pt-BR,en': 'Dual',
+      'en': 'EN',
+      'dual': 'Dual',
+      'multi': 'Multi',
+      'pt': 'PT-BR',
+      'pt-BR,en-US': 'Dual',
+      'pt-BR,en-US,ja-JP': 'Multi'
+    };
+    return langMap[language] || language;
+  }
+
+  private formatSize(bytes: number): string {
+    if (bytes < 1024 * 1024) {
+      return `${(bytes / 1024).toFixed(1)} KB`;
+    } else if (bytes < 1024 * 1024 * 1024) {
+      return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+    } else {
+      return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+    }
+  }
+
+  private parseSizeToBytes(sizeStr: string): number {
+    if (!sizeStr || sizeStr === 'N/A') return 0;
+    
+    const match = sizeStr.match(/(\d+(?:\.\d+)?)\s*(KB|MB|GB)/i);
+    if (!match) return 0;
+    
+    const value = parseFloat(match[1]);
+    const unit = match[2].toUpperCase();
+    
+    switch (unit) {
+      case 'KB': return value * 1024;
+      case 'MB': return value * 1024 * 1024;
+      case 'GB': return value * 1024 * 1024 * 1024;
+      default: return value;
+    }
+  }
+
+  private sanitizeFilename(filename: string): string {
+    return filename
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .substring(0, 255);
+  }
+
+  // Estatisticas do CatalogProvider
+  getStats() {
+    return {
+      version: '3.0.1',
+      fix: 'Corrige deduplicacao por URL Real-Debrid',
+      metodoCorrigido: 'deduplicateStreamsByUrl',
+      responsabilidades: [
+        'Busca torrents no banco',
+        'Busca torrents no JSON',
+        'Verifica status Real-Debrid',
+        'Delega formatacao para StreamFormatter'
+      ]
+    };
+  }
+}
