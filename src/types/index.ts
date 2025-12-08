@@ -1,18 +1,19 @@
 export interface Stream {
   title: string;
-  name: string;
-  description: string;
-  sources: string[];
+  name?: string;           // Alterado para opcional
+  description?: string;    // Alterado para opcional
+  sources?: string[];      // Alterado para opcional
   behaviorHints?: {
     notWebReady?: boolean;
     bingeGroup?: string;
     filename?: string;
-    streamQuality?: string; // Adicionado para compatibilidade com StreamFormatter v1.3.3
+    streamQuality?: string; // Adicione se você usa
+    packageContent?: boolean; // Adicione se você usa
   };
   status?: string;
   torrentId?: string;
-  infoHash?: string;
-  fileIdx?: number;
+  infoHash?: string;       // Mantido opcional (mas essencial para nós)
+  fileIdx?: number;        // ADICIONADO: índice do arquivo no torrent
   magnet?: string;
   url?: string;
 }

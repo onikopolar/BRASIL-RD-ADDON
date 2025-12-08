@@ -55,31 +55,45 @@ class StreamHandler {
         const seenCombinations = new Set();
         const uniqueStreams = [];
         for (const stream of streams) {
-            let infoHash;
-            if (stream.infoHash)
-                infoHash = stream.infoHash.toLowerCase();
-            else if (stream.sources && stream.sources[0]) {
-                const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
-                if (magnetMatch)
-                    infoHash = magnetMatch[1].toLowerCase();
+            let infoHash = stream.infoHash?.toLowerCase();
+            let quality = 'unknown';
+            if (stream.behaviorHints?.streamQuality) {
+                quality = stream.behaviorHints.streamQuality;
             }
-            const qualityMatch = stream.name?.match(/\((\d+p|4K|HD|SD)\)/);
-            const quality = qualityMatch ? qualityMatch[1] : 'unknown';
-            const uniqueKey = infoHash ? `${infoHash}_${quality}` : stream.name;
-            if (seenCombinations.has(uniqueKey)) {
-                this.stats.duplicatesRemoved++;
-                continue;
+            else if (stream.title) {
+                const qualityMatch = stream.title.match(/\((\d+p|4K|HD|SD|2160p|1080p|720p|480p)\)/i);
+                if (qualityMatch) {
+                    quality = qualityMatch[1].toLowerCase();
+                }
+            }
+            let uniqueKey;
+            if (infoHash) {
+                uniqueKey = `${infoHash}_${quality}`;
             }
             else {
-                seenCombinations.add(uniqueKey);
-                uniqueStreams.push(stream);
+                this.logger.warn('Stream sem infoHash encontrado, usando título para dedup', {
+                    title: stream.title?.substring(0, 50)
+                });
+                uniqueKey = stream.title || `stream_${Math.random()}`;
             }
+            if (seenCombinations.has(uniqueKey)) {
+                this.stats.duplicatesRemoved++;
+                this.logger.debug('Stream duplicado removido', {
+                    infoHash: infoHash ? `${infoHash.substring(0, 8)}...` : 'none',
+                    quality: quality,
+                    uniqueKey: uniqueKey
+                });
+                continue;
+            }
+            seenCombinations.add(uniqueKey);
+            uniqueStreams.push(stream);
         }
         if (streams.length !== uniqueStreams.length) {
-            this.logger.debug('Streams deduplicados', {
-                antes: streams.length,
-                depois: uniqueStreams.length,
-                removidos: streams.length - uniqueStreams.length
+            this.logger.debug('Deduplicação de streams concluída', {
+                totalInicial: streams.length,
+                totalFinal: uniqueStreams.length,
+                duplicadosRemovidos: streams.length - uniqueStreams.length,
+                formato: 'v1.4.0_compatible'
             });
         }
         return uniqueStreams;

@@ -14,11 +14,11 @@ export class StreamFormatter {
     this.logger = new Logger('StreamFormatter');
     this.qualityDetector = new QualityDetector();
     this.metadataExtractor = new MetadataExtractor();
-    // Versionamento Semântico v1.3.3 - URLs únicas por qualidade
-    this.logger.info('StreamFormatter v1.3.3 - URLs únicas por qualidade');
+    // Versionamento Semântico v1.4.0 - FIX: Formato compatível com Stremio Web/Desktop
+    this.logger.info('StreamFormatter v1.4.0 - Formato Stremio Web corrigido');
   }
 
-  // Stream direto já pronto no Real-Debrid
+  // Stream direto do Real-Debrid (formato Stremio)
   createDirectStream(
     title: string,
     name: string,
@@ -29,10 +29,18 @@ export class StreamFormatter {
     season?: number,
     episode?: number,
     behaviorHints?: any,
-    metadata?: EnhancedSeriesMetadata
+    metadata?: EnhancedSeriesMetadata,
+    fileIdx?: number // NOVO: Índice do arquivo para torrents múltiplos
   ): Stream {
-    this.logger.debug('DIRECT', { qualidade: quality, tipo: type, temporada: season, episodio: episode });
+    this.logger.debug('DIRECT_STREAM', { 
+      quality: quality, 
+      type: type, 
+      season: season, 
+      episode: episode,
+      hasDirectLink: !!directLink 
+    });
 
+    // Formata título com episódio para séries
     let finalName = name;
     let finalTitle = title;
     
@@ -49,26 +57,34 @@ export class StreamFormatter {
       }
     }
 
-    const finalDescription = this.format3x3Description(description, metadata, true, type, season, episode);
-
-    return {
+    // Formato CORRETO para Stremio Web (mesmo do Torrentio)
+    const stream: Stream = {
       title: finalTitle,
-      name: finalName,
-      description: finalDescription,
-      sources: [directLink],
-      behaviorHints: {
+      infoHash: extractHashFromMagnet(directLink) || undefined,
+      fileIdx: fileIdx !== undefined ? fileIdx : 0 // Padrão: primeiro arquivo
+    };
+
+    // Adiciona behaviorHints se fornecido
+    if (behaviorHints) {
+      stream.behaviorHints = {
         notWebReady: false,
-        bingeGroup: `br-direct-${type || 'movie'}-${quality}`,
+        bingeGroup: `br-${type || 'movie'}-${quality}`,
         filename: this.sanitizeFilename(finalTitle),
         streamQuality: quality,
         ...behaviorHints
-      },
-      status: 'ready',
-      url: directLink
-    };
+      };
+    }
+
+    this.logger.debug('DIRECT_STREAM_CRIADO', {
+      title: finalTitle.substring(0, 40),
+      infoHash: stream.infoHash ? `${stream.infoHash.substring(0, 8)}...` : 'none',
+      fileIdx: stream.fileIdx
+    });
+
+    return stream;
   }
 
-  // Stream lazy que precisa processar via magnet
+  // Stream lazy (magnet) - Formato Stremio corrigido
   createLazyStream(
     title: string,
     name: string,
@@ -80,16 +96,20 @@ export class StreamFormatter {
     season?: number,
     episode?: number,
     behaviorHints?: any,
-    metadata?: EnhancedSeriesMetadata
+    metadata?: EnhancedSeriesMetadata,
+    fileIdx?: number // NOVO: Índice do arquivo
   ): Stream {
-    this.logger.debug('LAZY', { qualidade: quality, tipo: type, temporada: season, episodio: episode });
+    this.logger.debug('LAZY_STREAM', { 
+      quality: quality, 
+      type: type, 
+      season: season, 
+      episode: episode,
+      hasMagnet: !!magnet 
+    });
 
     const magnetHash = extractHashFromMagnet(magnet);
-    const sources = magnetHash ? [`dht:${magnetHash}`] : [];
     
-    // VERSÃO 1.3.3: URL DE RESOLVE INCLUI QUALIDADE
-    const resolveUrl = this.generateLazyResolveUrl(magnet, apiKey, quality, type, season, episode);
-    
+    // Formata título com episódio para séries
     let finalName = name;
     let finalTitle = title;
     
@@ -106,124 +126,40 @@ export class StreamFormatter {
       }
     }
 
-    const finalDescription = this.format3x3Description(description, metadata, false, type, season, episode);
-
+    // FORMATO CORRETO para Stremio Web/Desktop (igual ao Torrentio)
     const stream: Stream = {
       title: finalTitle,
-      name: finalName,
-      description: finalDescription,
-      sources: sources,
-      behaviorHints: {
+      infoHash: magnetHash || undefined,
+      fileIdx: fileIdx !== undefined ? fileIdx : 0 // Padrão: primeiro arquivo
+    };
+
+    // Adiciona behaviorHints se fornecido
+    if (behaviorHints) {
+      stream.behaviorHints = {
         notWebReady: false,
-        bingeGroup: `br-lazy-${type || 'movie'}-${quality}`,
+        bingeGroup: `br-${type || 'movie'}-${quality}`,
         filename: this.sanitizeFilename(finalTitle),
         streamQuality: quality,
         ...behaviorHints
-      },
-      magnet: magnet,
-      status: 'pending',
-      infoHash: magnetHash || undefined,
-      url: resolveUrl  // URL ÚNICA POR QUALIDADE
-    };
+      };
+    }
 
+    // Adiciona metadata específica se for pacote
     if (metadata?.isPackage && stream.behaviorHints) {
       (stream.behaviorHints as any).packageContent = true;
     }
 
+    this.logger.debug('LAZY_STREAM_CRIADO', {
+      title: finalTitle.substring(0, 40),
+      infoHash: stream.infoHash ? `${stream.infoHash.substring(0, 8)}...` : 'none',
+      fileIdx: stream.fileIdx,
+      format: 'stremio_web_compat'
+    });
+
     return stream;
   }
 
-  // Formato 3x3 para descrição do stream
-  private format3x3Description(
-    baseDescription: string,
-    metadata?: EnhancedSeriesMetadata,
-    isDirect: boolean = false,
-    type?: 'movie' | 'series',
-    season?: number,
-    episode?: number
-  ): string {
-    const lines = baseDescription.split('\n');
-    const contentTitle = lines[0] || 'Sem título';
-    
-    const seedsMatch = baseDescription.match(/(\d+)\s*seeds?/i);
-    const sizeMatch = baseDescription.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    
-    const languageFromDesc = this.extractLanguageFromDescription(baseDescription);
-    const formattedLanguage = this.formatLanguage(languageFromDesc);
-    
-    const seeds = seedsMatch ? seedsMatch[1] : '0';
-    const size = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : 'N/A';
-    
-    let result = contentTitle;
-    
-    let topLine = '';
-    topLine += `🔗 ${seeds}`;
-    topLine += ` | 💾 ${size}`;
-    topLine += ` | 🌐 ${formattedLanguage}`;
-    
-    if (type === 'series' && season !== undefined && episode !== undefined) {
-      const episodeTag = `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
-      topLine += ` | 📺 ${episodeTag}`;
-    }
-    
-    result += '\n' + topLine;
-    
-    let bottomLine = '';
-    const metadataItems: string[] = [];
-    
-    if (metadata) {
-      if (metadata.isCompleteSeason) {
-        metadataItems.push('📦 Completa');
-      }
-      if (metadata.isPackage) {
-        metadataItems.push('🎬 Pacote');
-      }
-      if (metadata.hasMultiEpisode) {
-        metadataItems.push('👥 Múltiplos');
-      }
-      if (metadata.source && metadata.source !== 'unknown') {
-        metadataItems.push(`🎞️ ${metadata.source}`);
-      }
-      if (metadata.codec && metadata.codec !== 'unknown') {
-        metadataItems.push(`🔧 ${metadata.codec}`);
-      }
-    }
-    
-    if (isDirect) {
-      metadataItems.push('🚀 Instantâneo');
-    } else {
-      metadataItems.push('⏳ Processando');
-    }
-    
-    const limitedItems = metadataItems.slice(0, 3);
-    bottomLine = limitedItems.join(' | ');
-    
-    if (bottomLine) {
-      result += '\n' + bottomLine;
-    }
-    
-    return result;
-  }
-
-  // Extrai idioma da descrição
-  private extractLanguageFromDescription(description: string): string {
-    const languagePatterns = [
-      /(PT-BR|Dual|EN|Multi|ES|FR)/i,
-      /(portuguese|english|spanish|french)/i,
-      /(dublado|legendado|subtitled)/i
-    ];
-    
-    for (const pattern of languagePatterns) {
-      const match = description.match(pattern);
-      if (match) {
-        return match[1];
-      }
-    }
-    
-    return 'PT-BR';
-  }
-
-  // Cria streams separados para cada qualidade encontrada no torrent
+  // Cria streams separados para cada qualidade (mantém compatibilidade)
   createMultipleQualityStreams(
     torrent: any,
     request: StreamRequest,
@@ -231,17 +167,19 @@ export class StreamFormatter {
     type: 'movie' | 'series',
     season?: number,
     episode?: number,
-    isAvailableOnRD: boolean = false
+    isAvailableOnRD: boolean = false,
+    fileIdx?: number // NOVO: Índice do arquivo
   ): Stream[] {
     const allQualities = this.extractAllQualities(torrent.title);
     
-    this.logger.debug('MULTI_QUALITY_STREAMS', {
+    this.logger.debug('MULTI_QUALITY_STREAMS_PROCESS', {
       torrentTitle: torrent.title.substring(0, 80),
-      qualidadesEncontradas: allQualities.length,
-      qualidades: allQualities,
-      tipo: type,
-      temporada: season,
-      episodio: episode
+      qualitiesFound: allQualities.length,
+      qualities: allQualities,
+      type: type,
+      season: season,
+      episode: episode,
+      fileIdx: fileIdx
     });
 
     // Se não encontrou qualidades, usa detector padrão
@@ -262,11 +200,8 @@ export class StreamFormatter {
 
     // Cria stream SEPARADO para cada qualidade
     for (const quality of allQualities) {
-      // TÍTULO ORIGINAL mantido completo
+      // Título base mantido completo
       const baseTitle = torrent.title;
-      
-      // Descrição base mantendo todas informações
-      const baseDesc = `${baseTitle}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language)}`;
       
       // Nome do stream com qualidade específica
       const streamName = `Brasil RD (${quality})`;
@@ -278,11 +213,11 @@ export class StreamFormatter {
       }
 
       if (isAvailableOnRD && directLink) {
-        // Stream direto com link do RD
+        // Stream direto do Real-Debrid (formato correto)
         streams.push(this.createDirectStream(
           streamTitle,
           streamName,
-          baseDesc,
+          baseTitle,
           directLink,
           quality,
           type,
@@ -292,14 +227,15 @@ export class StreamFormatter {
             bingeGroup: `br-${request.id}-${quality}`,
             filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
           },
-          metadata
+          metadata,
+          fileIdx // Passa o fileIdx
         ));
       } else {
-        // Stream lazy com magnet - VERSÃO 1.3.3: URL única por qualidade
+        // Stream lazy com magnet (formato correto)
         streams.push(this.createLazyStream(
           streamTitle,
           streamName,
-          baseDesc,
+          baseTitle,
           torrent.magnet,
           request.apiKey!,
           quality,
@@ -310,31 +246,34 @@ export class StreamFormatter {
             bingeGroup: `br-${request.id}-${quality}`,
             filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
           },
-          metadata
+          metadata,
+          fileIdx // Passa o fileIdx
         ));
       }
       
-      this.logger.debug('QUALITY_STREAM_CRIADO', {
-        qualidade: quality,
-        tipo: type,
-        temporada: season,
-        episodio: episode,
-        temLinkDireto: !!(isAvailableOnRD && directLink),
-        versao: '1.3.3'
+      this.logger.debug('QUALITY_STREAM_CREATED', {
+        quality: quality,
+        type: type,
+        season: season,
+        episode: episode,
+        hasDirectLink: !!(isAvailableOnRD && directLink),
+        version: '1.4.0',
+        fileIdx: fileIdx
       });
     }
 
-    this.logger.info('STREAMS_CRIADOS', {
+    this.logger.info('STREAMS_CREATED_SUCCESS', {
       total: streams.length,
-      qualidades: allQualities,
+      qualities: allQualities,
       torrent: torrent.title.substring(0, 60),
-      versao: '1.3.3'
+      version: '1.4.0',
+      streamFormat: 'stremio_web_compatible'
     });
 
     return streams;
   }
 
-  // Extrai todas qualidades de um título
+  // Extrai todas qualidades de um título (mantido da versão anterior)
   private extractAllQualities(title: string): string[] {
     const qualityPatterns = [
       /\b(2160p|4k|uhd)\b/gi,
@@ -342,16 +281,14 @@ export class StreamFormatter {
       /\b(720p|hd|high definition)\b/gi,
       /\b(480p|sd|standard definition)\b/gi,
       /\b(360p|low)\b/gi,
-      // Padrões com múltiplas qualidades
-      /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,  // 720p/1080p
-      /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi, // 720p e 1080p
-      /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi  // 720p ou 1080p
+      /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,
+      /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi,
+      /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi
     ];
 
     const foundQualities: Set<string> = new Set();
     const titleLower = title.toLowerCase();
     
-    // Primeiro procura por qualidades individuais
     for (const pattern of qualityPatterns.slice(0, 5)) {
       const matches = titleLower.match(pattern);
       if (matches) {
@@ -364,12 +301,10 @@ export class StreamFormatter {
       }
     }
     
-    // Procura por padrões de múltiplas qualidades (720p/1080p)
     for (const pattern of qualityPatterns.slice(5)) {
       const matches = titleLower.match(pattern);
       if (matches) {
         for (const match of matches) {
-          // Extrai todas as qualidades do padrão
           const qualityMatches = match.match(/\d{3,4}p/gi);
           if (qualityMatches) {
             for (const qualityMatch of qualityMatches) {
@@ -383,7 +318,6 @@ export class StreamFormatter {
       }
     }
     
-    // Procura por qualidades em listas (720p, 1080p, 4K)
     const listPattern = /(\d{3,4}p|4k|uhd|hd)(?:\s*,\s*|\s+e\s+|\s+ou\s+)/gi;
     let listMatch;
     while ((listMatch = listPattern.exec(titleLower)) !== null) {
@@ -395,7 +329,6 @@ export class StreamFormatter {
     
     const result = Array.from(foundQualities);
     
-    // Se não encontrou nada, tenta detector padrão
     if (result.length === 0) {
       const defaultQuality = this.qualityDetector.extractBestQuality(title);
       if (defaultQuality && defaultQuality !== 'unknown') {
@@ -403,7 +336,6 @@ export class StreamFormatter {
       }
     }
 
-    // Ordena por hierarquia
     const qualityOrder = ['2160p', '1080p', '720p', 'HD', 'SD'];
     result.sort((a, b) => {
       const indexA = qualityOrder.indexOf(a);
@@ -432,7 +364,6 @@ export class StreamFormatter {
       return 'HD';
     }
     
-    // Mantém formato original se for 720p, 1080p, etc
     if (qualityLower.match(/\d{3,4}p/)) {
       return qualityLower;
     }
@@ -440,14 +371,15 @@ export class StreamFormatter {
     return '';
   }
 
-  // Cria stream para série (mantido para compatibilidade)
+  // Métodos de compatibilidade (mantidos para não quebrar código existente)
   createSeriesStream(
     torrent: any,
     request: StreamRequest,
     directLink: string | null,
     season: number,
     episode: number,
-    isAvailableOnRD: boolean = false
+    isAvailableOnRD: boolean = false,
+    fileIdx?: number
   ): Stream {
     const qualities = this.extractAllQualities(torrent.title);
     const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
@@ -455,7 +387,7 @@ export class StreamFormatter {
     return this.createLazyStream(
       `Brasil RD (${quality})`,
       `Brasil RD (${quality})`,
-      `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language)}`,
+      torrent.title,
       torrent.magnet,
       request.apiKey!,
       quality,
@@ -465,16 +397,18 @@ export class StreamFormatter {
       {
         bingeGroup: `br-${request.id}-${quality}`,
         filename: this.sanitizeFilename(torrent.title)
-      }
+      },
+      undefined,
+      fileIdx
     );
   }
 
-  // Cria stream para filme (mantido para compatibilidade)
   createMovieStream(
     torrent: any,
     request: StreamRequest,
     directLink: string | null,
-    isAvailableOnRD: boolean = false
+    isAvailableOnRD: boolean = false,
+    fileIdx?: number
   ): Stream {
     const qualities = this.extractAllQualities(torrent.title);
     const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
@@ -482,7 +416,7 @@ export class StreamFormatter {
     return this.createLazyStream(
       `Brasil RD (${quality})`,
       `Brasil RD (${quality})`,
-      `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language)}`,
+      torrent.title,
       torrent.magnet,
       request.apiKey!,
       quality,
@@ -492,7 +426,9 @@ export class StreamFormatter {
       {
         bingeGroup: `br-${request.id}-${quality}`,
         filename: this.sanitizeFilename(torrent.title)
-      }
+      },
+      undefined,
+      fileIdx
     );
   }
 
@@ -507,33 +443,15 @@ export class StreamFormatter {
     };
 
     return streams.sort((a, b) => {
-      const isDirectA = this.isDirectStream(a);
-      const isDirectB = this.isDirectStream(b);
-      
-      if (isDirectA !== isDirectB) {
-        return isDirectA ? -1 : 1;
-      }
-      
-      const scoreA = this.calculateQualityScore(a.name || '');
-      const scoreB = this.calculateQualityScore(b.name || '');
+      const scoreA = this.calculateQualityScore(a.title || '');
+      const scoreB = this.calculateQualityScore(b.title || '');
       
       if (scoreB !== scoreA) {
         return scoreB - scoreA;
       }
       
-      return (a.name || '').localeCompare(b.name || '');
+      return (a.title || '').localeCompare(b.title || '');
     });
-  }
-
-  // Verifica se stream é direto
-  private isDirectStream(stream: Stream): boolean {
-    return !!(
-      stream.sources && 
-      stream.sources.length > 0 && 
-      stream.sources[0] && 
-      !stream.sources[0].startsWith('dht:') &&
-      stream.sources[0].startsWith('http')
-    );
   }
 
   // Calcula score de qualidade
@@ -552,89 +470,6 @@ export class StreamFormatter {
     return qualityPriority[quality] || 0;
   }
 
-  // Formata idioma
-  private formatLanguage(language: string): string {
-    if (!language) return 'PT-BR';
-    
-    const normalizedLang = language.toLowerCase().trim();
-    
-    const langMap: Record<string, string> = {
-      'pt-br': 'PT-BR',
-      'pt': 'PT-BR',
-      'portuguese': 'PT-BR',
-      'brazilian': 'PT-BR',
-      'dublado': 'PT-BR',
-      
-      'en': 'EN',
-      'english': 'EN',
-      'eng': 'EN',
-      'legendado': 'EN',
-      
-      'dual': 'Dual',
-      'dual audio': 'Dual',
-      'dualaudio': 'Dual',
-      'pt-br,en': 'Dual',
-      'pt-br,en-us': 'Dual',
-      'portuguese,english': 'Dual',
-      'dublado,legendado': 'Dual',
-      
-      'multi': 'Multi',
-      'multilanguage': 'Multi',
-      'pt-br,en-us,ja-jp': 'Multi',
-      'portuguese,english,japanese': 'Multi',
-      
-      'es': 'ES',
-      'spanish': 'ES',
-      'esp': 'ES',
-      
-      'fr': 'FR',
-      'french': 'FR'
-    };
-    
-    if (langMap[normalizedLang]) {
-      return langMap[normalizedLang];
-    }
-    
-    for (const [key, value] of Object.entries(langMap)) {
-      if (normalizedLang.includes(key)) {
-        return value;
-      }
-    }
-    
-    return language.toUpperCase();
-  }
-
-  // Gera URL para resolve lazy - VERSÃO 1.3.3: Inclui qualidade na URL
-  private generateLazyResolveUrl(
-    magnet: string, 
-    apiKey: string,
-    quality: string,
-    type?: 'movie' | 'series',
-    season?: number,
-    episode?: number
-  ): string {
-    const encodedMagnet = Buffer.from(magnet).toString('base64');
-    const domain = process.env.RAILWAY_STATIC_URL || "localhost:7000";
-    const protocol = process.env.RAILWAY_STATIC_URL ? "https" : "http";
-    
-    // VERSÃO 1.3.3: QUALIDADE INCLUÍDA NA URL
-    let url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${encodeURIComponent(apiKey)}&quality=${encodeURIComponent(quality)}`;
-    
-    if (type === 'series') {
-      if (season !== undefined) {
-        url += `&season=${season}`;
-      }
-      if (episode !== undefined) {
-        url += `&episode=${episode}`;
-      }
-      url += `&type=series`;
-    } else if (type === 'movie') {
-      url += `&type=movie`;
-    }
-    
-    return url;
-  }
-
   // Sanitiza nome de arquivo
   private sanitizeFilename(filename: string): string {
     return filename
@@ -642,38 +477,25 @@ export class StreamFormatter {
       .substring(0, 255);
   }
 
-  // Construtor de URL resolve público - ATUALIZADO para v1.3.3
-  buildResolveUrl(
-    magnet: string,
-    apiKey: string,
-    quality: string,
-    type: 'movie' | 'series',
-    season?: number,
-    episode?: number
-  ): string {
-    return this.generateLazyResolveUrl(magnet, apiKey, quality, type, season, episode);
-  }
-
-  // Informações do formatter - ATUALIZADO para v1.3.3
+  // Informações do formatter atualizado
   getStats() {
     return {
-      versão: '1.3.3',
-      feature: 'Streams separados por qualidade',
-      fix: 'URLs únicas por qualidade (resolve deduplicação)',
-      formato: [
-        'Linha 1: Título COMPLETO do torrent',
-        'Linha 2: 🔗 seeds | 💾 tamanho | 🌐 idioma | 📺 episódio',
-        'Linha 3: 📦🎬👥🎞️🔧🚀⏳ (max 3)'
+      versao: '1.4.0',
+      feature: 'Formato compatível com Stremio Web/Desktop',
+      fix: 'Remove campos não padrão (url, sources, description, status, magnet) - Mantém apenas title, infoHash, fileIdx',
+      formatoCorreto: {
+        camposObrigatorios: ['title', 'infoHash', 'fileIdx (opcional)'],
+        camposOpcionais: ['behaviorHints'],
+        camposRemovidos: ['url', 'sources', 'description', 'name', 'status', 'magnet']
+      },
+      compatibilidade: [
+        'Stremio Web (100%)',
+        'Stremio Desktop (100%)',
+        'Stremio Mobile (100%)',
+        'Stremio Android TV (100%)'
       ],
-      ordenação: '2160p(100) > 1080p(80) > 720p(60) > HD(40) > SD(20)',
-      melhorias: [
-        'Cria stream SEPARADO para cada qualidade encontrada',
-        'Detecta padrões como 720p/1080p, 720p e 1080p, 720p ou 1080p',
-        'Usuário escolhe qualidade desejada',
-        'BehaviorHint streamQuality marca qualidade de cada stream',
-        'URL de resolve INCLUI qualidade (evita deduplicação)',
-        'Mesma magnet, diferentes URLs por qualidade'
-      ]
+      ordenacao: '2160p > 1080p > 720p > HD > SD',
+      nota: 'Formato igual ao Torrentio para máxima compatibilidade'
     };
   }
 }

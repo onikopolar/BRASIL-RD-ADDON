@@ -97,41 +97,74 @@ export class StreamHandler {
     this.rdService.setStaticResponseBaseUrl(baseUrl);
   }
 
-  private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
+private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
     const seenCombinations = new Set<string>();
     const uniqueStreams: Stream[] = [];
     
     for (const stream of streams) {
-      let infoHash: string | undefined;
-      if (stream.infoHash) infoHash = stream.infoHash.toLowerCase();
-      else if (stream.sources && stream.sources[0]) {
-        const magnetMatch = stream.sources[0].match(/btih:([a-zA-Z0-9]{40})/i);
-        if (magnetMatch) infoHash = magnetMatch[1].toLowerCase();
-      }
-      
-      const qualityMatch = stream.name?.match(/\((\d+p|4K|HD|SD)\)/);
-      const quality = qualityMatch ? qualityMatch[1] : 'unknown';
-      const uniqueKey = infoHash ? `${infoHash}_${quality}` : stream.name;
-      
-      if (seenCombinations.has(uniqueKey)) {
-        this.stats.duplicatesRemoved++;
-        continue;
-      } else {
+        // 1. OBTÉM INFO_HASH (Formato Novo - campo direto)
+        //    O infoHash agora vem diretamente no objeto stream
+        let infoHash: string | undefined = stream.infoHash?.toLowerCase();
+        
+        // 2. OBTÉM QUALIDADE (Formato Novo - extrai do título ou behaviorHints)
+        let quality = 'unknown';
+        
+        // Tenta extrair do behaviorHints primeiro (mais confiável)
+        if (stream.behaviorHints?.streamQuality) {
+            quality = stream.behaviorHints.streamQuality;
+        } 
+        // Se não tiver, tenta extrair do título (fallback)
+        else if (stream.title) {
+            const qualityMatch = stream.title.match(/\((\d+p|4K|HD|SD|2160p|1080p|720p|480p)\)/i);
+            if (qualityMatch) {
+                quality = qualityMatch[1].toLowerCase();
+            }
+        }
+        
+        // 3. CRIA CHAVE ÚNICA PARA DEDUPLICAÇÃO
+        //    Combinação de infoHash e qualidade
+        let uniqueKey: string;
+        
+        if (infoHash) {
+            // Caso ideal: tem infoHash, usa ele + qualidade
+            uniqueKey = `${infoHash}_${quality}`;
+        } else {
+            // Fallback extremo: se não tem infoHash, usa título completo
+            // Isso é raro, mas previne erro
+            this.logger.warn('Stream sem infoHash encontrado, usando título para dedup', {
+                title: stream.title?.substring(0, 50)
+            });
+            uniqueKey = stream.title || `stream_${Math.random()}`;
+        }
+        
+        // 4. VERIFICA SE JÁ VIU ESTA COMBINAÇÃO
+        if (seenCombinations.has(uniqueKey)) {
+            this.stats.duplicatesRemoved++;
+            this.logger.debug('Stream duplicado removido', {
+                infoHash: infoHash ? `${infoHash.substring(0, 8)}...` : 'none',
+                quality: quality,
+                uniqueKey: uniqueKey
+            });
+            continue;
+        }
+        
+        // 5. ADICIONA À LISTA DE ÚNICOS
         seenCombinations.add(uniqueKey);
         uniqueStreams.push(stream);
-      }
     }
     
+    // 6. LOG DE RESULTADOS
     if (streams.length !== uniqueStreams.length) {
-      this.logger.debug('Streams deduplicados', {
-        antes: streams.length,
-        depois: uniqueStreams.length,
-        removidos: streams.length - uniqueStreams.length
-      });
+        this.logger.debug('Deduplicação de streams concluída', {
+            totalInicial: streams.length,
+            totalFinal: uniqueStreams.length,
+            duplicadosRemovidos: streams.length - uniqueStreams.length,
+            formato: 'v1.4.0_compatible'
+        });
     }
     
     return uniqueStreams;
-  }
+}
 
   async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
