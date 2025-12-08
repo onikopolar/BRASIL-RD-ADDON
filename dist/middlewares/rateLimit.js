@@ -23,11 +23,11 @@ const createRateLimiter = () => {
     });
 };
 exports.createRateLimiter = createRateLimiter;
-const torrentioRateLimiter = (req, res, next) => {
+exports.torrentioRateLimiter = (() => {
     if (isDevelopment) {
-        return next();
+        return (req, res, next) => next();
     }
-    const limiter = (0, express_rate_limit_1.default)({
+    const limiterInstance = (0, express_rate_limit_1.default)({
         windowMs: 15 * 60 * 1000,
         max: 500,
         message: {
@@ -35,8 +35,10 @@ const torrentioRateLimiter = (req, res, next) => {
             retryAfter: '15 minutos'
         },
         standardHeaders: true,
-        legacyHeaders: false
+        legacyHeaders: false,
+        skipSuccessfulRequests: false
     });
-    return limiter(req, res, next);
-};
-exports.torrentioRateLimiter = torrentioRateLimiter;
+    return (req, res, next) => {
+        limiterInstance(req, res, next);
+    };
+})();

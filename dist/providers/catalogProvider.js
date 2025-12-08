@@ -15,14 +15,11 @@ const MetricsService_1 = require("../services/MetricsService");
 class CatalogProvider {
     constructor(magnetService) {
         this.magnetService = magnetService;
-        this.VERSION = '4.4.0';
+        this.VERSION = '4.5.0';
         this.streamCache = new Map();
         this.STREAM_TTL = 24 * 60 * 60 * 1000;
         this.STREAM_EMPTY_TTL = 60 * 1000;
-        this.STALE_REVALIDATE_TIME = 5 * 60 * 1000;
         this.CACHE_KEY_SEPARATOR = '|';
-        this.scrapeCache = new Map();
-        this.SCRAPE_TTL = 30 * 60 * 1000;
         this.logger = new logger_1.Logger('CatalogProvider');
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.streamFormatter = new streamFormatter_1.StreamFormatter();
@@ -31,7 +28,7 @@ class CatalogProvider {
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.titleFilter = new titleFilter_1.TitleFilter();
         this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-        this.logger.info(`CatalogProvider v${this.VERSION} inicializado - Cache avançado integrado`);
+        this.logger.info(`CatalogProvider v${this.VERSION} inicializado - Deduplicacao corrigida para formato v1.4.0`);
     }
     async getStreamsFromCatalog(request) {
         const startTime = Date.now();
@@ -40,7 +37,7 @@ class CatalogProvider {
         const cachedStreams = this.getFromCache(cacheKey);
         if (cachedStreams !== null) {
             const duration = Date.now() - startTime;
-            this.logger.debug('Resultado obtido do cache', {
+            this.logger.debug('Resultado do cache', {
                 requestId: request.id,
                 quantidade: cachedStreams.length,
                 cacheKey,
@@ -52,56 +49,68 @@ class CatalogProvider {
         this.logger.debug('Busca de streams iniciada', {
             requestId: request.id,
             type: request.type,
-            temApiKey: !!request.apiKey,
+            hasApiKey: !!request.apiKey,
             season,
             episode
         });
+        let allStreams = [];
         const dbStreams = await this.getStreamsFromDatabase(request, season, episode);
-        const jsonStreams = await this.getStreamsFromJson(request, season, episode);
-        const catalogStreams = [...dbStreams, ...jsonStreams];
-        const catalogUniqueStreams = this.removeDuplicateSourcesButKeepQualities(catalogStreams);
-        catalogUniqueStreams.forEach(stream => {
-            const quality = this.extractStreamQuality(stream);
-            MetricsService_1.metricsService.recordStreamReturned(request.type, quality);
-        });
-        this.logger.info('Resultados catalogo obtidos', {
-            total: catalogUniqueStreams.length,
-            doBanco: dbStreams.length,
-            doJson: jsonStreams.length,
-            duplicadosRemovidos: catalogStreams.length - catalogUniqueStreams.length,
-            duration: `${Date.now() - startTime}ms`
-        });
-        if (catalogUniqueStreams.length > 0) {
-            this.saveToCache(cacheKey, catalogUniqueStreams);
-            MetricsService_1.metricsService.setCacheSize(this.streamCache.size);
-            this.logger.debug('Streams encontrados no catalogo, retornando', {
-                requestId: request.id,
-                quantidade: catalogUniqueStreams.length,
-                cacheKey
-            });
-            return catalogUniqueStreams;
-        }
-        this.logger.debug('Nenhum stream no catalogo, tentando scraping', {
-            requestId: request.id,
+        allStreams.push(...dbStreams);
+        this.logger.debug('Resultados do banco', {
+            quantidade: dbStreams.length,
             type: request.type,
             season,
             episode
         });
-        const scrapedStreams = await this.performScrapingFallback(request, season, episode);
-        const scrapedUniqueStreams = this.removeDuplicateSourcesButKeepQualities(scrapedStreams);
-        scrapedUniqueStreams.forEach(stream => {
+        if (dbStreams.length === 0) {
+            const jsonStreams = await this.getStreamsFromJson(request, season, episode);
+            allStreams.push(...jsonStreams);
+            this.logger.debug('Resultados do JSON', {
+                quantidade: jsonStreams.length,
+                imdbId: request.imdbId || request.id
+            });
+        }
+        const uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
+        uniqueStreams.forEach(stream => {
             const quality = this.extractStreamQuality(stream);
             MetricsService_1.metricsService.recordStreamReturned(request.type, quality);
         });
-        this.logger.info('Resultados scraping obtidos', {
-            total: scrapedUniqueStreams.length,
-            fonte: 'scraping',
-            duplicadosRemovidos: scrapedStreams.length - scrapedUniqueStreams.length,
+        this.logger.info('Resultados do catalogo', {
+            totalFinal: uniqueStreams.length,
+            doBanco: dbStreams.length,
+            doJson: allStreams.length - dbStreams.length,
+            duplicadosRemovidos: allStreams.length - uniqueStreams.length,
             duration: `${Date.now() - startTime}ms`
         });
-        this.saveToCache(cacheKey, scrapedUniqueStreams);
+        if (uniqueStreams.length === 0) {
+            this.logger.debug('Nenhum stream no catalogo, iniciando scraping', {
+                requestId: request.id,
+                type: request.type,
+                season,
+                episode
+            });
+            const scrapedStreams = await this.performScrapingFallback(request, season, episode);
+            const scrapedUniqueStreams = this.removeDuplicatesByInfoHash(scrapedStreams);
+            scrapedUniqueStreams.forEach(stream => {
+                const quality = this.extractStreamQuality(stream);
+                MetricsService_1.metricsService.recordStreamReturned(request.type, quality);
+            });
+            this.logger.info('Resultados do scraping', {
+                quantidade: scrapedUniqueStreams.length,
+                duration: `${Date.now() - startTime}ms`
+            });
+            this.saveToCache(cacheKey, scrapedUniqueStreams);
+            MetricsService_1.metricsService.setCacheSize(this.streamCache.size);
+            return scrapedUniqueStreams;
+        }
+        this.saveToCache(cacheKey, uniqueStreams);
         MetricsService_1.metricsService.setCacheSize(this.streamCache.size);
-        return scrapedUniqueStreams;
+        this.logger.debug('Streams do catalogo retornados', {
+            requestId: request.id,
+            quantidade: uniqueStreams.length,
+            cacheKey
+        });
+        return uniqueStreams;
     }
     generateCacheKey(request, season, episode) {
         const baseId = request.imdbId || request.id;
@@ -117,55 +126,22 @@ class CatalogProvider {
             return null;
         }
         const now = Date.now();
-        const isFullyExpired = now - cacheEntry.timestamp > this.STREAM_TTL;
-        const isStale = now - cacheEntry.timestamp > this.STREAM_TTL - this.STALE_REVALIDATE_TIME;
-        if (isFullyExpired) {
+        const isExpired = cacheEntry.isEmpty
+            ? now - cacheEntry.timestamp > this.STREAM_EMPTY_TTL
+            : now - cacheEntry.timestamp > this.STREAM_TTL;
+        if (isExpired) {
             this.streamCache.delete(cacheKey);
-            this.logger.debug('Cache expirado e removido', { cacheKey });
+            this.logger.debug('Cache expirado removido', { cacheKey });
             MetricsService_1.metricsService.recordCacheMiss();
             return null;
         }
-        if (isStale && !cacheEntry.isEmpty) {
-            this.revalidateInBackground(cacheKey, cacheEntry.streams);
-            this.logger.debug('Cache stale servido, revalidando em background', {
-                cacheKey,
-                streams: cacheEntry.streams.length,
-                age: now - cacheEntry.timestamp
-            });
-            MetricsService_1.metricsService.recordCacheHit();
-        }
-        else {
-            MetricsService_1.metricsService.recordCacheHit();
-        }
-        this.logger.debug('Cache HIT', {
+        MetricsService_1.metricsService.recordCacheHit();
+        this.logger.debug('Cache encontrado', {
             cacheKey,
             streams: cacheEntry.streams.length,
-            age: now - cacheEntry.timestamp,
-            stale: isStale
+            age: now - cacheEntry.timestamp
         });
         return cacheEntry.streams;
-    }
-    revalidateInBackground(cacheKey, currentStreams) {
-        setImmediate(async () => {
-            try {
-                const [baseId, type, seasonEpisode] = cacheKey.split(this.CACHE_KEY_SEPARATOR);
-                const season = seasonEpisode?.startsWith('s') ? parseInt(seasonEpisode.slice(1)) : undefined;
-                const episode = seasonEpisode?.includes('e') ? parseInt(seasonEpisode.split('e')[1]) : undefined;
-                this.logger.debug('Revalidação em background iniciada', {
-                    cacheKey,
-                    baseId,
-                    type,
-                    season,
-                    episode
-                });
-            }
-            catch (error) {
-                this.logger.debug('Erro na revalidação em background', {
-                    cacheKey,
-                    error: error instanceof Error ? error.message : 'Erro desconhecido'
-                });
-            }
-        });
     }
     saveToCache(cacheKey, streams) {
         const isEmpty = streams.length === 0;
@@ -209,8 +185,8 @@ class CatalogProvider {
             this.logger.debug('Buscando no banco de dados', {
                 baseImdbId,
                 type: request.type,
-                temporada: finalSeason,
-                episodio: finalEpisode
+                season: finalSeason,
+                episode: finalEpisode
             });
             let dbEntries = [];
             if (request.type === 'movie') {
@@ -219,7 +195,7 @@ class CatalogProvider {
             else if (request.type === 'series' && finalSeason !== undefined) {
                 dbEntries = await (0, repository_1.getImdbIdSeriesEntries)(baseImdbId, finalSeason, finalEpisode);
             }
-            this.logger.debug('Resultados banco encontrados', {
+            this.logger.debug('Resultados do banco', {
                 baseImdbId,
                 entradasEncontradas: dbEntries.length,
                 type: request.type,
@@ -231,7 +207,7 @@ class CatalogProvider {
                 return [];
             }
             const torrentData = await this.processDatabaseTorrents(dbEntries, request, finalSeason, finalEpisode);
-            const sortedTorrents = this.sortTorrentsHierarchically(torrentData);
+            const sortedTorrents = this.sortTorrentsByQuality(torrentData);
             const streams = await this.createStreamsFromDbTorrents(sortedTorrents, request, finalSeason, finalEpisode);
             this.logger.info('Streams criados do banco', {
                 baseImdbId,
@@ -264,18 +240,6 @@ class CatalogProvider {
                 if (!magnetHash) {
                     continue;
                 }
-                if (torrentMap.has(magnetHash)) {
-                    const existingTorrent = torrentMap.get(magnetHash);
-                    if (!existingTorrent.episodes) {
-                        existingTorrent.episodes = [];
-                    }
-                    existingTorrent.episodes.push({
-                        season: entry.imdbSeason,
-                        episode: entry.imdbEpisode,
-                        title: entry.title
-                    });
-                    continue;
-                }
                 const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
                 const quality = this.qualityDetector.extractBestQuality(torrent.title) || 'HD';
                 const seeds = torrent.seeders || 50;
@@ -295,12 +259,7 @@ class CatalogProvider {
                     title: torrent.title,
                     requestType: request.type,
                     season: season,
-                    episode: episode,
-                    episodes: [{
-                            season: entry.imdbSeason,
-                            episode: entry.imdbEpisode,
-                            title: entry.title
-                        }]
+                    episode: episode
                 });
             }
             catch (error) {
@@ -312,8 +271,7 @@ class CatalogProvider {
         const torrents = Array.from(torrentMap.values());
         this.logger.debug('Torrents processados do banco', {
             totalEntradas: dbEntries.length,
-            torrentsUnicos: torrents.length,
-            torrentsComMultiplosEpisodios: torrents.filter(t => t.episodes && t.episodes.length > 1).length
+            torrentsUnicos: torrents.length
         });
         return torrents;
     }
@@ -336,7 +294,7 @@ class CatalogProvider {
                     quality: torrentData.quality,
                     language: torrentData.language
                 };
-                const streamArrays = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, torrentData.requestType, season, episode, undefined);
+                const streamArrays = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, torrentData.requestType, season, episode, undefined, 0);
                 streams.push(...streamArrays);
             }
             catch (error) {
@@ -348,18 +306,13 @@ class CatalogProvider {
         }
         return streams;
     }
-    sortTorrentsHierarchically(torrents) {
+    sortTorrentsByQuality(torrents) {
         return torrents.sort((a, b) => {
             if (b.qualityScore !== a.qualityScore) {
                 return b.qualityScore - a.qualityScore;
             }
             if (b.seeds !== a.seeds) {
                 return b.seeds - a.seeds;
-            }
-            const sizeA = this.parseSizeToBytes(a.size);
-            const sizeB = this.parseSizeToBytes(b.size);
-            if (sizeB !== sizeA) {
-                return sizeB - sizeA;
             }
             return a.title.localeCompare(b.title);
         });
@@ -368,7 +321,7 @@ class CatalogProvider {
         const jsonStartTime = Date.now();
         try {
             const curatedMagnets = this.magnetService.searchMagnets(request);
-            this.logger.debug('Resultados JSON obtidos', {
+            this.logger.debug('Resultados do JSON obtidos', {
                 magnetsEncontrados: curatedMagnets.length,
                 imdbId: request.imdbId || request.id
             });
@@ -389,7 +342,7 @@ class CatalogProvider {
                     const isSeries = request.type === 'series';
                     const targetSeason = season !== undefined ? season : magnet.season;
                     const targetEpisode = episode !== undefined ? episode : magnet.episode;
-                    const streamArrays = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, isSeries ? 'series' : 'movie', targetSeason, targetEpisode, undefined);
+                    const streamArrays = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, isSeries ? 'series' : 'movie', targetSeason, targetEpisode, undefined, 0);
                     if (streamArrays.length > 0) {
                         streams.push(...streamArrays);
                     }
@@ -415,18 +368,41 @@ class CatalogProvider {
             return [];
         }
     }
+    removeDuplicatesByInfoHash(streams) {
+        const seenStreamKeys = new Set();
+        const uniqueStreams = [];
+        for (const stream of streams) {
+            const streamInfoHash = stream.infoHash || 'unknown';
+            const streamQuality = this.extractStreamQuality(stream);
+            if (!streamInfoHash || streamInfoHash === 'unknown') {
+                const fallbackKey = stream.title || String(Math.random());
+                if (seenStreamKeys.has(fallbackKey)) {
+                    continue;
+                }
+                seenStreamKeys.add(fallbackKey);
+                uniqueStreams.push(stream);
+                continue;
+            }
+            const streamKey = `${streamInfoHash}|${streamQuality}`;
+            if (seenStreamKeys.has(streamKey)) {
+                continue;
+            }
+            seenStreamKeys.add(streamKey);
+            uniqueStreams.push(stream);
+        }
+        if (streams.length !== uniqueStreams.length) {
+            this.logger.debug('Streams deduplicados', {
+                antes: streams.length,
+                depois: uniqueStreams.length,
+                removidos: streams.length - uniqueStreams.length,
+                criterio: 'infoHash + qualidade',
+                versaoFormato: '1.4.0'
+            });
+        }
+        return uniqueStreams;
+    }
     async performScrapingFallback(request, season, episode) {
         const scrapeStartTime = Date.now();
-        const scrapeCacheKey = this.generateScrapeCacheKey(request, season, episode);
-        const cachedScrape = this.scrapeCache.get(scrapeCacheKey);
-        if (cachedScrape && (Date.now() - cachedScrape.timestamp) < this.SCRAPE_TTL) {
-            this.logger.debug('Scraping cache HIT', {
-                cacheKey: scrapeCacheKey,
-                streams: cachedScrape.streams.length
-            });
-            MetricsService_1.metricsService.recordCacheHit();
-            return cachedScrape.streams;
-        }
         this.logger.debug('Iniciando scraping como fallback', {
             requestId: request.id,
             type: request.type,
@@ -442,10 +418,7 @@ class CatalogProvider {
             else {
                 scrapedStreams = await this.scrapeMovie(request, imdbId);
             }
-            this.scrapeCache.set(scrapeCacheKey, {
-                streams: scrapedStreams,
-                timestamp: Date.now()
-            });
+            await this.autoPopulateDatabase(scrapedStreams, request, imdbId, season, episode);
             this.logger.info('Scraping concluido', {
                 streams: scrapedStreams.length,
                 duration: `${Date.now() - scrapeStartTime}ms`
@@ -460,13 +433,6 @@ class CatalogProvider {
             });
             return [];
         }
-    }
-    generateScrapeCacheKey(request, season, episode) {
-        const baseId = request.imdbId || request.id;
-        const type = request.type || 'unknown';
-        const seasonStr = season !== undefined ? `s${season}` : '';
-        const episodeStr = episode !== undefined ? `e${episode}` : '';
-        return `scrape:${baseId}:${type}:${seasonStr}${episodeStr}`;
     }
     async scrapeSeries(request, imdbId, season, episode) {
         const match = request.id.match(/tt\d+:(\d+):(\d+)/);
@@ -486,38 +452,19 @@ class CatalogProvider {
             episode: finalEpisode
         });
         try {
-            let imdbTitles = null;
-            if (imdbId) {
-                imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, finalSeason);
-            }
-            const searchTitle = imdbTitles?.allTitles[0] || 'Serie';
-            const searchQuery = `${searchTitle} S${finalSeason.toString().padStart(2, '0')}E${finalEpisode.toString().padStart(2, '0')}`;
-            this.logger.debug('Query scraping serie', {
-                searchQuery,
-                season: finalSeason,
-                episode: finalEpisode
-            });
+            const searchQuery = `S${finalSeason.toString().padStart(2, '0')}E${finalEpisode.toString().padStart(2, '0')}`;
             const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, 'series', finalSeason);
             if (torrentResults.length === 0) {
                 this.logger.debug('Nenhum torrent encontrado no scraping', { searchQuery });
                 return [];
             }
-            const validTorrents = await this.filterScrapedTorrents(torrentResults, imdbId, request, finalSeason, finalEpisode, imdbTitles);
+            const validTorrents = await this.filterScrapedTorrents(torrentResults, imdbId, request, finalSeason, finalEpisode);
             if (validTorrents.length === 0) {
                 this.logger.debug('Nenhum torrent valido apos filtragem', {
                     totalTestados: torrentResults.length
                 });
                 return [];
             }
-            this.logger.debug('Torrents validos encontrados no scraping', {
-                total: validTorrents.length,
-                torrents: validTorrents.map(t => ({
-                    titulo: t.title.substring(0, 60),
-                    seeders: t.seeders,
-                    qualidade: t.quality
-                }))
-            });
-            await this.saveScrapedTorrentsToCatalog(validTorrents, request, imdbId, finalSeason, finalEpisode);
             const allStreams = [];
             for (const torrent of validTorrents) {
                 const formattedTorrent = {
@@ -528,18 +475,10 @@ class CatalogProvider {
                     quality: torrent.quality,
                     language: torrent.language
                 };
-                const torrentStreams = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, 'series', finalSeason, finalEpisode, undefined);
+                const torrentStreams = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, 'series', finalSeason, finalEpisode, undefined, 0);
                 allStreams.push(...torrentStreams);
             }
-            const uniqueStreams = this.removeDuplicateSourcesButKeepQualities(allStreams);
-            this.logger.info('Streams criados do scraping', {
-                quantidade: uniqueStreams.length,
-                fonte: 'scraping',
-                torrentsProcessados: validTorrents.length,
-                season: finalSeason,
-                episode: finalEpisode
-            });
-            return uniqueStreams;
+            return this.removeDuplicatesByInfoHash(allStreams);
         }
         catch (error) {
             this.logger.error('Erro no scraping serie', {
@@ -554,13 +493,7 @@ class CatalogProvider {
     async scrapeMovie(request, imdbId) {
         this.logger.debug('Scraping filme', { imdbId });
         try {
-            let imdbTitles = null;
-            if (imdbId) {
-                imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
-            }
-            const searchTitle = imdbTitles?.allTitles[0] || 'Filme';
-            const searchQuery = searchTitle;
-            this.logger.debug('Query scraping filme', { searchQuery });
+            const searchQuery = 'Filme';
             const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, 'movie');
             if (torrentResults.length === 0) {
                 this.logger.debug('Nenhum torrent encontrado no scraping', { searchQuery });
@@ -583,16 +516,10 @@ class CatalogProvider {
                     quality: torrent.quality,
                     language: torrent.language
                 };
-                const torrentStreams = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, 'movie', undefined, undefined, undefined);
+                const torrentStreams = this.streamFormatter.createMultipleQualityStreams(formattedTorrent, request, null, 'movie', undefined, undefined, undefined, 0);
                 streams.push(...torrentStreams);
             }
-            await this.saveScrapedTorrentsToCatalog(validTorrents, request, imdbId);
-            this.logger.info('Streams criados do scraping', {
-                quantidade: streams.length,
-                fonte: 'scraping',
-                torrentsValidos: validTorrents.length
-            });
-            return this.streamFormatter.sortStreamsByQuality(streams);
+            return this.removeDuplicatesByInfoHash(streams);
         }
         catch (error) {
             this.logger.error('Erro no scraping filme', {
@@ -634,65 +561,38 @@ class CatalogProvider {
         });
         return valid;
     }
-    async saveScrapedTorrentsToCatalog(validTorrents, request, imdbId, season, episode) {
-        if (!imdbId || validTorrents.length === 0) {
+    async autoPopulateDatabase(scrapedStreams, request, imdbId, season, episode) {
+        if (!imdbId || scrapedStreams.length === 0) {
             return;
         }
-        this.logger.debug('Salvando torrents do scraping no catalogo', {
-            count: validTorrents.length,
+        this.logger.debug('Auto-populando banco com resultados do scraping', {
+            count: scrapedStreams.length,
             imdbId: imdbId,
             type: request.type,
             season: season,
             episode: episode
         });
-        for (const torrent of validTorrents) {
+        for (const stream of scrapedStreams) {
             try {
-                await this.autoMagnetService.autoAddMagnet(torrent.magnet, torrent.title, imdbId, request.type, torrent.seeders, torrent.quality, torrent.size, season, episode);
+                if (stream.infoHash) {
+                    await this.autoMagnetService.autoAddMagnet(stream.infoHash, stream.title || 'Torrent', imdbId, request.type, 50, this.extractStreamQuality(stream), 'N/A', season, episode);
+                }
             }
             catch (error) {
-                this.logger.warn('Erro salvar torrent do scraping', {
-                    title: torrent.title.substring(0, 60),
+                this.logger.warn('Erro ao auto-popular banco', {
+                    title: stream.title?.substring(0, 60),
                     error: error instanceof Error ? error.message : 'Erro'
                 });
             }
         }
-        this.logger.debug('Torrents do scraping salvos', {
-            totalProcessados: validTorrents.length
+        this.logger.debug('Auto-populacao concluida', {
+            totalProcessados: scrapedStreams.length
         });
-    }
-    removeDuplicateSourcesButKeepQualities(streams) {
-        const seenStreamKeys = new Set();
-        const uniqueStreams = [];
-        for (const stream of streams) {
-            const streamUrl = stream.sources && stream.sources[0];
-            const streamQuality = this.extractStreamQuality(stream);
-            if (!streamUrl) {
-                continue;
-            }
-            const streamKey = `${streamUrl}|${streamQuality}`;
-            if (seenStreamKeys.has(streamKey)) {
-                continue;
-            }
-            seenStreamKeys.add(streamKey);
-            uniqueStreams.push(stream);
-        }
-        if (streams.length !== uniqueStreams.length) {
-            this.logger.debug('Streams deduplicados (mantendo qualidades)', {
-                antes: streams.length,
-                depois: uniqueStreams.length,
-                removidos: streams.length - uniqueStreams.length
-            });
-        }
-        return uniqueStreams;
     }
     extractStreamQuality(stream) {
         const behaviorHints = stream.behaviorHints;
         if (behaviorHints?.streamQuality) {
             return behaviorHints.streamQuality;
-        }
-        const qualityMatch = stream.title?.match(/\((.*?)\)/) || stream.name?.match(/\((.*?)\)/);
-        if (qualityMatch) {
-            return qualityMatch[1];
         }
         const qualityFromTitle = this.qualityDetector.extractBestQuality(stream.title || '');
         if (qualityFromTitle && qualityFromTitle !== 'unknown') {
@@ -727,21 +627,6 @@ class CatalogProvider {
         };
         return scores[quality] || 30;
     }
-    formatLanguage(language) {
-        if (!language)
-            return 'PT-BR';
-        const langMap = {
-            'pt-BR': 'PT-BR',
-            'pt-BR,en': 'Dual',
-            'en': 'EN',
-            'dual': 'Dual',
-            'multi': 'Multi',
-            'pt': 'PT-BR',
-            'pt-BR,en-US': 'Dual',
-            'pt-BR,en-US,ja-JP': 'Multi'
-        };
-        return langMap[language] || language;
-    }
     formatSize(bytes) {
         if (bytes < 1024 * 1024) {
             return `${(bytes / 1024).toFixed(1)} KB`;
@@ -753,40 +638,18 @@ class CatalogProvider {
             return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
         }
     }
-    parseSizeToBytes(sizeStr) {
-        if (!sizeStr || sizeStr === 'N/A')
-            return 0;
-        const match = sizeStr.match(/(\d+(?:\.\d+)?)\s*(KB|MB|GB)/i);
-        if (!match)
-            return 0;
-        const value = parseFloat(match[1]);
-        const unit = match[2].toUpperCase();
-        switch (unit) {
-            case 'KB': return value * 1024;
-            case 'MB': return value * 1024 * 1024;
-            case 'GB': return value * 1024 * 1024 * 1024;
-            default: return value;
-        }
-    }
     getStats() {
         return {
             version: this.VERSION,
             cacheSize: this.streamCache.size,
-            scrapeCacheSize: this.scrapeCache.size,
             features: [
-                'Cache inteligente com stale-while-revalidate',
-                'Cache separado para resultados de scraping',
-                'Métricas integradas com Prometheus',
-                'LRU automático para gerenciamento de memória',
-                'Revalidação em background para conteúdo stale',
-                'Duração das operações registrada em logs'
+                'Fluxo corrigido: Banco -> JSON -> Scraping',
+                'Deduplicacao por infoHash (formato v1.4.0 compatível)',
+                'Auto-populacao do banco com resultados de scraping',
+                'Cache inteligente com TTL diferenciado',
+                'Metricas integradas'
             ],
-            ttlConfig: {
-                streamCache: '24 horas',
-                streamEmptyCache: '1 minuto',
-                scrapeCache: '30 minutos',
-                staleRevalidate: '5 minutos'
-            }
+            fluxo: 'PostgreSQL > magnets.json > Scraper > Auto-populacao'
         };
     }
 }

@@ -19,10 +19,13 @@ const logger = new Logger('Main');
 const cacheService = new CacheService();
 const app = express();
 
-// Version: 4.5.1 - FIX: Removida rota OPTIONS(*) problemática que impedia inicialização
-logger.info('Brasil RD Server v4.5.1 iniciando - Correção de inicialização do servidor');
+// Version: 4.5.2 - FIX: Configuração trust proxy e logs otimizados
+logger.info('Brasil RD Server v4.5.2 iniciando - Correção de rate limit e proxy');
 
-// 1. CONFIGURAÇÃO CORS PRINCIPAL (FIX do v4.1.0)
+// CONFIGURAÇÃO ESSENCIAL DO EXPRESS PARA RAILWAY
+app.set('trust proxy', 1); // Confia no proxy do Railway (FIX para rate limit)
+
+// 1. CONFIGURAÇÃO CORS PRINCIPAL
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
@@ -37,15 +40,16 @@ app.use(clientInfoMiddleware());
 app.use(metricsService.httpMetricsMiddleware());
 app.use(createRateLimiter());
 
-// 3. INTERCEPTOR PARA ROTAS TORRENTIO
+// 3. INTERCEPTOR PARA ROTAS TORRENTIO (logs reduzidos)
 app.use((req: any, res: any, next: any) => {
     if (req.path.includes('/realdebrid=')) {
-        logger.debug('Interceptado rota Torrentio', {
-            path: req.path,
-            clientOrigin: req.get('Origin') || 'direct',
-            ip: req.clientInfo?.ip || req.ip || 'Desconhecido',
-            hasCorsHeader: res.get('Access-Control-Allow-Origin') || 'não definido'
-        });
+        // Log apenas se debug ativado para reduzir volume no Railway
+        if (process.env.LOG_LEVEL === 'debug') {
+            logger.debug('Rota Torrentio interceptada', {
+                path: req.path.substring(0, 80),
+                ip: req.clientInfo?.ip || req.ip || 'Desconhecido'
+            });
+        }
         req._torrentioHandled = true;
     }
     next();
@@ -58,25 +62,25 @@ app.get('/metrics', metricsService.metricsRoute());
 const videosPath = path.join(__dirname, 'videos');
 app.use('/videos', express.static(videosPath));
 app.use('/static/videos', express.static(videosPath));
-logger.debug('Configurado serviço de vídeos estáticos');
 
 // Inicialização do banco de dados
 async function initializeDatabase() {
     try {
-        logger.info('Iniciando conexão com banco de dados');
+        logger.info('Conectando ao banco de dados');
         const syncOptions = process.env.NODE_ENV === 'development' ? { alter: true } : {};
         await sequelize.sync(syncOptions);
-        logger.info('Banco de dados sincronizado com sucesso', {
-            tables: ['torrents', 'files', 'subtitles']
+        logger.info('Banco de dados sincronizado', {
+            tabelas: ['torrents', 'files', 'subtitles'],
+            ambiente: process.env.NODE_ENV || 'producao'
         });
         await sequelize.authenticate();
-        logger.info('Conexão com banco de dados estabelecida');
+        logger.info('Conexão com banco de dados validada');
     } catch (error) {
-        logger.error('Falha na conexão com banco de dados', {
+        logger.error('Falha no banco de dados', {
             error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         if (process.env.NODE_ENV === 'production') {
-            logger.warn('Continuando operação sem banco de dados no modo produção');
+            logger.warn('Continuando sem banco de dados em produção');
         } else {
             throw error;
         }
@@ -91,7 +95,7 @@ app.use((req: any, res: any, next: any) => {
         res.setHeader('Pragma', 'no-cache');
     }
     
-    // Headers CORS adicionais para garantir compatibilidade
+    // Headers CORS adicionais para compatibilidade
     if (!res.getHeader('Access-Control-Allow-Origin')) {
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
@@ -104,10 +108,8 @@ app.use((req: any, res: any, next: any) => {
 // Rota de configuração do addon
 app.get('/configure', (req: any, res: any) => {
     const clientIp = req.clientInfo?.ip || req.ip || 'Desconhecido';
-    logger.debug('Página de configuração acessada', {
-        ip: clientIp,
-        userAgent: req.clientInfo?.browser || 'Desconhecido'
-    });
+    logger.debug('Pagina de configuracao acessada', { ip: clientIp });
+    
     res.setHeader('content-type', 'text/html');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.end(configureTemplate(manifest));
@@ -121,8 +123,7 @@ app.get('/realdebrid=:apiKey/manifest.json', torrentioRateLimiter, (req: any, re
     
     logger.debug('Manifesto Torrentio solicitado', {
         apiKeyPreview: safeKey,
-        ip: clientIp,
-        browser: req.clientInfo?.browser || 'Desconhecido'
+        ip: clientIp
     });
     
     // Headers CORS explícitos
@@ -144,18 +145,17 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
     const decodedId = decodeURIComponent(id);
     const safeKey = apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4);
 
-    logger.debug('Rota Torrentio Stream iniciada - Formato v1.4.0', {
+    logger.debug('Rota Torrentio Stream iniciada', {
         apiKeyPreview: safeKey,
         type: type,
-        id: decodedId,
+        id: decodedId.substring(0, 30),
         ip: clientIp,
-        clientOrigin: req.get('Origin') || 'direct',
-        hasCorsHeaders: true
+        formato: 'v1.4.0'
     });
 
     try {
         if (!apiKey || apiKey.length < 10) {
-            logger.warn('API Key do Real-Debrid inválida', { length: apiKey?.length, ip: clientIp });
+            logger.warn('API Key invalida', { length: apiKey?.length, ip: clientIp });
             return res.json({ streams: [] });
         }
 
@@ -176,13 +176,12 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
 
         const result = await streamHandler.handleStreamRequest(streamRequest);
 
-        // Registra métricas de streams (extrai qualidade dos behaviorHints)
+        // Registra métricas de streams
         result.streams.forEach((stream: any) => {
             let quality = 'unknown';
             if (stream.behaviorHints && stream.behaviorHints.streamQuality) {
                 quality = stream.behaviorHints.streamQuality;
             } else if (stream.title) {
-                // Fallback: tenta extrair do título
                 if (stream.title.includes('1080p') || stream.title.includes('1080')) {
                     quality = '1080p';
                 } else if (stream.title.includes('720p') || stream.title.includes('720')) {
@@ -198,10 +197,10 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
 
         logger.info('Rota Torrentio Stream finalizada', {
             streamsCount: result.streams.length,
-            id: decodedId,
+            id: decodedId.substring(0, 20),
             ip: clientIp,
-            formatoStream: 'v1.4.0_compativel',
-            duration: Date.now() - startTime
+            duration: Date.now() - startTime,
+            formato: 'v1.4.0_compativel'
         });
 
         return res.json(result);
@@ -219,7 +218,9 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
 // Middleware para pular Stremio Router se rota já tratada
 app.use((req: any, res: any, next: any) => {
     if (req._torrentioHandled) {
-        logger.debug('Rota já tratada pelo Torrentio - pulando Stremio Router');
+        if (process.env.LOG_LEVEL === 'debug') {
+            logger.debug('Rota Torrentio - pulando Stremio Router');
+        }
         return next('route');
     }
     next();
@@ -228,55 +229,53 @@ app.use((req: any, res: any, next: any) => {
 // Configuração principal do servidor
 async function startServer() {
     try {
-        logger.info('Inicialização do servidor v4.5.1 em andamento');
+        logger.info('Iniciando servidor v4.5.2');
         
         // 1. Inicializa banco de dados
         await initializeDatabase();
         
         // 2. Configura rotas customizadas
-        logger.debug('Configurando rotas customizadas do sistema');
+        logger.debug('Configurando rotas customizadas');
         setupBasicRoutes(app, manifest);
         setupResolveRoutes(app);
         setupStaticRoutes(app);
         
         // 3. Sistema Stremio oficial (apenas para rotas não-Torrentio)
-        logger.debug('Inicializando sistema Stremio Addon SDK');
+        logger.debug('Inicializando sistema Stremio SDK');
         const builder = createStremioBuilder(manifest);
         const stremioRouter = getStremioRouter(builder);
         app.use(stremioRouter);
-        logger.debug('Router do Stremio SDK configurado para rotas padrão');
+        logger.debug('Stremio Router configurado');
         
         // 4. Inicia servidor HTTP/HTTPS
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
         
         // Log de inicialização completa
-        logger.info('Servidor Brasil RD v4.5.1 inicializado com sucesso', {
+        logger.info('Servidor Brasil RD v4.5.2 inicializado com sucesso', {
             porta: port,
-            ambiente: process.env.NODE_ENV || 'desenvolvimento',
-            recursosAtivos: [
-                'FIX CORS para Stremio Web (v4.1.0)',
-                'Formato de streams corrigido (v1.4.0)',
-                'Rate Limiting Inteligente (v4.4.1)',
-                'Sistema de Métricas Completo (v4.4.1)',
-                'Integração Real-Debrid funcional',
+            ambiente: process.env.NODE_ENV || 'producao',
+            recursos: [
+                'FIX CORS para Stremio Web',
+                'Formato de streams corrigido v1.4.0',
+                'Rate Limit corrigido com trust proxy',
+                'Sistema de Métricas',
+                'Integração Real-Debrid',
                 'Rotas Torrentio estilo /realdebrid=APIKEY',
                 'Banco de dados SQLite'
             ],
-            endpointsPrincipais: [
+            endpoints: [
                 'GET /realdebrid=:apiKey/manifest.json',
                 'GET /realdebrid=:apiKey/stream/:type/:id.json',
                 'GET /configure',
-                'GET /metrics',
-                'TODAS rotas Stremio SDK padrão'
+                'GET /metrics'
             ],
-            notaCorrecao: 'Removida rota OPTIONS(*) problemática que causava erro de inicialização'
+            nota: 'Rate limit corrigido com trust proxy para Railway'
         });
         
     } catch (error) {
-        logger.error('Falha crítica na inicialização do servidor', {
-            error: error instanceof Error ? error.message : 'Erro desconhecido',
-            motivo: 'Verifique configurações de banco, porta ou variáveis de ambiente'
+        logger.error('Falha na inicializacao do servidor', {
+            error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         process.exit(1);
     }
@@ -286,4 +285,4 @@ async function startServer() {
 startServer();
 
 // Log final do módulo
-logger.info('Módulo server.ts v4.5.1 carregado - Correção de inicialização aplicada');
+logger.info('Server.ts v4.5.2 carregado - Correção de rate limit e proxy aplicada');

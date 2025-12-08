@@ -84,7 +84,7 @@ export class StreamHandler {
     this.torrentScraper = new TorrentScraperService();
     this.imdbScraper = new ImdbScraperService();
     this.logger = new Logger('StreamHandler');
-    this.logger.info('v5.0.0 inicializado - Fix completo TMDB Season');
+    this.logger.info('v5.0.1 inicializado - Fix formato URL Torrentio RD');
     this.staticResponseService = new StaticResponseService(baseUrl);
     this.qualityDetector = new QualityDetector();
     this.titleFilter = new TitleFilter();
@@ -97,74 +97,58 @@ export class StreamHandler {
     this.rdService.setStaticResponseBaseUrl(baseUrl);
   }
 
-private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
+  private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
     const seenCombinations = new Set<string>();
     const uniqueStreams: Stream[] = [];
     
     for (const stream of streams) {
-        // 1. OBTÉM INFO_HASH (Formato Novo - campo direto)
-        //    O infoHash agora vem diretamente no objeto stream
-        let infoHash: string | undefined = stream.infoHash?.toLowerCase();
-        
-        // 2. OBTÉM QUALIDADE (Formato Novo - extrai do título ou behaviorHints)
-        let quality = 'unknown';
-        
-        // Tenta extrair do behaviorHints primeiro (mais confiável)
-        if (stream.behaviorHints?.streamQuality) {
-            quality = stream.behaviorHints.streamQuality;
-        } 
-        // Se não tiver, tenta extrair do título (fallback)
-        else if (stream.title) {
-            const qualityMatch = stream.title.match(/\((\d+p|4K|HD|SD|2160p|1080p|720p|480p)\)/i);
-            if (qualityMatch) {
-                quality = qualityMatch[1].toLowerCase();
-            }
+      let infoHash: string | undefined = stream.infoHash?.toLowerCase();
+      
+      let quality = 'unknown';
+      if (stream.behaviorHints?.streamQuality) {
+        quality = stream.behaviorHints.streamQuality;
+      } else if (stream.title) {
+        const qualityMatch = stream.title.match(/\((\d+p|4K|HD|SD|2160p|1080p|720p|480p)\)/i);
+        if (qualityMatch) {
+          quality = qualityMatch[1].toLowerCase();
         }
-        
-        // 3. CRIA CHAVE ÚNICA PARA DEDUPLICAÇÃO
-        //    Combinação de infoHash e qualidade
-        let uniqueKey: string;
-        
-        if (infoHash) {
-            // Caso ideal: tem infoHash, usa ele + qualidade
-            uniqueKey = `${infoHash}_${quality}`;
-        } else {
-            // Fallback extremo: se não tem infoHash, usa título completo
-            // Isso é raro, mas previne erro
-            this.logger.warn('Stream sem infoHash encontrado, usando título para dedup', {
-                title: stream.title?.substring(0, 50)
-            });
-            uniqueKey = stream.title || `stream_${Math.random()}`;
-        }
-        
-        // 4. VERIFICA SE JÁ VIU ESTA COMBINAÇÃO
-        if (seenCombinations.has(uniqueKey)) {
-            this.stats.duplicatesRemoved++;
-            this.logger.debug('Stream duplicado removido', {
-                infoHash: infoHash ? `${infoHash.substring(0, 8)}...` : 'none',
-                quality: quality,
-                uniqueKey: uniqueKey
-            });
-            continue;
-        }
-        
-        // 5. ADICIONA À LISTA DE ÚNICOS
-        seenCombinations.add(uniqueKey);
-        uniqueStreams.push(stream);
+      }
+      
+      let uniqueKey: string;
+      if (infoHash) {
+        uniqueKey = `${infoHash}_${quality}`;
+      } else {
+        this.logger.warn('Stream sem infoHash encontrado, usando título para dedup', {
+          title: stream.title?.substring(0, 50)
+        });
+        uniqueKey = stream.title || `stream_${Math.random()}`;
+      }
+      
+      if (seenCombinations.has(uniqueKey)) {
+        this.stats.duplicatesRemoved++;
+        this.logger.debug('Stream duplicado removido', {
+          infoHash: infoHash ? `${infoHash.substring(0, 8)}...` : 'none',
+          quality: quality,
+          uniqueKey: uniqueKey
+        });
+        continue;
+      }
+      
+      seenCombinations.add(uniqueKey);
+      uniqueStreams.push(stream);
     }
     
-    // 6. LOG DE RESULTADOS
     if (streams.length !== uniqueStreams.length) {
-        this.logger.debug('Deduplicação de streams concluída', {
-            totalInicial: streams.length,
-            totalFinal: uniqueStreams.length,
-            duplicadosRemovidos: streams.length - uniqueStreams.length,
-            formato: 'v1.4.0_compatible'
-        });
+      this.logger.debug('Deduplicação de streams concluída', {
+        totalInicial: streams.length,
+        totalFinal: uniqueStreams.length,
+        duplicadosRemovidos: streams.length - uniqueStreams.length,
+        formato: 'v1.4.0_compatible'
+      });
     }
     
     return uniqueStreams;
-}
+  }
 
   async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
@@ -372,6 +356,19 @@ private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
         }
       }
 
+      // Extrai o nome do arquivo do modelo File
+      const filename = fileEntry.title || 'video.mkv';
+      const fileIndex = fileEntry.fileIndex || 0;
+
+      this.logger.debug('Criando stream do banco', {
+        infoHash: magnetHash,
+        filename: filename,
+        fileIndex: fileIndex,
+        type: request.type,
+        season: season,
+        episode: episode
+      });
+
       const stream: Stream = {
         title: torrent.title,
         name: `Brasil RD (${quality})${titleSuffix}`,
@@ -381,13 +378,27 @@ private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
         status: 'available',
         infoHash: magnetHash,
         magnet: magnetLink,
-        url: request.type === 'series' && season !== undefined
-          ? generateLazyResolveUrl(magnetLink, request.apiKey!, 'series', season, episode)
-          : generateLazyResolveUrl(magnetLink, request.apiKey!, 'movie')
+        url: generateLazyResolveUrl(
+          magnetLink,
+          request.apiKey!,
+          filename,  // Nome do arquivo
+          fileIndex, // Índice do arquivo
+          request.type,
+          season,
+          episode
+        )
       };
+
+      this.logger.debug('URL gerada formato Torrentio', {
+        urlPreview: stream.url?.substring(0, 100),
+        formato: 'torrentio_compatible'
+      });
 
       return stream;
     } catch (error) {
+      this.logger.error('Erro ao converter entrada do banco para stream', {
+        error: error instanceof Error ? error.message : 'Erro desconhecido'
+      });
       return null;
     }
   }
@@ -598,13 +609,12 @@ private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
           imdbId: imdbId
         });
 
-        // FIX: Passar mediaType para TitleFilter
-const titleMatchResult = await this.titleFilter.doTitlesMatch(
-  torrent.title, 
-  imdbId, 
-  season, 
-  episode
-);
+        const titleMatchResult = await this.titleFilter.doTitlesMatch(
+          torrent.title, 
+          imdbId, 
+          season, 
+          episode
+        );
         
         if (titleMatchResult.matches) {
           this.logger.debug('Válido', {
@@ -766,7 +776,6 @@ const titleMatchResult = await this.titleFilter.doTitlesMatch(
     });
 
     try {
-      // FIX CRÍTICO: Passar season para TMDBScraper
       this.logger.debug('Buscando títulos IMDB', { imdbId, season });
       const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
       
@@ -923,7 +932,7 @@ const titleMatchResult = await this.titleFilter.doTitlesMatch(
       servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
       scrapingCacheSize: this.scrapingCache.size,
-      version: '5.0.0'
+      version: '5.0.1'
     };
   }
 }

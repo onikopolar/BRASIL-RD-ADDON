@@ -10,82 +10,215 @@ class StreamFormatter {
         this.logger = new logger_1.Logger('StreamFormatter');
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
-        this.logger.info('StreamFormatter v1.4.0 - Formato Stremio Web corrigido');
+        this.logger.info('StreamFormatter v1.6.0 inicializado - Fix URL streams lazy Torrentio RD');
+    }
+    formatTorrentioStyleTitle(baseTitle, metadata, isDirect = false, seeds, size, language, tracker) {
+        let result = baseTitle;
+        let line2 = '';
+        if (seeds !== undefined && seeds > 0) {
+            line2 += `🔗 ${seeds}`;
+        }
+        else {
+            line2 += `🔗 0`;
+        }
+        if (size) {
+            line2 += ` | 💾 ${size}`;
+        }
+        const formattedLanguage = this.formatLanguage(language || 'PT-BR');
+        line2 += ` | 🌐 ${formattedLanguage}`;
+        if (tracker) {
+            line2 += ` | ⚙️ ${tracker}`;
+        }
+        if (line2) {
+            result += '\n' + line2;
+        }
+        let line3 = '';
+        const metadataItems = [];
+        if (metadata) {
+            if (metadata.isCompleteSeason) {
+                metadataItems.push('📦');
+            }
+            if (metadata.isPackage) {
+                metadataItems.push('🎬');
+            }
+            if (metadata.hasMultiEpisode) {
+                metadataItems.push('👥');
+            }
+            if (metadata.source && metadata.source !== 'unknown') {
+                metadataItems.push(`🎞️`);
+            }
+            if (metadata.codec && metadata.codec !== 'unknown') {
+                metadataItems.push(`🔧`);
+            }
+        }
+        if (isDirect) {
+            metadataItems.push('🚀');
+        }
+        else {
+            metadataItems.push('⏳');
+        }
+        const limitedItems = metadataItems.slice(0, 3);
+        line3 = limitedItems.join(' ');
+        if (line3) {
+            result += '\n' + line3;
+        }
+        return result;
+    }
+    formatLanguage(language) {
+        if (!language)
+            return 'PT-BR';
+        const normalizedLang = language.toLowerCase().trim();
+        const langMap = {
+            'pt-br': 'PT-BR',
+            'pt': 'PT-BR',
+            'portuguese': 'PT-BR',
+            'brazilian': 'PT-BR',
+            'dublado': 'PT-BR',
+            'en': 'EN',
+            'english': 'EN',
+            'eng': 'EN',
+            'legendado': 'EN',
+            'dual': 'Dual',
+            'dual audio': 'Dual',
+            'dualaudio': 'Dual',
+            'pt-br,en': 'Dual',
+            'pt-br,en-us': 'Dual',
+            'portuguese,english': 'Dual',
+            'dublado,legendado': 'Dual',
+            'multi': 'Multi',
+            'multilanguage': 'Multi',
+            'pt-br,en-us,ja-jp': 'Multi',
+            'portuguese,english,japanese': 'Multi',
+            'es': 'ES',
+            'spanish': 'ES',
+            'esp': 'ES',
+            'fr': 'FR',
+            'french': 'FR'
+        };
+        if (langMap[normalizedLang]) {
+            return langMap[normalizedLang];
+        }
+        for (const [key, value] of Object.entries(langMap)) {
+            if (normalizedLang.includes(key)) {
+                return value;
+            }
+        }
+        return language.toUpperCase();
+    }
+    extractTracker(magnet) {
+        if (!magnet)
+            return 'Magnet';
+        if (magnet.includes('thepiratebay'))
+            return 'ThePirateBay';
+        if (magnet.includes('1337x'))
+            return '1337x';
+        if (magnet.includes('rarbg'))
+            return 'RARBG';
+        if (magnet.includes('torrentgalaxy'))
+            return 'TorrentGalaxy';
+        if (magnet.includes('magnetdl'))
+            return 'MagnetDL';
+        return 'Torrent';
     }
     createDirectStream(title, name, description, directLink, quality, type, season, episode, behaviorHints, metadata, fileIdx) {
-        this.logger.debug('DIRECT_STREAM', {
-            quality: quality,
-            type: type,
-            season: season,
-            episode: episode,
-            hasDirectLink: !!directLink
+        this.logger.debug('CRIANDO_STREAM_DIRETO', {
+            qualidade: quality,
+            tipo: type,
+            temporada: season,
+            episodio: episode
         });
-        let finalName = name;
         let finalTitle = title;
         if (type === 'series' && season !== undefined && episode !== undefined) {
             const seasonStr = season.toString().padStart(2, '0');
             const episodeStr = episode.toString().padStart(2, '0');
             const episodeTag = ` S${seasonStr}E${episodeStr}`;
-            if (!name.includes('S') && !name.includes('E')) {
-                finalName = name + episodeTag;
-            }
             if (!title.includes('S') && !title.includes('E')) {
                 finalTitle = title + episodeTag;
             }
         }
+        const seedsMatch = description.match(/(\d+)\s*seeds?/i);
+        const sizeMatch = description.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+        const languageFromDesc = this.extractLanguageFromDescription(description);
+        const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
+        const size = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
+        finalTitle = this.formatTorrentioStyleTitle(finalTitle, metadata, true, seeds, size, languageFromDesc, 'RealDebrid');
         const stream = {
             title: finalTitle,
             infoHash: (0, magnetHelper_1.extractHashFromMagnet)(directLink) || undefined,
-            fileIdx: fileIdx !== undefined ? fileIdx : 0
+            fileIdx: fileIdx !== undefined ? fileIdx : 0,
+            url: directLink
         };
         if (behaviorHints) {
             stream.behaviorHints = {
                 notWebReady: false,
                 bingeGroup: `br-${type || 'movie'}-${quality}`,
-                filename: this.sanitizeFilename(finalTitle),
+                filename: this.sanitizeFilename(finalTitle.split('\n')[0]),
                 streamQuality: quality,
                 ...behaviorHints
             };
         }
-        this.logger.debug('DIRECT_STREAM_CRIADO', {
-            title: finalTitle.substring(0, 40),
-            infoHash: stream.infoHash ? `${stream.infoHash.substring(0, 8)}...` : 'none',
-            fileIdx: stream.fileIdx
+        this.logger.debug('STREAM_DIRETO_CRIADO', {
+            titulo: finalTitle.substring(0, 80).replace(/\n/g, '\\n'),
+            infoHash: stream.infoHash ? 'sim' : 'nao',
+            fileIdx: stream.fileIdx,
+            tem_url: !!stream.url,
+            formato: 'torrentio_style'
         });
         return stream;
     }
     createLazyStream(title, name, description, magnet, apiKey, quality, type, season, episode, behaviorHints, metadata, fileIdx) {
-        this.logger.debug('LAZY_STREAM', {
-            quality: quality,
-            type: type,
-            season: season,
-            episode: episode,
-            hasMagnet: !!magnet
+        this.logger.debug('CRIANDO_STREAM_LAZY', {
+            qualidade: quality,
+            tipo: type,
+            temporada: season,
+            episodio: episode
         });
         const magnetHash = (0, magnetHelper_1.extractHashFromMagnet)(magnet);
-        let finalName = name;
         let finalTitle = title;
         if (type === 'series' && season !== undefined && episode !== undefined) {
             const seasonStr = season.toString().padStart(2, '0');
             const episodeStr = episode.toString().padStart(2, '0');
             const episodeTag = ` S${seasonStr}E${episodeStr}`;
-            if (!name.includes('S') && !name.includes('E')) {
-                finalName = name + episodeTag;
-            }
             if (!title.includes('S') && !title.includes('E')) {
                 finalTitle = title + episodeTag;
             }
+        }
+        const seedsMatch = description.match(/(\d+)\s*seeds?/i);
+        const sizeMatch = description.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+        const languageFromDesc = this.extractLanguageFromDescription(description);
+        const tracker = this.extractTracker(magnet);
+        const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
+        const size = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
+        finalTitle = this.formatTorrentioStyleTitle(finalTitle, metadata, false, seeds, size, languageFromDesc, tracker);
+        let resolveUrl = '';
+        try {
+            const filename = this.sanitizeFilename(finalTitle.split('\n')[0] + '.mkv');
+            resolveUrl = (0, magnetHelper_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, type, season, episode);
+            this.logger.debug('URL_LAZY_GERADA', {
+                formato: 'torrentio_rd',
+                url_preview: resolveUrl.substring(0, 100),
+                filename: filename,
+                fileIdx: fileIdx || 0
+            });
+        }
+        catch (error) {
+            this.logger.error('ERRO_GERAR_URL_LAZY', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
         }
         const stream = {
             title: finalTitle,
             infoHash: magnetHash || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0
         };
+        if (resolveUrl) {
+            stream.url = resolveUrl;
+        }
         if (behaviorHints) {
             stream.behaviorHints = {
                 notWebReady: false,
                 bingeGroup: `br-${type || 'movie'}-${quality}`,
-                filename: this.sanitizeFilename(finalTitle),
+                filename: this.sanitizeFilename(finalTitle.split('\n')[0]),
                 streamQuality: quality,
                 ...behaviorHints
             };
@@ -93,24 +226,37 @@ class StreamFormatter {
         if (metadata?.isPackage && stream.behaviorHints) {
             stream.behaviorHints.packageContent = true;
         }
-        this.logger.debug('LAZY_STREAM_CRIADO', {
-            title: finalTitle.substring(0, 40),
-            infoHash: stream.infoHash ? `${stream.infoHash.substring(0, 8)}...` : 'none',
+        this.logger.debug('STREAM_LAZY_CRIADO', {
+            titulo: finalTitle.substring(0, 80).replace(/\n/g, '\\n'),
+            infoHash: stream.infoHash ? 'sim' : 'nao',
             fileIdx: stream.fileIdx,
-            format: 'stremio_web_compat'
+            tem_url: !!stream.url,
+            formato: 'torrentio_style_com_url'
         });
         return stream;
     }
+    extractLanguageFromDescription(description) {
+        const languagePatterns = [
+            /(PT-BR|Dual|EN|Multi|ES|FR)/i,
+            /(portuguese|english|spanish|french)/i,
+            /(dublado|legendado|subtitled)/i
+        ];
+        for (const pattern of languagePatterns) {
+            const match = description.match(pattern);
+            if (match) {
+                return match[1];
+            }
+        }
+        return 'PT-BR';
+    }
     createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx) {
         const allQualities = this.extractAllQualities(torrent.title);
-        this.logger.debug('MULTI_QUALITY_STREAMS_PROCESS', {
-            torrentTitle: torrent.title.substring(0, 80),
-            qualitiesFound: allQualities.length,
-            qualities: allQualities,
-            type: type,
-            season: season,
-            episode: episode,
-            fileIdx: fileIdx
+        this.logger.debug('PROCESSANDO_MULTIPLAS_QUALIDADES', {
+            titulo_torrent: torrent.title.substring(0, 80),
+            qualidades_encontradas: allQualities.length,
+            tipo: type,
+            temporada: season,
+            episodio: episode
         });
         if (allQualities.length === 0) {
             const defaultQuality = this.qualityDetector.extractBestQuality(torrent.title);
@@ -128,39 +274,41 @@ class StreamFormatter {
             : '';
         for (const quality of allQualities) {
             const baseTitle = torrent.title;
+            const baseDesc = `${baseTitle}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
             const streamName = `Brasil RD (${quality})`;
             let streamTitle = streamName;
             if (type === 'series' && season !== undefined && episode !== undefined) {
                 streamTitle += ` S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
             }
             if (isAvailableOnRD && directLink) {
-                streams.push(this.createDirectStream(streamTitle, streamName, baseTitle, directLink, quality, type, season, episode, {
+                streams.push(this.createDirectStream(streamTitle, streamName, baseDesc, directLink, quality, type, season, episode, {
                     bingeGroup: `br-${request.id}-${quality}`,
                     filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
                 }, metadata, fileIdx));
             }
             else {
-                streams.push(this.createLazyStream(streamTitle, streamName, baseTitle, torrent.magnet, request.apiKey, quality, type, season, episode, {
+                streams.push(this.createLazyStream(streamTitle, streamName, baseDesc, torrent.magnet, request.apiKey, quality, type, season, episode, {
                     bingeGroup: `br-${request.id}-${quality}`,
                     filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
                 }, metadata, fileIdx));
             }
-            this.logger.debug('QUALITY_STREAM_CREATED', {
-                quality: quality,
-                type: type,
-                season: season,
-                episode: episode,
-                hasDirectLink: !!(isAvailableOnRD && directLink),
-                version: '1.4.0',
-                fileIdx: fileIdx
+            this.logger.debug('QUALIDADE_STREAM_CRIADA', {
+                qualidade: quality,
+                tipo: type,
+                temporada: season,
+                episodio: episode,
+                tem_link_direto: !!(isAvailableOnRD && directLink),
+                formato: 'torrentio'
             });
         }
-        this.logger.info('STREAMS_CREATED_SUCCESS', {
+        this.logger.info('STREAMS_CRIADOS_COM_SUCESSO', {
             total: streams.length,
-            qualities: allQualities,
+            qualidades: allQualities,
             torrent: torrent.title.substring(0, 60),
-            version: '1.4.0',
-            streamFormat: 'stremio_web_compatible'
+            streams_com_url: streams.filter(s => s.url).length,
+            streams_sem_url: streams.filter(s => !s.url).length,
+            versao: '1.6.0',
+            formato: 'torrentio_com_url'
         });
         return streams;
     }
@@ -255,7 +403,8 @@ class StreamFormatter {
     createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false, fileIdx) {
         const qualities = this.extractAllQualities(torrent.title);
         const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
-        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, torrent.title, torrent.magnet, request.apiKey, quality, 'series', season, episode, {
+        const baseDesc = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
+        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, baseDesc, torrent.magnet, request.apiKey, quality, 'series', season, episode, {
             bingeGroup: `br-${request.id}-${quality}`,
             filename: this.sanitizeFilename(torrent.title)
         }, undefined, fileIdx);
@@ -263,7 +412,8 @@ class StreamFormatter {
     createMovieStream(torrent, request, directLink, isAvailableOnRD = false, fileIdx) {
         const qualities = this.extractAllQualities(torrent.title);
         const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
-        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, torrent.title, torrent.magnet, request.apiKey, quality, 'movie', undefined, undefined, {
+        const baseDesc = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
+        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, baseDesc, torrent.magnet, request.apiKey, quality, 'movie', undefined, undefined, {
             bingeGroup: `br-${request.id}-${quality}`,
             filename: this.sanitizeFilename(torrent.title)
         }, undefined, fileIdx);
@@ -305,22 +455,15 @@ class StreamFormatter {
     }
     getStats() {
         return {
-            versao: '1.4.0',
-            feature: 'Formato compatível com Stremio Web/Desktop',
-            fix: 'Remove campos não padrão (url, sources, description, status, magnet) - Mantém apenas title, infoHash, fileIdx',
-            formatoCorreto: {
-                camposObrigatorios: ['title', 'infoHash', 'fileIdx (opcional)'],
-                camposOpcionais: ['behaviorHints'],
-                camposRemovidos: ['url', 'sources', 'description', 'name', 'status', 'magnet']
-            },
-            compatibilidade: [
-                'Stremio Web (100%)',
-                'Stremio Desktop (100%)',
-                'Stremio Mobile (100%)',
-                'Stremio Android TV (100%)'
-            ],
-            ordenacao: '2160p > 1080p > 720p > HD > SD',
-            nota: 'Formato igual ao Torrentio para máxima compatibilidade'
+            versao: '1.6.0',
+            feature: 'Fix URL streams lazy Torrentio RD',
+            formato: 'title com \n (3 linhas) como Torrentio',
+            linha1: 'Titulo + episodio',
+            linha2: '🔗 seeds | 💾 tamanho | 🌐 idioma | ⚙️ tracker',
+            linha3: '📦 🎬 👥 🎞️ 🔧 🚀 ⏳ (max 3 emojis)',
+            emojis_nossos: '🔗 💾 🌐 📦 🎬 👥 🎞️ 🔧 🚀 ⏳',
+            compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100% (igual Torrentio)',
+            fix: 'URL em streams lazy para resolver via Real-Debrid'
         };
     }
 }

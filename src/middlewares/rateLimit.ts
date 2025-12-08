@@ -4,16 +4,15 @@ import { Request } from 'express';
 // Em desenvolvimento, desabilita rate limiting
 const isDevelopment = process.env.NODE_ENV === 'development';
 
-// Rate limit diferenciado por tipo de cliente
+// Rate limit global
 export const createRateLimiter = () => {
   if (isDevelopment) {
-    // Em desenvolvimento, retorna middleware que não faz nada
     return (req: Request, res: any, next: any) => next();
   }
 
   return rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 minutos
-    max: 300, // Limite padrão
+    windowMs: 15 * 60 * 1000,
+    max: 300,
     message: {
       error: 'Muitas requisições. Tente novamente em 15 minutos.',
       retryAfter: '15 minutos'
@@ -24,13 +23,14 @@ export const createRateLimiter = () => {
   });
 };
 
-// Rate limit específico para rotas Torrentio
-export const torrentioRateLimiter = (req: Request, res: any, next: any) => {
+// Rate limit específico para rotas Torrentio - INSTÂNCIA ÚNICA PRÉ-CRIADA
+export const torrentioRateLimiter = (() => {
   if (isDevelopment) {
-    return next();
+    return (req: Request, res: any, next: any) => next();
   }
-  
-  const limiter = rateLimit({
+
+  // Cria UMA instância na inicialização do módulo
+  const limiterInstance = rateLimit({
     windowMs: 15 * 60 * 1000,
     max: 500,
     message: {
@@ -38,8 +38,12 @@ export const torrentioRateLimiter = (req: Request, res: any, next: any) => {
       retryAfter: '15 minutos'
     },
     standardHeaders: true,
-    legacyHeaders: false
+    legacyHeaders: false,
+    skipSuccessfulRequests: false
   });
-  
-  return limiter(req, res, next);
-};
+
+  // Retorna o middleware que usa a instância única
+  return (req: Request, res: any, next: any) => {
+    limiterInstance(req, res, next);
+  };
+})(); // IIFE: Executa imediatamente para criar a instância

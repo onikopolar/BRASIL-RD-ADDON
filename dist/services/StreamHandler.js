@@ -40,7 +40,7 @@ class StreamHandler {
         this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.logger = new logger_1.Logger('StreamHandler');
-        this.logger.info('v5.0.0 inicializado - Fix completo TMDB Season');
+        this.logger.info('v5.0.1 inicializado - Fix formato URL Torrentio RD');
         this.staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.titleFilter = new titleFilter_1.TitleFilter();
@@ -274,6 +274,16 @@ class StreamHandler {
                     titleSuffix = ` S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
                 }
             }
+            const filename = fileEntry.title || 'video.mkv';
+            const fileIndex = fileEntry.fileIndex || 0;
+            this.logger.debug('Criando stream do banco', {
+                infoHash: magnetHash,
+                filename: filename,
+                fileIndex: fileIndex,
+                type: request.type,
+                season: season,
+                episode: episode
+            });
             const stream = {
                 title: torrent.title,
                 name: `Brasil RD (${quality})${titleSuffix}`,
@@ -283,13 +293,18 @@ class StreamHandler {
                 status: 'available',
                 infoHash: magnetHash,
                 magnet: magnetLink,
-                url: request.type === 'series' && season !== undefined
-                    ? (0, magnetHelper_1.generateLazyResolveUrl)(magnetLink, request.apiKey, 'series', season, episode)
-                    : (0, magnetHelper_1.generateLazyResolveUrl)(magnetLink, request.apiKey, 'movie')
+                url: (0, magnetHelper_1.generateLazyResolveUrl)(magnetLink, request.apiKey, filename, fileIndex, request.type, season, episode)
             };
+            this.logger.debug('URL gerada formato Torrentio', {
+                urlPreview: stream.url?.substring(0, 100),
+                formato: 'torrentio_compatible'
+            });
             return stream;
         }
         catch (error) {
+            this.logger.error('Erro ao converter entrada do banco para stream', {
+                error: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
             return null;
         }
     }
@@ -693,7 +708,7 @@ class StreamHandler {
             servedInformativeStreams: this.stats.servedInformativeStreams,
             duplicatesRemoved: this.stats.duplicatesRemoved,
             scrapingCacheSize: this.scrapingCache.size,
-            version: '5.0.0'
+            version: '5.0.1'
         };
     }
 }

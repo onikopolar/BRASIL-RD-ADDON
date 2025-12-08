@@ -1,19 +1,21 @@
 export interface Stream {
   title: string;
-  name?: string;           // Alterado para opcional
-  description?: string;    // Alterado para opcional
-  sources?: string[];      // Alterado para opcional
+  name?: string;
+  description?: string;
+  sources?: string[];
   behaviorHints?: {
     notWebReady?: boolean;
     bingeGroup?: string;
     filename?: string;
-    streamQuality?: string; // Adicione se você usa
-    packageContent?: boolean; // Adicione se você usa
+    streamQuality?: string;
+    packageContent?: boolean;
+    // Permite campos extras para funcionalidades customizadas
+    [key: string]: any;
   };
   status?: string;
   torrentId?: string;
-  infoHash?: string;       // Mantido opcional (mas essencial para nós)
-  fileIdx?: number;        // ADICIONADO: índice do arquivo no torrent
+  infoHash?: string;
+  fileIdx?: number;
   magnet?: string;
   url?: string;
 }
@@ -24,7 +26,7 @@ export interface StreamRequest {
   title?: string;
   imdbId?: string;
   apiKey?: string;
-  authSource?: string;  // NOVO: Fonte da API Key identificada
+  authSource?: string;
   config?: {
     quality?: string;
     language?: string;
