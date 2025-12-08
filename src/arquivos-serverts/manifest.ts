@@ -51,4 +51,4 @@ export const manifest = {
 };
 
 // Log para debug - versão atual
-console.log('[Manifest] Brasil RD v1.0.1 carregado - configurationRequired: false (Web Fix)');
+console.log('[Manifest] Brasil RD v1.0.1 - configurationRequired: false (Web Fix)');
