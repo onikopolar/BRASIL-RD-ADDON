@@ -5,8 +5,8 @@
 export const manifest = {
     // Identificação única do addon
     id: 'org.brasilrd.addon',
-    
-    // Versionamento Semântico: 1.0.1 (major update para compatibilidade)
+
+    // Versionamento Semântico: 1.0.1 (minor update para compatibilidade)
     version: '1.0.1',
     
     // Informações básicas
