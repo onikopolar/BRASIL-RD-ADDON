@@ -11,10 +11,10 @@ const DATABASE_URL = process.env.DATABASE_URL ||
     process.env.POSTGRES_URL ||
     process.env.DATABASE_PUBLIC_URL;
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
-    throw new Error('URL do banco de dados não configurada para produção');
+    throw new Error('URL do banco de dados nao configurada para producao');
 }
 if (process.env.NODE_ENV !== 'production') {
-    console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Não configurada');
+    console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Nao configurada');
     if (DATABASE_URL) {
         const maskedUrl = DATABASE_URL.replace(/:[^:@]+@/, ':****@');
         console.log('Database URL (mascarada):', maskedUrl);
@@ -64,8 +64,8 @@ const sequelize = DATABASE_URL
 exports.sequelize = sequelize;
 if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
     sequelize.authenticate()
-        .then(() => console.log('Conexão com PostgreSQL estabelecida'))
-        .catch(err => console.error('Erro na conexão PostgreSQL:', err.message));
+        .then(() => console.log('Conexao com PostgreSQL estabelecida'))
+        .catch(err => console.error('Erro na conexao PostgreSQL:', err.message));
 }
 class Torrent extends sequelize_1.Model {
 }
@@ -108,7 +108,10 @@ File.init({
     size: { type: sequelize_1.DataTypes.BIGINT },
     imdbId: { type: sequelize_1.DataTypes.STRING(32) },
     imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
-    imdbEpisode: { type: sequelize_1.DataTypes.INTEGER },
+    imdbEpisode: {
+        type: sequelize_1.DataTypes.INTEGER,
+        allowNull: true
+    },
     kitsuId: { type: sequelize_1.DataTypes.INTEGER },
     kitsuEpisode: { type: sequelize_1.DataTypes.INTEGER }
 }, { sequelize, modelName: 'file' });

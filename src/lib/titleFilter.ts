@@ -26,13 +26,13 @@ export class TitleFilter {
   private readonly DEDUP_CACHE_TTL = 10 * 60 * 1000;
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
 
-  // Versionamento Semântico v2.5.0 - Aceita torrents com multiplos episodios
-  private readonly VERSION = '2.5.0';
+  // Versionamento Semântico v2.6.0 - Corrige detecção de temporadas completas
+  private readonly VERSION = '2.6.0';
 
   constructor() {
     this.logger = new Logger('TitleFilter');
-    this.logger.info(`TitleFilter v${this.VERSION} iniciado - Aceita torrents com multiplos episodios`);
-    this.logger.info(`SimilarityCalculator v23.2.0 integrado - Flexibilidade para series sem ano`);
+    this.logger.info(`TitleFilter v${this.VERSION} iniciado - Corrige detecção de temporadas completas`);
+    this.logger.info(`SimilarityCalculator v23.3.2 integrado - Detecção inteligente de packs`);
     
     this.imdbScraper = new ImdbScraperService();
     this.titleCleaner = new TitleCleaner();
@@ -113,7 +113,7 @@ export class TitleFilter {
     }
     
     if (duplicatesRemoved > 0) {
-      this.logger.info(`Deduplicacao: ${duplicatesRemoved} removidos`);
+      this.logger.info(`Deduplicação: ${duplicatesRemoved} removidos`);
     }
     
     return uniqueTorrents;
@@ -143,16 +143,16 @@ export class TitleFilter {
     return undefined;
   }
 
-  // NOVO: Detecta se o torrent tem multiplos episodios
+  // Detecta se o torrent tem múltiplos episódios
   private hasMultipleEpisodes(torrentTitle: string): { hasMultiple: boolean; startEpisode?: number; endEpisode?: number } {
     const lowerTitle = torrentTitle.toLowerCase();
     
-    // Padrao: E01-02-03-04 ou E01-02
+    // Padrão: E01-02-03-04 ou E01-02
     const episodeRangeMatch = lowerTitle.match(/e(\d{1,10})-(\d{1,10})(?:-(\d{1,10}))?(?:-(\d{1,10}))?/);
     
     if (episodeRangeMatch) {
       const startEpisode = parseInt(episodeRangeMatch[1]);
-      // Pega o ultimo episodio do range
+      // Pega o último episódio do range
       let endEpisode = startEpisode;
       for (let i = 2; i <= 4; i++) {
         if (episodeRangeMatch[i]) {
@@ -160,7 +160,7 @@ export class TitleFilter {
         }
       }
       
-      this.logger.debug('Detectado multiplos episodios', {
+      this.logger.debug('Detectado múltiplos episódios', {
         title: torrentTitle.substring(0, 60),
         startEpisode,
         endEpisode
@@ -169,7 +169,7 @@ export class TitleFilter {
       return { hasMultiple: true, startEpisode, endEpisode };
     }
     
-    // Padrao: E01E02E03 ou E01E02
+    // Padrão: E01E02E03 ou E01E02
     const concatenatedMatch = lowerTitle.match(/e(\d{1,10})e(\d{1,10})(?:e(\d{1,10}))?(?:e(\d{1,10}))?/);
     if (concatenatedMatch) {
       const startEpisode = parseInt(concatenatedMatch[1]);
@@ -186,25 +186,105 @@ export class TitleFilter {
     return { hasMultiple: false };
   }
 
-  // NOVO: Verifica se episodio esta dentro do range
-  private isEpisodeInRange(torrentTitle: string, targetEpisode: number): boolean {
-    const multipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+  // Verifica se é pack de temporada completa
+  private isCompleteSeasonPack(torrentTitle: string): boolean {
+    const lowerTitle = torrentTitle.toLowerCase();
     
-    if (multipleEpisodes.hasMultiple && multipleEpisodes.startEpisode && multipleEpisodes.endEpisode) {
-      const isInRange = targetEpisode >= multipleEpisodes.startEpisode && targetEpisode <= multipleEpisodes.endEpisode;
-      
-      if (isInRange) {
-        this.logger.debug('Episodio dentro do range', {
-          title: torrentTitle.substring(0, 60),
-          targetEpisode,
-          range: `${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
-        });
-      }
-      
-      return isInRange;
+    // Padrões de temporada completa
+    const completeSeasonPatterns = [
+      /temporada\s+completa/i,
+      /complete\s+season/i,
+      /season\s+pack/i,
+      /pack\s+temporada/i,
+      /\d+ª?\s*temporada$/i,  // "1ª Temporada" no final
+      /^temporada\s+\d+$/i,   // "Temporada 1" sozinho
+      /season\s+\d+\s+complete/i,
+      /season\s+\d+\s+pack/i,
+      /temporada\s+\d+\s+completa/i
+    ];
+    
+    // Verifica se tem padrão de pack mas não tem episódio específico
+    const hasCompletePattern = completeSeasonPatterns.some(pattern => pattern.test(lowerTitle));
+    const hasSpecificEpisode = /s\d+e\d+/i.test(lowerTitle) || /episode\s+\d+/i.test(lowerTitle) || /e\d+/i.test(lowerTitle);
+    
+    // Se tem padrão de pack e não tem episódio específico
+    if (hasCompletePattern && !hasSpecificEpisode) {
+      this.logger.debug('Pack de temporada completa detectado', {
+        title: torrentTitle.substring(0, 60),
+        pattern: completeSeasonPatterns.find(p => p.test(lowerTitle))?.toString()
+      });
+      return true;
     }
     
     return false;
+  }
+
+  // Verifica se episódio está dentro do range ou se é pack completo
+  private isEpisodeCompatible(
+    torrentTitle: string,
+    torrentEpisode: number | undefined,
+    targetEpisode: number,
+    targetSeason: number
+  ): { compatible: boolean; reason: string } {
+    
+    // 1. Verifica se é pack de temporada completa
+    if (this.isCompleteSeasonPack(torrentTitle)) {
+      return {
+        compatible: true,
+        reason: 'Pack de temporada completa - compatível com qualquer episódio'
+      };
+    }
+    
+    // 2. Verifica múltiplos episódios no range
+    const multipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+    if (multipleEpisodes.hasMultiple && multipleEpisodes.startEpisode && multipleEpisodes.endEpisode) {
+      const isInRange = targetEpisode >= multipleEpisodes.startEpisode && targetEpisode <= multipleEpisodes.endEpisode;
+      if (isInRange) {
+        return {
+          compatible: true,
+          reason: `Episódio ${targetEpisode} dentro do range ${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
+        };
+      }
+      return {
+        compatible: false,
+        reason: `Episódio ${targetEpisode} fora do range ${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
+      };
+    }
+    
+    // 3. Se episódio não especificado no torrent (pode ser pack não detectado)
+    if (torrentEpisode === undefined) {
+      // Verifica se parece ser um pack (tem "pack", "complete", "temporada" sem episódio específico)
+      const lowerTitle = torrentTitle.toLowerCase();
+      const seemsLikePack = lowerTitle.includes('pack') || 
+                           lowerTitle.includes('complete') || 
+                           lowerTitle.includes('temporada') ||
+                           lowerTitle.includes('season');
+      
+      if (seemsLikePack) {
+        return {
+          compatible: true,
+          reason: 'Possível pack detectado - compatível'
+        };
+      }
+      
+      return {
+        compatible: false,
+        reason: 'Episódio não especificado e não parece ser pack'
+      };
+    }
+    
+    // 4. Caso padrão: episódio específico
+    if (torrentEpisode === targetEpisode) {
+      return {
+        compatible: true,
+        reason: `Episódio específico ${targetEpisode} corresponde`
+      };
+    }
+    
+    return {
+      compatible: false,
+      reason: `Episódio diferente: Torrent E${torrentEpisode} vs E${targetEpisode}`
+    };
   }
 
   private async getImdbTitlesWithCache(imdbId: string, season?: number): Promise<ImdbTitles | null> {
@@ -229,12 +309,12 @@ export class TitleFilter {
           season,
           year: titles.year,
           tipo: titles.mediaType,
-          portugues: titles.foundInPortuguese
+          português: titles.foundInPortuguese
         });
         
         return titles;
       } else {
-        this.logger.warn('TMDB: sem titulos', { imdbId, season });
+        this.logger.warn('TMDB: sem títulos', { imdbId, season });
       }
     } catch (error) {
       this.logger.error('Erro TMDB', {
@@ -268,22 +348,22 @@ export class TitleFilter {
     targetEpisode?: number
   ): Promise<TitleMatchResult> {
     try {
-      // 1. Valida portugues
+      // 1. Valida português
       const isPortuguese = this.isPortugueseContent(torrentTitle);
       
       if (!isPortuguese) {
-        this.logger.warn('Rejeitado: nao portugues', {
+        this.logger.warn('Rejeitado: não português', {
           title: torrentTitle.substring(0, 60)
         });
         return {
           matches: false,
           similarity: 0,
           torrentMetadata: this.extractSeriesMetadata(torrentTitle),
-          reason: 'Conteudo nao esta em portugues'
+          reason: 'Conteúdo não está em português'
         };
       }
 
-      // 2. Obtem titulos do TMDB com season
+      // 2. Obtém títulos do TMDB com season
       const imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         this.logger.warn('TMDB: sem dados', {
@@ -295,7 +375,7 @@ export class TitleFilter {
           matches: false,
           similarity: 0,
           torrentMetadata: this.extractSeriesMetadata(torrentTitle),
-          reason: `Nenhum titulo encontrado no TMDB para ${imdbId}`
+          reason: `Nenhum título encontrado no TMDB para ${imdbId}`
         };
       }
 
@@ -313,10 +393,10 @@ export class TitleFilter {
       const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
       const torrentYear = this.extractTorrentYear(torrentTitle);
       
-      // NOTA: SimilarityCalculator v23.2.0 tem flexibilidade para series sem ano
-      // Ano é importante mas nao critico se contexto for forte
+      // NOTA: SimilarityCalculator v23.3.2 tem flexibilidade para séries sem ano
+      // Ano é importante mas não crítico se contexto for forte
 
-      // 5. Valida temporada/episodio
+      // 5. Valida temporada
       if (targetSeason !== undefined) {
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
           this.logger.warn('Temporada diferente', {
@@ -331,69 +411,38 @@ export class TitleFilter {
           };
         }
         
+        // 6. Valida episódio com lógica inteligente
         if (targetEpisode !== undefined) {
-          // NOVO: Verifica se é torrent com multiplos episodios
-          const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+          const episodeCompatibility = this.isEpisodeCompatible(
+            torrentTitle,
+            torrentMetadata.episode,
+            targetEpisode,
+            targetSeason
+          );
           
-          if (hasMultipleEpisodes.hasMultiple) {
-            // Torrent tem multiplos episodios, verifica se o episodio solicitado esta no range
-            const episodeInRange = this.isEpisodeInRange(torrentTitle, targetEpisode);
-            
-            if (!episodeInRange) {
-              this.logger.warn('Episodio fora do range', {
-                torrentTitle: torrentTitle.substring(0, 60),
-                targetEpisode,
-                hasMultipleEpisodes
-              });
-              return {
-                matches: false,
-                similarity: 0,
-                torrentMetadata,
-                reason: `Episodio ${targetEpisode} fora do range do torrent`
-              };
-            }
-            
-            // Se esta no range, considera valido mesmo que metadata.episode seja diferente
-            this.logger.debug('Episodio aceito via range', {
+          if (!episodeCompatibility.compatible) {
+            this.logger.warn('Episódio incompatível', {
               torrentTitle: torrentTitle.substring(0, 60),
               targetEpisode,
-              range: `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`
-            });
-            
-          } else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
-            // Caso normal: episodio especifico e diferente
-            this.logger.warn('Episodio diferente', {
-              torrentEpisode: torrentMetadata.episode,
-              targetEpisode
+              motivo: episodeCompatibility.reason
             });
             return {
               matches: false,
               similarity: 0,
               torrentMetadata,
-              reason: `Episodio diferente: Torrent E${torrentMetadata.episode} vs E${targetEpisode}`
+              reason: episodeCompatibility.reason
             };
           }
           
-          // Caso: busca episodio especifico mas torrent nao especifica episodio unico
-          if (!torrentMetadata.episode && !hasMultipleEpisodes.hasMultiple && !torrentMetadata.isCompleteSeason) {
-            const isPackage = this.metadataExtractor.isPackageTitle(torrentTitle.toLowerCase());
-            if (!isPackage) {
-              this.logger.warn('Sem episodio especifico', { 
-                targetEpisode,
-                title: torrentTitle.substring(0, 60)
-              });
-              return {
-                matches: false,
-                similarity: 0,
-                torrentMetadata,
-                reason: 'Busca episodio especifico mas torrent nao especifica episodio'
-              };
-            }
-          }
+          this.logger.debug('Episódio compatível', {
+            torrentTitle: torrentTitle.substring(0, 60),
+            targetEpisode,
+            motivo: episodeCompatibility.reason
+          });
         }
       }
 
-      // 6. Similaridade (SimilarityCalculator v23.2.0)
+      // 7. Similaridade (SimilarityCalculator v23.3.2)
       const smartMatch = await this.smartTitleContainsCheck(
         torrentTitle,
         imdbId,
@@ -401,7 +450,7 @@ export class TitleFilter {
         targetSeason
       );
 
-      // 7. Resultado
+      // 8. Resultado
       const result = {
         matches: smartMatch.matches,
         matchedTitle: imdbTitles.portugueseTitle || imdbTitles.originalTitle,
@@ -420,7 +469,7 @@ export class TitleFilter {
       return result;
 
     } catch (error) {
-      this.logger.error('Erro comparacao', {
+      this.logger.error('Erro comparação', {
         torrentTitle: torrentTitle.substring(0, 60),
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -456,25 +505,22 @@ export class TitleFilter {
       if (targetSeason !== undefined) {
         const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
         
-        // NOVO: Verifica multiplos episodios tambem na versao sync
-        const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+        // Verifica temporada
+        if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
+          return false;
+        }
         
-        if (torrentMetadata.hasEpisodeInfo || hasMultipleEpisodes.hasMultiple) {
-          if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
-            return false;
-          }
+        // Verifica episódio
+        if (targetEpisode !== undefined) {
+          const episodeCompatibility = this.isEpisodeCompatible(
+            torrentTitle,
+            torrentMetadata.episode,
+            targetEpisode,
+            targetSeason
+          );
           
-          if (targetEpisode !== undefined) {
-            if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
-              // Verifica se episodio esta dentro do range
-              const episodeInRange = targetEpisode >= hasMultipleEpisodes.startEpisode && 
-                                    targetEpisode <= hasMultipleEpisodes.endEpisode;
-              if (!episodeInRange) {
-                return false;
-              }
-            } else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
-              return false;
-            }
+          if (!episodeCompatibility.compatible) {
+            return false;
           }
         }
       }
@@ -502,7 +548,7 @@ export class TitleFilter {
       total: torrents.length
     });
 
-    // 1. Deduplicacao
+    // 1. Deduplicação
     const uniqueTorrents = this.deduplicateTorrents(torrents);
     
     const results = {
@@ -512,7 +558,7 @@ export class TitleFilter {
       duplicatesRemoved: torrents.length - uniqueTorrents.length
     };
 
-    // 2. Filtro portugues
+    // 2. Filtro português
     const portugueseTorrents = uniqueTorrents.filter(torrent => {
       if (this.isAlreadyProcessed(torrent)) {
         results.excluded.push(torrent);
@@ -535,7 +581,7 @@ export class TitleFilter {
       return [];
     }
 
-    // 3. Obtem dados TMDB
+    // 3. Obtém dados TMDB
     let imdbTitles: ImdbTitles | null;
     try {
       imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
@@ -564,41 +610,31 @@ export class TitleFilter {
     for (const torrent of portugueseTorrents) {
       const torrentMetadata = this.extractSeriesMetadata(torrent.title);
       
-      // Valida temporada/episodio
+      // Valida temporada
       if (targetSeason !== undefined) {
         if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
           results.excluded.push(torrent);
           continue;
         }
         
+        // Valida episódio com lógica inteligente
         if (targetEpisode !== undefined) {
-          // NOVO: Verifica multiplos episodios
-          const hasMultipleEpisodes = this.hasMultipleEpisodes(torrent.title);
+          const episodeCompatibility = this.isEpisodeCompatible(
+            torrent.title,
+            torrentMetadata.episode,
+            targetEpisode,
+            targetSeason
+          );
           
-          if (hasMultipleEpisodes.hasMultiple) {
-            // Verifica se episodio esta dentro do range
-            const episodeInRange = this.isEpisodeInRange(torrent.title, targetEpisode);
-            if (!episodeInRange) {
-              results.excluded.push(torrent);
-              continue;
-            }
-          } else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
+          if (!episodeCompatibility.compatible) {
             results.excluded.push(torrent);
+            results.reasons.push(`Episódio: ${episodeCompatibility.reason}`);
             continue;
-          }
-          
-          // Caso: busca episodio especifico mas nao tem episodio definido
-          if (!torrentMetadata.episode && !hasMultipleEpisodes.hasMultiple && !torrentMetadata.isCompleteSeason) {
-            const isPackage = this.metadataExtractor.isPackageTitle(torrent.title.toLowerCase());
-            if (!isPackage) {
-              results.excluded.push(torrent);
-              continue;
-            }
           }
         }
       }
 
-      // Similaridade (SimilarityCalculator v23.2.0)
+      // Similaridade (SimilarityCalculator v23.3.2)
       const match = await this.smartTitleContainsCheck(
         torrent.title,
         imdbId,
@@ -619,11 +655,13 @@ export class TitleFilter {
       requestId,
       imdbId,
       season: targetSeason,
+      episódio: targetEpisode,
       anoUsado: imdbTitles.year || '?',
       totalOriginal: torrents.length,
       duplicatas: results.duplicatesRemoved,
       portugueses: portugueseTorrents.length,
-      incluidos: results.included.length,
+      incluídos: results.included.length,
+      excluídos: results.excluded.length,
       tempo: `${processingTime}ms`
     });
 
@@ -678,7 +716,7 @@ export class TitleFilter {
       requestId,
       totalOriginal: torrents.length,
       duplicatas: results.duplicatesRemoved,
-      incluidos: results.included.length,
+      incluídos: results.included.length,
       tempo: `${processingTime}ms`
     });
 
@@ -691,7 +729,7 @@ export class TitleFilter {
     targetSeason?: number,
     targetEpisode?: number
   ): Promise<TitleMatchResult> {
-    this.logger.info('Teste titulo', {
+    this.logger.info('Teste título', {
       torrentTitle,
       imdbId,
       season: targetSeason,
@@ -715,6 +753,7 @@ export class TitleFilter {
     similarity: number;
     metadata: SeriesMetadata;
     isPortuguese: boolean;
+    episodeCompatibility?: { compatible: boolean; reason: string };
   } {
     const isPortuguese = this.isPortugueseContent(torrentTitle);
     const normTorrent = this.normalizeForComparison(torrentTitle);
@@ -733,20 +772,21 @@ export class TitleFilter {
 
     let matches = isPortuguese && (contains || contained || similarity >= adjustedThreshold);
 
-    if (targetSeason !== undefined && (metadata.hasEpisodeInfo || this.hasMultipleEpisodes(torrentTitle).hasMultiple)) {
+    let episodeCompatibility;
+    if (targetSeason !== undefined) {
       if (metadata.season && metadata.season !== targetSeason) {
         matches = false;
       }
+      
       if (targetEpisode !== undefined) {
-        const multipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-        if (multipleEpisodes.hasMultiple && multipleEpisodes.startEpisode && multipleEpisodes.endEpisode) {
-          // Verifica se episodio esta no range
-          const episodeInRange = targetEpisode >= multipleEpisodes.startEpisode && 
-                                targetEpisode <= multipleEpisodes.endEpisode;
-          if (!episodeInRange) {
-            matches = false;
-          }
-        } else if (metadata.episode && metadata.episode !== targetEpisode) {
+        episodeCompatibility = this.isEpisodeCompatible(
+          torrentTitle,
+          metadata.episode,
+          targetEpisode,
+          targetSeason
+        );
+        
+        if (!episodeCompatibility.compatible) {
           matches = false;
         }
       }
@@ -760,7 +800,8 @@ export class TitleFilter {
       contained,
       similarity,
       metadata,
-      isPortuguese
+      isPortuguese,
+      episodeCompatibility
     };
   }
 
@@ -781,7 +822,7 @@ export class TitleFilter {
 
   addConfusingSeries(original: string, derivative: string, minSimilarity: number = 0.8): void {
     this.similarityCalculator.addConfusingSeries(original, derivative, minSimilarity);
-    this.logger.info('Serie confusa adicionada', {
+    this.logger.info('Série confusa adicionada', {
       original,
       derivative,
       minSimilarity
@@ -800,11 +841,11 @@ export class TitleFilter {
     const similarityStats = this.similarityCalculator.getStats();
     return {
       titleFilterVersion: this.VERSION,
-      similarityCalculatorVersion: similarityStats.version,
+      similarityCalculatorVersion: similarityStats.versão,
       similarityCalculatorFeature: similarityStats.feature,
-      similarityCalculatorDescription: similarityStats.description,
-      thresholdMovies: similarityStats.thresholdMovies,
-      thresholdSeries: similarityStats.thresholdSeries
+      similarityCalculatorDescrição: similarityStats.descrição,
+      thresholdMovies: similarityStats.limiarFilmes,
+      thresholdSeries: similarityStats.limiarSéries
     };
   }
 }

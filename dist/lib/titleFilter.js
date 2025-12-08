@@ -9,10 +9,10 @@ class TitleFilter {
         this.IMDB_CACHE_TTL = 30 * 60 * 1000;
         this.DEDUP_CACHE_TTL = 10 * 60 * 1000;
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
-        this.VERSION = '2.5.0';
+        this.VERSION = '2.6.0';
         this.logger = new logger_1.Logger('TitleFilter');
-        this.logger.info(`TitleFilter v${this.VERSION} iniciado - Aceita torrents com multiplos episodios`);
-        this.logger.info(`SimilarityCalculator v23.2.0 integrado - Flexibilidade para series sem ano`);
+        this.logger.info(`TitleFilter v${this.VERSION} iniciado - Corrige detecção de temporadas completas`);
+        this.logger.info(`SimilarityCalculator v23.3.2 integrado - Detecção inteligente de packs`);
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.titleCleaner = new title_filter_1.TitleCleaner();
         this.languageDetector = new title_filter_1.LanguageDetector();
@@ -81,7 +81,7 @@ class TitleFilter {
             uniqueTorrents.push(torrent);
         }
         if (duplicatesRemoved > 0) {
-            this.logger.info(`Deduplicacao: ${duplicatesRemoved} removidos`);
+            this.logger.info(`Deduplicação: ${duplicatesRemoved} removidos`);
         }
         return uniqueTorrents;
     }
@@ -115,7 +115,7 @@ class TitleFilter {
                     endEpisode = parseInt(episodeRangeMatch[i]);
                 }
             }
-            this.logger.debug('Detectado multiplos episodios', {
+            this.logger.debug('Detectado múltiplos episódios', {
                 title: torrentTitle.substring(0, 60),
                 startEpisode,
                 endEpisode
@@ -135,20 +135,78 @@ class TitleFilter {
         }
         return { hasMultiple: false };
     }
-    isEpisodeInRange(torrentTitle, targetEpisode) {
+    isCompleteSeasonPack(torrentTitle) {
+        const lowerTitle = torrentTitle.toLowerCase();
+        const completeSeasonPatterns = [
+            /temporada\s+completa/i,
+            /complete\s+season/i,
+            /season\s+pack/i,
+            /pack\s+temporada/i,
+            /\d+ª?\s*temporada$/i,
+            /^temporada\s+\d+$/i,
+            /season\s+\d+\s+complete/i,
+            /season\s+\d+\s+pack/i,
+            /temporada\s+\d+\s+completa/i
+        ];
+        const hasCompletePattern = completeSeasonPatterns.some(pattern => pattern.test(lowerTitle));
+        const hasSpecificEpisode = /s\d+e\d+/i.test(lowerTitle) || /episode\s+\d+/i.test(lowerTitle) || /e\d+/i.test(lowerTitle);
+        if (hasCompletePattern && !hasSpecificEpisode) {
+            this.logger.debug('Pack de temporada completa detectado', {
+                title: torrentTitle.substring(0, 60),
+                pattern: completeSeasonPatterns.find(p => p.test(lowerTitle))?.toString()
+            });
+            return true;
+        }
+        return false;
+    }
+    isEpisodeCompatible(torrentTitle, torrentEpisode, targetEpisode, targetSeason) {
+        if (this.isCompleteSeasonPack(torrentTitle)) {
+            return {
+                compatible: true,
+                reason: 'Pack de temporada completa - compatível com qualquer episódio'
+            };
+        }
         const multipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
         if (multipleEpisodes.hasMultiple && multipleEpisodes.startEpisode && multipleEpisodes.endEpisode) {
             const isInRange = targetEpisode >= multipleEpisodes.startEpisode && targetEpisode <= multipleEpisodes.endEpisode;
             if (isInRange) {
-                this.logger.debug('Episodio dentro do range', {
-                    title: torrentTitle.substring(0, 60),
-                    targetEpisode,
-                    range: `${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
-                });
+                return {
+                    compatible: true,
+                    reason: `Episódio ${targetEpisode} dentro do range ${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
+                };
             }
-            return isInRange;
+            return {
+                compatible: false,
+                reason: `Episódio ${targetEpisode} fora do range ${multipleEpisodes.startEpisode}-${multipleEpisodes.endEpisode}`
+            };
         }
-        return false;
+        if (torrentEpisode === undefined) {
+            const lowerTitle = torrentTitle.toLowerCase();
+            const seemsLikePack = lowerTitle.includes('pack') ||
+                lowerTitle.includes('complete') ||
+                lowerTitle.includes('temporada') ||
+                lowerTitle.includes('season');
+            if (seemsLikePack) {
+                return {
+                    compatible: true,
+                    reason: 'Possível pack detectado - compatível'
+                };
+            }
+            return {
+                compatible: false,
+                reason: 'Episódio não especificado e não parece ser pack'
+            };
+        }
+        if (torrentEpisode === targetEpisode) {
+            return {
+                compatible: true,
+                reason: `Episódio específico ${targetEpisode} corresponde`
+            };
+        }
+        return {
+            compatible: false,
+            reason: `Episódio diferente: Torrent E${torrentEpisode} vs E${targetEpisode}`
+        };
     }
     async getImdbTitlesWithCache(imdbId, season) {
         const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
@@ -167,12 +225,12 @@ class TitleFilter {
                     season,
                     year: titles.year,
                     tipo: titles.mediaType,
-                    portugues: titles.foundInPortuguese
+                    português: titles.foundInPortuguese
                 });
                 return titles;
             }
             else {
-                this.logger.warn('TMDB: sem titulos', { imdbId, season });
+                this.logger.warn('TMDB: sem títulos', { imdbId, season });
             }
         }
         catch (error) {
@@ -192,14 +250,14 @@ class TitleFilter {
         try {
             const isPortuguese = this.isPortugueseContent(torrentTitle);
             if (!isPortuguese) {
-                this.logger.warn('Rejeitado: nao portugues', {
+                this.logger.warn('Rejeitado: não português', {
                     title: torrentTitle.substring(0, 60)
                 });
                 return {
                     matches: false,
                     similarity: 0,
                     torrentMetadata: this.extractSeriesMetadata(torrentTitle),
-                    reason: 'Conteudo nao esta em portugues'
+                    reason: 'Conteúdo não está em português'
                 };
             }
             const imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
@@ -213,7 +271,7 @@ class TitleFilter {
                     matches: false,
                     similarity: 0,
                     torrentMetadata: this.extractSeriesMetadata(torrentTitle),
-                    reason: `Nenhum titulo encontrado no TMDB para ${imdbId}`
+                    reason: `Nenhum título encontrado no TMDB para ${imdbId}`
                 };
             }
             if (imdbTitles.year) {
@@ -240,55 +298,25 @@ class TitleFilter {
                     };
                 }
                 if (targetEpisode !== undefined) {
-                    const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-                    if (hasMultipleEpisodes.hasMultiple) {
-                        const episodeInRange = this.isEpisodeInRange(torrentTitle, targetEpisode);
-                        if (!episodeInRange) {
-                            this.logger.warn('Episodio fora do range', {
-                                torrentTitle: torrentTitle.substring(0, 60),
-                                targetEpisode,
-                                hasMultipleEpisodes
-                            });
-                            return {
-                                matches: false,
-                                similarity: 0,
-                                torrentMetadata,
-                                reason: `Episodio ${targetEpisode} fora do range do torrent`
-                            };
-                        }
-                        this.logger.debug('Episodio aceito via range', {
+                    const episodeCompatibility = this.isEpisodeCompatible(torrentTitle, torrentMetadata.episode, targetEpisode, targetSeason);
+                    if (!episodeCompatibility.compatible) {
+                        this.logger.warn('Episódio incompatível', {
                             torrentTitle: torrentTitle.substring(0, 60),
                             targetEpisode,
-                            range: `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`
-                        });
-                    }
-                    else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
-                        this.logger.warn('Episodio diferente', {
-                            torrentEpisode: torrentMetadata.episode,
-                            targetEpisode
+                            motivo: episodeCompatibility.reason
                         });
                         return {
                             matches: false,
                             similarity: 0,
                             torrentMetadata,
-                            reason: `Episodio diferente: Torrent E${torrentMetadata.episode} vs E${targetEpisode}`
+                            reason: episodeCompatibility.reason
                         };
                     }
-                    if (!torrentMetadata.episode && !hasMultipleEpisodes.hasMultiple && !torrentMetadata.isCompleteSeason) {
-                        const isPackage = this.metadataExtractor.isPackageTitle(torrentTitle.toLowerCase());
-                        if (!isPackage) {
-                            this.logger.warn('Sem episodio especifico', {
-                                targetEpisode,
-                                title: torrentTitle.substring(0, 60)
-                            });
-                            return {
-                                matches: false,
-                                similarity: 0,
-                                torrentMetadata,
-                                reason: 'Busca episodio especifico mas torrent nao especifica episodio'
-                            };
-                        }
-                    }
+                    this.logger.debug('Episódio compatível', {
+                        torrentTitle: torrentTitle.substring(0, 60),
+                        targetEpisode,
+                        motivo: episodeCompatibility.reason
+                    });
                 }
             }
             const smartMatch = await this.smartTitleContainsCheck(torrentTitle, imdbId, { year: torrentYear }, targetSeason);
@@ -308,7 +336,7 @@ class TitleFilter {
             return result;
         }
         catch (error) {
-            this.logger.error('Erro comparacao', {
+            this.logger.error('Erro comparação', {
                 torrentTitle: torrentTitle.substring(0, 60),
                 imdbId,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -334,22 +362,13 @@ class TitleFilter {
         if (smartMatch.matches && smartMatch.similarity >= adjustedThreshold) {
             if (targetSeason !== undefined) {
                 const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
-                const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-                if (torrentMetadata.hasEpisodeInfo || hasMultipleEpisodes.hasMultiple) {
-                    if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
+                if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
+                    return false;
+                }
+                if (targetEpisode !== undefined) {
+                    const episodeCompatibility = this.isEpisodeCompatible(torrentTitle, torrentMetadata.episode, targetEpisode, targetSeason);
+                    if (!episodeCompatibility.compatible) {
                         return false;
-                    }
-                    if (targetEpisode !== undefined) {
-                        if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
-                            const episodeInRange = targetEpisode >= hasMultipleEpisodes.startEpisode &&
-                                targetEpisode <= hasMultipleEpisodes.endEpisode;
-                            if (!episodeInRange) {
-                                return false;
-                            }
-                        }
-                        else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
-                            return false;
-                        }
                     }
                 }
             }
@@ -423,24 +442,11 @@ class TitleFilter {
                     continue;
                 }
                 if (targetEpisode !== undefined) {
-                    const hasMultipleEpisodes = this.hasMultipleEpisodes(torrent.title);
-                    if (hasMultipleEpisodes.hasMultiple) {
-                        const episodeInRange = this.isEpisodeInRange(torrent.title, targetEpisode);
-                        if (!episodeInRange) {
-                            results.excluded.push(torrent);
-                            continue;
-                        }
-                    }
-                    else if (torrentMetadata.episode && torrentMetadata.episode !== targetEpisode) {
+                    const episodeCompatibility = this.isEpisodeCompatible(torrent.title, torrentMetadata.episode, targetEpisode, targetSeason);
+                    if (!episodeCompatibility.compatible) {
                         results.excluded.push(torrent);
+                        results.reasons.push(`Episódio: ${episodeCompatibility.reason}`);
                         continue;
-                    }
-                    if (!torrentMetadata.episode && !hasMultipleEpisodes.hasMultiple && !torrentMetadata.isCompleteSeason) {
-                        const isPackage = this.metadataExtractor.isPackageTitle(torrent.title.toLowerCase());
-                        if (!isPackage) {
-                            results.excluded.push(torrent);
-                            continue;
-                        }
                     }
                 }
             }
@@ -457,11 +463,13 @@ class TitleFilter {
             requestId,
             imdbId,
             season: targetSeason,
+            episódio: targetEpisode,
             anoUsado: imdbTitles.year || '?',
             totalOriginal: torrents.length,
             duplicatas: results.duplicatesRemoved,
             portugueses: portugueseTorrents.length,
-            incluidos: results.included.length,
+            incluídos: results.included.length,
+            excluídos: results.excluded.length,
             tempo: `${processingTime}ms`
         });
         return results.included;
@@ -496,13 +504,13 @@ class TitleFilter {
             requestId,
             totalOriginal: torrents.length,
             duplicatas: results.duplicatesRemoved,
-            incluidos: results.included.length,
+            incluídos: results.included.length,
             tempo: `${processingTime}ms`
         });
         return results.included;
     }
     async testTitleMatch(torrentTitle, imdbId, targetSeason, targetEpisode) {
-        this.logger.info('Teste titulo', {
+        this.logger.info('Teste título', {
             torrentTitle,
             imdbId,
             season: targetSeason,
@@ -524,20 +532,14 @@ class TitleFilter {
             Math.max(baseThreshold, confusionCheck.minSimilarity) :
             baseThreshold;
         let matches = isPortuguese && (contains || contained || similarity >= adjustedThreshold);
-        if (targetSeason !== undefined && (metadata.hasEpisodeInfo || this.hasMultipleEpisodes(torrentTitle).hasMultiple)) {
+        let episodeCompatibility;
+        if (targetSeason !== undefined) {
             if (metadata.season && metadata.season !== targetSeason) {
                 matches = false;
             }
             if (targetEpisode !== undefined) {
-                const multipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-                if (multipleEpisodes.hasMultiple && multipleEpisodes.startEpisode && multipleEpisodes.endEpisode) {
-                    const episodeInRange = targetEpisode >= multipleEpisodes.startEpisode &&
-                        targetEpisode <= multipleEpisodes.endEpisode;
-                    if (!episodeInRange) {
-                        matches = false;
-                    }
-                }
-                else if (metadata.episode && metadata.episode !== targetEpisode) {
+                episodeCompatibility = this.isEpisodeCompatible(torrentTitle, metadata.episode, targetEpisode, targetSeason);
+                if (!episodeCompatibility.compatible) {
                     matches = false;
                 }
             }
@@ -550,7 +552,8 @@ class TitleFilter {
             contained,
             similarity,
             metadata,
-            isPortuguese
+            isPortuguese,
+            episodeCompatibility
         };
     }
     clearAllCaches() {
@@ -562,7 +565,7 @@ class TitleFilter {
     }
     addConfusingSeries(original, derivative, minSimilarity = 0.8) {
         this.similarityCalculator.addConfusingSeries(original, derivative, minSimilarity);
-        this.logger.info('Serie confusa adicionada', {
+        this.logger.info('Série confusa adicionada', {
             original,
             derivative,
             minSimilarity
@@ -578,11 +581,11 @@ class TitleFilter {
         const similarityStats = this.similarityCalculator.getStats();
         return {
             titleFilterVersion: this.VERSION,
-            similarityCalculatorVersion: similarityStats.version,
+            similarityCalculatorVersion: similarityStats.versão,
             similarityCalculatorFeature: similarityStats.feature,
-            similarityCalculatorDescription: similarityStats.description,
-            thresholdMovies: similarityStats.thresholdMovies,
-            thresholdSeries: similarityStats.thresholdSeries
+            similarityCalculatorDescrição: similarityStats.descrição,
+            thresholdMovies: similarityStats.limiarFilmes,
+            thresholdSeries: similarityStats.limiarSéries
         };
     }
 }

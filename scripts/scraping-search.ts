@@ -3,7 +3,7 @@
 import * as dotenv from 'dotenv';
 dotenv.config();
 
-import { TorrentScraperService } from '../src/services/TorrentScraperService';
+import { TorrentScraperService } from '../src/services/scraper/TorrentScraperService'
 
 class ScrapingSearch {
     private scraper: TorrentScraperService;

@@ -3,19 +3,19 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-// Tenta múltiplas fontes para a URL do banco
+// Tenta multiplas fontes para a URL do banco
 const DATABASE_URL = 
   process.env.DATABASE_URL ||
   process.env.POSTGRES_URL ||
   process.env.DATABASE_PUBLIC_URL;
 
 if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
-  throw new Error('URL do banco de dados não configurada para produção');
+  throw new Error('URL do banco de dados nao configurada para producao');
 }
 
 // Log para debug (apenas em desenvolvimento)
 if (process.env.NODE_ENV !== 'production') {
-  console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Não configurada');
+  console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Nao configurada');
   if (DATABASE_URL) {
     const maskedUrl = DATABASE_URL.replace(/:[^:@]+@/, ':****@');
     console.log('Database URL (mascarada):', maskedUrl);
@@ -27,7 +27,7 @@ const isRailway = DATABASE_URL?.includes('railway.app') || DATABASE_URL?.include
 const isRailwayInternal = DATABASE_URL?.includes('railway.internal');
 const isRailwayExternal = DATABASE_URL?.includes('railway.app') && !isRailwayInternal;
 
-// Configurações otimizadas
+// Configuracoes otimizadas
 const sequelizeConfig: any = {
   logging: false,
   dialect: 'postgres',
@@ -44,7 +44,7 @@ const sequelizeConfig: any = {
   }
 };
 
-// Configurações específicas para PostgreSQL
+// Configuracoes especificas para PostgreSQL
 if (DATABASE_URL?.includes('postgres')) {
   sequelizeConfig.dialect = 'postgres';
   
@@ -56,7 +56,7 @@ if (DATABASE_URL?.includes('postgres')) {
     } : false
   };
 
-  // Para Railway interno, adicionar configurações de performance
+  // Para Railway interno, adicionar configuracoes de performance
   if (isRailwayInternal) {
     sequelizeConfig.dialectOptions = {
       ...sequelizeConfig.dialectOptions,
@@ -67,7 +67,7 @@ if (DATABASE_URL?.includes('postgres')) {
   }
 }
 
-// Criar instância do Sequelize
+// Criar instancia do Sequelize
 const sequelize = DATABASE_URL
   ? new Sequelize(DATABASE_URL, sequelizeConfig)
   : new Sequelize('sqlite::memory:', {
@@ -75,11 +75,11 @@ const sequelize = DATABASE_URL
       pool: { max: 30, min: 5, idle: 20 * 60 * 1000 }
     });
 
-// Verificar conexão (apenas em produção/inicialização)
+// Verificar conexao (apenas em producao/inicializacao)
 if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
   sequelize.authenticate()
-    .then(() => console.log('Conexão com PostgreSQL estabelecida'))
-    .catch(err => console.error('Erro na conexão PostgreSQL:', err.message));
+    .then(() => console.log('Conexao com PostgreSQL estabelecida'))
+    .catch(err => console.error('Erro na conexao PostgreSQL:', err.message));
 }
 
 // Interface para Torrent
@@ -113,7 +113,7 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public resolution?: string;
 }
 
-// Interface para File
+// Interface para File - FIX: Aceita null para packs de temporada completa
 interface FileAttributes {
   id?: number;
   infoHash: string;
@@ -122,7 +122,7 @@ interface FileAttributes {
   size?: number;
   imdbId?: string;
   imdbSeason?: number;
-  imdbEpisode?: number;
+  imdbEpisode?: number | null;
   kitsuId?: number;
   kitsuEpisode?: number;
 }
@@ -135,7 +135,7 @@ class File extends Model<FileAttributes> implements FileAttributes {
   public size?: number;
   public imdbId?: string;
   public imdbSeason?: number;
-  public imdbEpisode?: number;
+  public imdbEpisode?: number | null;
   public kitsuId?: number;
   public kitsuEpisode?: number;
 }
@@ -195,7 +195,11 @@ File.init(
     size: { type: DataTypes.BIGINT },
     imdbId: { type: DataTypes.STRING(32) },
     imdbSeason: { type: DataTypes.INTEGER },
-    imdbEpisode: { type: DataTypes.INTEGER },
+    // FIX: Permite null para packs de temporada completa
+    imdbEpisode: { 
+      type: DataTypes.INTEGER, 
+      allowNull: true 
+    },
     kitsuId: { type: DataTypes.INTEGER },
     kitsuEpisode: { type: DataTypes.INTEGER }
   },
@@ -223,7 +227,7 @@ Subtitle.init(
   { sequelize, modelName: 'subtitle', timestamps: false }
 );
 
-// Definindo relações
+// Definindo relacoes
 Torrent.hasMany(File, { foreignKey: 'infoHash', constraints: false });
 File.belongsTo(Torrent, { foreignKey: 'infoHash', constraints: false });
 File.hasMany(Subtitle, { foreignKey: 'fileId', constraints: false });

@@ -10,65 +10,65 @@ class StreamFormatter {
         this.logger = new logger_1.Logger('StreamFormatter');
         this.qualityDetector = new qualityDetector_1.QualityDetector();
         this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
-        this.logger.info('StreamFormatter v1.6.0 inicializado - Fix URL streams lazy Torrentio RD');
+        this.logger.info('StreamFormatter v2.0.0 inicializado - Título usa formato Torrentio com emojis originais');
     }
-    formatTorrentioStyleTitle(baseTitle, metadata, isDirect = false, seeds, size, language, tracker) {
-        let result = baseTitle;
-        let line2 = '';
+    formatTitleCorreto(torrentTitle, seeds, size, language, tracker, metadata, isDirect = false) {
+        let result = torrentTitle.trim();
+        let segundaLinha = '';
         if (seeds !== undefined && seeds > 0) {
-            line2 += `🔗 ${seeds}`;
+            segundaLinha += `🔗 ${seeds}`;
         }
         else {
-            line2 += `🔗 0`;
+            segundaLinha += `🔗 0`;
         }
         if (size) {
-            line2 += ` | 💾 ${size}`;
+            segundaLinha += ` | 💾 ${size}`;
         }
-        const formattedLanguage = this.formatLanguage(language || 'PT-BR');
-        line2 += ` | 🌐 ${formattedLanguage}`;
+        const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
+        segundaLinha += ` | 🌐 ${idiomaFormatado}`;
         if (tracker) {
-            line2 += ` | ⚙️ ${tracker}`;
+            segundaLinha += ` | ⚙️ ${tracker}`;
         }
-        if (line2) {
-            result += '\n' + line2;
+        if (segundaLinha) {
+            result += '\n' + segundaLinha;
         }
-        let line3 = '';
-        const metadataItems = [];
+        let terceiraLinha = '';
+        const emojisMetadados = [];
         if (metadata) {
             if (metadata.isCompleteSeason) {
-                metadataItems.push('📦');
+                emojisMetadados.push('📦');
             }
             if (metadata.isPackage) {
-                metadataItems.push('🎬');
+                emojisMetadados.push('🎬');
             }
             if (metadata.hasMultiEpisode) {
-                metadataItems.push('👥');
+                emojisMetadados.push('👥');
             }
             if (metadata.source && metadata.source !== 'unknown') {
-                metadataItems.push(`🎞️`);
+                emojisMetadados.push('🎞️');
             }
             if (metadata.codec && metadata.codec !== 'unknown') {
-                metadataItems.push(`🔧`);
+                emojisMetadados.push('🔧');
             }
         }
         if (isDirect) {
-            metadataItems.push('🚀');
+            emojisMetadados.push('🚀');
         }
         else {
-            metadataItems.push('⏳');
+            emojisMetadados.push('⏳');
         }
-        const limitedItems = metadataItems.slice(0, 3);
-        line3 = limitedItems.join(' ');
-        if (line3) {
-            result += '\n' + line3;
+        const emojisLimitados = emojisMetadados.slice(0, 3);
+        terceiraLinha = emojisLimitados.join(' ');
+        if (terceiraLinha) {
+            result += '\n' + terceiraLinha;
         }
         return result;
     }
-    formatLanguage(language) {
-        if (!language)
+    formatarIdioma(idioma) {
+        if (!idioma)
             return 'PT-BR';
-        const normalizedLang = language.toLowerCase().trim();
-        const langMap = {
+        const idiomaNormalizado = idioma.toLowerCase().trim();
+        const mapaIdiomas = {
             'pt-br': 'PT-BR',
             'pt': 'PT-BR',
             'portuguese': 'PT-BR',
@@ -95,19 +95,19 @@ class StreamFormatter {
             'fr': 'FR',
             'french': 'FR'
         };
-        if (langMap[normalizedLang]) {
-            return langMap[normalizedLang];
+        if (mapaIdiomas[idiomaNormalizado]) {
+            return mapaIdiomas[idiomaNormalizado];
         }
-        for (const [key, value] of Object.entries(langMap)) {
-            if (normalizedLang.includes(key)) {
-                return value;
+        for (const [chave, valor] of Object.entries(mapaIdiomas)) {
+            if (idiomaNormalizado.includes(chave)) {
+                return valor;
             }
         }
-        return language.toUpperCase();
+        return idioma.toUpperCase();
     }
-    extractTracker(magnet) {
+    extrairTracker(magnet) {
         if (!magnet)
-            return 'Magnet';
+            return 'Torrent';
         if (magnet.includes('thepiratebay'))
             return 'ThePirateBay';
         if (magnet.includes('1337x'))
@@ -120,80 +120,62 @@ class StreamFormatter {
             return 'MagnetDL';
         return 'Torrent';
     }
-    createDirectStream(title, name, description, directLink, quality, type, season, episode, behaviorHints, metadata, fileIdx) {
+    criarStreamDireto(torrentTitle, descricao, linkDireto, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
         this.logger.debug('CRIANDO_STREAM_DIRETO', {
-            qualidade: quality,
-            tipo: type,
-            temporada: season,
-            episodio: episode
+            qualidade: qualidade,
+            tipo: tipo,
+            temporada: temporada,
+            episodio: episodio
         });
-        let finalTitle = title;
-        if (type === 'series' && season !== undefined && episode !== undefined) {
-            const seasonStr = season.toString().padStart(2, '0');
-            const episodeStr = episode.toString().padStart(2, '0');
-            const episodeTag = ` S${seasonStr}E${episodeStr}`;
-            if (!title.includes('S') && !title.includes('E')) {
-                finalTitle = title + episodeTag;
-            }
-        }
-        const seedsMatch = description.match(/(\d+)\s*seeds?/i);
-        const sizeMatch = description.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-        const languageFromDesc = this.extractLanguageFromDescription(description);
+        const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
+        const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+        const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
         const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
-        const size = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
-        finalTitle = this.formatTorrentioStyleTitle(finalTitle, metadata, true, seeds, size, languageFromDesc, 'RealDebrid');
+        const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
+        const tituloFinal = this.formatTitleCorreto(torrentTitle, seeds, tamanho, idiomaDaDescricao, 'RealDebrid', metadata, true);
         const stream = {
-            title: finalTitle,
-            infoHash: (0, magnetHelper_1.extractHashFromMagnet)(directLink) || undefined,
+            title: tituloFinal,
+            infoHash: (0, magnetHelper_1.extractHashFromMagnet)(linkDireto) || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0,
-            url: directLink
+            url: linkDireto
         };
         if (behaviorHints) {
             stream.behaviorHints = {
                 notWebReady: false,
-                bingeGroup: `br-${type || 'movie'}-${quality}`,
-                filename: this.sanitizeFilename(finalTitle.split('\n')[0]),
-                streamQuality: quality,
+                bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
+                filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
+                streamQuality: qualidade,
                 ...behaviorHints
             };
         }
         this.logger.debug('STREAM_DIRETO_CRIADO', {
-            titulo: finalTitle.substring(0, 80).replace(/\n/g, '\\n'),
+            titulo: tituloFinal.substring(0, 80).replace(/\n/g, '\\n'),
             infoHash: stream.infoHash ? 'sim' : 'nao',
             fileIdx: stream.fileIdx,
             tem_url: !!stream.url,
-            formato: 'torrentio_style'
+            formato: 'torrentio_com_titulo_correto'
         });
         return stream;
     }
-    createLazyStream(title, name, description, magnet, apiKey, quality, type, season, episode, behaviorHints, metadata, fileIdx) {
+    criarStreamLazy(torrentTitle, descricao, magnet, apiKey, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
         this.logger.debug('CRIANDO_STREAM_LAZY', {
-            qualidade: quality,
-            tipo: type,
-            temporada: season,
-            episodio: episode
+            qualidade: qualidade,
+            tipo: tipo,
+            temporada: temporada,
+            episodio: episodio
         });
         const magnetHash = (0, magnetHelper_1.extractHashFromMagnet)(magnet);
-        let finalTitle = title;
-        if (type === 'series' && season !== undefined && episode !== undefined) {
-            const seasonStr = season.toString().padStart(2, '0');
-            const episodeStr = episode.toString().padStart(2, '0');
-            const episodeTag = ` S${seasonStr}E${episodeStr}`;
-            if (!title.includes('S') && !title.includes('E')) {
-                finalTitle = title + episodeTag;
-            }
-        }
-        const seedsMatch = description.match(/(\d+)\s*seeds?/i);
-        const sizeMatch = description.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-        const languageFromDesc = this.extractLanguageFromDescription(description);
-        const tracker = this.extractTracker(magnet);
+        const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
+        const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+        const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
+        const tracker = this.extrairTracker(magnet);
         const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
-        const size = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
-        finalTitle = this.formatTorrentioStyleTitle(finalTitle, metadata, false, seeds, size, languageFromDesc, tracker);
+        const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
+        const tituloFinal = this.formatTitleCorreto(torrentTitle, seeds, tamanho, idiomaDaDescricao, tracker, metadata, false);
         let resolveUrl = '';
         try {
-            const filename = this.sanitizeFilename(finalTitle.split('\n')[0] + '.mkv');
-            resolveUrl = (0, magnetHelper_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, type, season, episode);
+            const filename = this.sanitizarNomeArquivo(tituloFinal.split('\n')[0] + '.mkv');
+            resolveUrl = (0, magnetHelper_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, tipo, temporada, episodio);
             this.logger.debug('URL_LAZY_GERADA', {
                 formato: 'torrentio_rd',
                 url_preview: resolveUrl.substring(0, 100),
@@ -207,7 +189,7 @@ class StreamFormatter {
             });
         }
         const stream = {
-            title: finalTitle,
+            title: tituloFinal,
             infoHash: magnetHash || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0
         };
@@ -217,9 +199,9 @@ class StreamFormatter {
         if (behaviorHints) {
             stream.behaviorHints = {
                 notWebReady: false,
-                bingeGroup: `br-${type || 'movie'}-${quality}`,
-                filename: this.sanitizeFilename(finalTitle.split('\n')[0]),
-                streamQuality: quality,
+                bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
+                filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
+                streamQuality: qualidade,
                 ...behaviorHints
             };
         }
@@ -227,93 +209,89 @@ class StreamFormatter {
             stream.behaviorHints.packageContent = true;
         }
         this.logger.debug('STREAM_LAZY_CRIADO', {
-            titulo: finalTitle.substring(0, 80).replace(/\n/g, '\\n'),
+            titulo: tituloFinal.substring(0, 80).replace(/\n/g, '\\n'),
             infoHash: stream.infoHash ? 'sim' : 'nao',
             fileIdx: stream.fileIdx,
             tem_url: !!stream.url,
-            formato: 'torrentio_style_com_url'
+            formato: 'torrentio_com_titulo_correto_e_url'
         });
         return stream;
     }
-    extractLanguageFromDescription(description) {
-        const languagePatterns = [
+    extrairIdiomaDaDescricao(descricao) {
+        const padroesIdioma = [
             /(PT-BR|Dual|EN|Multi|ES|FR)/i,
             /(portuguese|english|spanish|french)/i,
             /(dublado|legendado|subtitled)/i
         ];
-        for (const pattern of languagePatterns) {
-            const match = description.match(pattern);
+        for (const padrao of padroesIdioma) {
+            const match = descricao.match(padrao);
             if (match) {
                 return match[1];
             }
         }
         return 'PT-BR';
     }
-    createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx) {
-        const allQualities = this.extractAllQualities(torrent.title);
+    criarStreamsMultiplasQualidades(torrent, request, linkDireto, tipo, temporada, episodio, disponivelNoRD = false, fileIdx) {
+        const todasQualidades = this.extrairTodasQualidades(torrent.title);
         this.logger.debug('PROCESSANDO_MULTIPLAS_QUALIDADES', {
             titulo_torrent: torrent.title.substring(0, 80),
-            qualidades_encontradas: allQualities.length,
-            tipo: type,
-            temporada: season,
-            episodio: episode
+            qualidades_encontradas: todasQualidades.length,
+            tipo: tipo,
+            temporada: temporada,
+            episodio: episodio
         });
-        if (allQualities.length === 0) {
-            const defaultQuality = this.qualityDetector.extractBestQuality(torrent.title);
-            if (defaultQuality && defaultQuality !== 'unknown') {
-                allQualities.push(defaultQuality);
+        if (todasQualidades.length === 0) {
+            const qualidadePadrao = this.qualityDetector.extractBestQuality(torrent.title);
+            if (qualidadePadrao && qualidadePadrao !== 'unknown') {
+                todasQualidades.push(qualidadePadrao);
             }
             else {
-                allQualities.push('HD');
+                todasQualidades.push('HD');
             }
         }
         const streams = [];
         const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
-        const episodeTag = type === 'series' && season && episode
-            ? `S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`
+        const tagEpisodio = tipo === 'series' && temporada && episodio
+            ? `S${temporada.toString().padStart(2, '0')}E${episodio.toString().padStart(2, '0')}`
             : '';
-        for (const quality of allQualities) {
-            const baseTitle = torrent.title;
-            const baseDesc = `${baseTitle}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
-            const streamName = `Brasil RD (${quality})`;
-            let streamTitle = streamName;
-            if (type === 'series' && season !== undefined && episode !== undefined) {
-                streamTitle += ` S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
-            }
-            if (isAvailableOnRD && directLink) {
-                streams.push(this.createDirectStream(streamTitle, streamName, baseDesc, directLink, quality, type, season, episode, {
-                    bingeGroup: `br-${request.id}-${quality}`,
-                    filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+        for (const qualidade of todasQualidades) {
+            const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+            const nomeStream = `Brasil RD (${qualidade})`;
+            const tituloCompletoTorrent = torrent.title;
+            if (disponivelNoRD && linkDireto) {
+                streams.push(this.criarStreamDireto(tituloCompletoTorrent, descricaoBase, linkDireto, qualidade, tipo, temporada, episodio, {
+                    bingeGroup: `br-${request.id}-${qualidade}`,
+                    filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
                 }, metadata, fileIdx));
             }
             else {
-                streams.push(this.createLazyStream(streamTitle, streamName, baseDesc, torrent.magnet, request.apiKey, quality, type, season, episode, {
-                    bingeGroup: `br-${request.id}-${quality}`,
-                    filename: this.sanitizeFilename(`${torrent.title} ${episodeTag}`)
+                streams.push(this.criarStreamLazy(tituloCompletoTorrent, descricaoBase, torrent.magnet, request.apiKey, qualidade, tipo, temporada, episodio, {
+                    bingeGroup: `br-${request.id}-${qualidade}`,
+                    filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
                 }, metadata, fileIdx));
             }
             this.logger.debug('QUALIDADE_STREAM_CRIADA', {
-                qualidade: quality,
-                tipo: type,
-                temporada: season,
-                episodio: episode,
-                tem_link_direto: !!(isAvailableOnRD && directLink),
-                formato: 'torrentio'
+                qualidade: qualidade,
+                tipo: tipo,
+                temporada: temporada,
+                episodio: episodio,
+                tem_link_direto: !!(disponivelNoRD && linkDireto),
+                formato: 'torrentio_corrigido'
             });
         }
         this.logger.info('STREAMS_CRIADOS_COM_SUCESSO', {
             total: streams.length,
-            qualidades: allQualities,
+            qualidades: todasQualidades,
             torrent: torrent.title.substring(0, 60),
             streams_com_url: streams.filter(s => s.url).length,
             streams_sem_url: streams.filter(s => !s.url).length,
-            versao: '1.6.0',
-            formato: 'torrentio_com_url'
+            versao: '2.0.0',
+            formato: 'torrentio_corrigido_com_url'
         });
         return streams;
     }
-    extractAllQualities(title) {
-        const qualityPatterns = [
+    extrairTodasQualidades(titulo) {
+        const padroesQualidade = [
             /\b(2160p|4k|uhd)\b/gi,
             /\b(1080p|fullhd|full hd)\b/gi,
             /\b(720p|hd|high definition)\b/gi,
@@ -323,29 +301,29 @@ class StreamFormatter {
             /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi,
             /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi
         ];
-        const foundQualities = new Set();
-        const titleLower = title.toLowerCase();
-        for (const pattern of qualityPatterns.slice(0, 5)) {
-            const matches = titleLower.match(pattern);
+        const qualidadesEncontradas = new Set();
+        const tituloLower = titulo.toLowerCase();
+        for (const padrao of padroesQualidade.slice(0, 5)) {
+            const matches = tituloLower.match(padrao);
             if (matches) {
                 for (const match of matches) {
-                    const normalized = this.normalizeQuality(match);
-                    if (normalized) {
-                        foundQualities.add(normalized);
+                    const normalizada = this.normalizarQualidade(match);
+                    if (normalizada) {
+                        qualidadesEncontradas.add(normalizada);
                     }
                 }
             }
         }
-        for (const pattern of qualityPatterns.slice(5)) {
-            const matches = titleLower.match(pattern);
+        for (const padrao of padroesQualidade.slice(5)) {
+            const matches = tituloLower.match(padrao);
             if (matches) {
                 for (const match of matches) {
                     const qualityMatches = match.match(/\d{3,4}p/gi);
                     if (qualityMatches) {
                         for (const qualityMatch of qualityMatches) {
-                            const normalized = this.normalizeQuality(qualityMatch);
-                            if (normalized) {
-                                foundQualities.add(normalized);
+                            const normalizada = this.normalizarQualidade(qualityMatch);
+                            if (normalizada) {
+                                qualidadesEncontradas.add(normalizada);
                             }
                         }
                     }
@@ -354,72 +332,72 @@ class StreamFormatter {
         }
         const listPattern = /(\d{3,4}p|4k|uhd|hd)(?:\s*,\s*|\s+e\s+|\s+ou\s+)/gi;
         let listMatch;
-        while ((listMatch = listPattern.exec(titleLower)) !== null) {
-            const normalized = this.normalizeQuality(listMatch[1]);
-            if (normalized) {
-                foundQualities.add(normalized);
+        while ((listMatch = listPattern.exec(tituloLower)) !== null) {
+            const normalizada = this.normalizarQualidade(listMatch[1]);
+            if (normalizada) {
+                qualidadesEncontradas.add(normalizada);
             }
         }
-        const result = Array.from(foundQualities);
-        if (result.length === 0) {
-            const defaultQuality = this.qualityDetector.extractBestQuality(title);
-            if (defaultQuality && defaultQuality !== 'unknown') {
-                result.push(defaultQuality);
+        const resultado = Array.from(qualidadesEncontradas);
+        if (resultado.length === 0) {
+            const qualidadePadrao = this.qualityDetector.extractBestQuality(titulo);
+            if (qualidadePadrao && qualidadePadrao !== 'unknown') {
+                resultado.push(qualidadePadrao);
             }
         }
-        const qualityOrder = ['2160p', '1080p', '720p', 'HD', 'SD'];
-        result.sort((a, b) => {
-            const indexA = qualityOrder.indexOf(a);
-            const indexB = qualityOrder.indexOf(b);
+        const ordemQualidade = ['2160p', '1080p', '720p', 'HD', 'SD'];
+        resultado.sort((a, b) => {
+            const indexA = ordemQualidade.indexOf(a);
+            const indexB = ordemQualidade.indexOf(b);
             return indexA - indexB;
         });
-        return result;
+        return resultado;
     }
-    normalizeQuality(quality) {
-        const qualityLower = quality.toLowerCase();
-        if (qualityLower.includes('4k') || qualityLower.includes('2160p') || qualityLower.includes('uhd')) {
+    normalizarQualidade(qualidade) {
+        const qualidadeLower = qualidade.toLowerCase();
+        if (qualidadeLower.includes('4k') || qualidadeLower.includes('2160p') || qualidadeLower.includes('uhd')) {
             return '2160p';
         }
-        else if (qualityLower.includes('1080p') || qualityLower.includes('fullhd') || qualityLower.includes('full hd')) {
+        else if (qualidadeLower.includes('1080p') || qualidadeLower.includes('fullhd') || qualidadeLower.includes('full hd')) {
             return '1080p';
         }
-        else if (qualityLower.includes('720p') || qualityLower.includes('hd') || qualityLower.includes('high definition')) {
+        else if (qualidadeLower.includes('720p') || qualidadeLower.includes('hd') || qualidadeLower.includes('high definition')) {
             return '720p';
         }
-        else if (qualityLower.includes('480p') || qualityLower.includes('sd') || qualityLower.includes('standard definition')) {
+        else if (qualidadeLower.includes('480p') || qualidadeLower.includes('sd') || qualidadeLower.includes('standard definition')) {
             return 'SD';
         }
-        else if (qualityLower.includes('360p') || qualityLower.includes('low')) {
+        else if (qualidadeLower.includes('360p') || qualidadeLower.includes('low')) {
             return 'SD';
         }
-        else if (qualityLower.includes('hd')) {
+        else if (qualidadeLower.includes('hd')) {
             return 'HD';
         }
-        if (qualityLower.match(/\d{3,4}p/)) {
-            return qualityLower;
+        if (qualidadeLower.match(/\d{3,4}p/)) {
+            return qualidadeLower;
         }
         return '';
     }
-    createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false, fileIdx) {
-        const qualities = this.extractAllQualities(torrent.title);
-        const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
-        const baseDesc = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
-        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, baseDesc, torrent.magnet, request.apiKey, quality, 'series', season, episode, {
-            bingeGroup: `br-${request.id}-${quality}`,
-            filename: this.sanitizeFilename(torrent.title)
+    criarStreamSerie(torrent, request, linkDireto, temporada, episodio, disponivelNoRD = false, fileIdx) {
+        const qualidades = this.extrairTodasQualidades(torrent.title);
+        const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
+        const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+        return this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'series', temporada, episodio, {
+            bingeGroup: `br-${request.id}-${qualidade}`,
+            filename: this.sanitizarNomeArquivo(torrent.title)
         }, undefined, fileIdx);
     }
-    createMovieStream(torrent, request, directLink, isAvailableOnRD = false, fileIdx) {
-        const qualities = this.extractAllQualities(torrent.title);
-        const quality = qualities.length > 0 ? qualities[0] : this.qualityDetector.extractBestQuality(torrent.title);
-        const baseDesc = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatLanguage(torrent.language || 'PT-BR')}`;
-        return this.createLazyStream(`Brasil RD (${quality})`, `Brasil RD (${quality})`, baseDesc, torrent.magnet, request.apiKey, quality, 'movie', undefined, undefined, {
-            bingeGroup: `br-${request.id}-${quality}`,
-            filename: this.sanitizeFilename(torrent.title)
+    criarStreamFilme(torrent, request, linkDireto, disponivelNoRD = false, fileIdx) {
+        const qualidades = this.extrairTodasQualidades(torrent.title);
+        const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
+        const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+        return this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'movie', undefined, undefined, {
+            bingeGroup: `br-${request.id}-${qualidade}`,
+            filename: this.sanitizarNomeArquivo(torrent.title)
         }, undefined, fileIdx);
     }
-    sortStreamsByQuality(streams) {
-        const qualityPriority = {
+    ordenarStreamsPorQualidade(streams) {
+        const prioridadeQualidade = {
             '2160p': 100,
             '1080p': 80,
             '720p': 60,
@@ -427,43 +405,54 @@ class StreamFormatter {
             'SD': 20
         };
         return streams.sort((a, b) => {
-            const scoreA = this.calculateQualityScore(a.title || '');
-            const scoreB = this.calculateQualityScore(b.title || '');
+            const scoreA = this.calcularScoreQualidade(a.title || '');
+            const scoreB = this.calcularScoreQualidade(b.title || '');
             if (scoreB !== scoreA) {
                 return scoreB - scoreA;
             }
             return (a.title || '').localeCompare(b.title || '');
         });
     }
-    calculateQualityScore(name) {
-        if (!name)
+    calcularScoreQualidade(nome) {
+        if (!nome)
             return 0;
-        const quality = this.qualityDetector.extractBestQuality(name);
-        const qualityPriority = {
+        const qualidade = this.qualityDetector.extractBestQuality(nome);
+        const prioridadeQualidade = {
             '2160p': 100,
             '1080p': 80,
             '720p': 60,
             'HD': 40,
             'SD': 20
         };
-        return qualityPriority[quality] || 0;
+        return prioridadeQualidade[qualidade] || 0;
     }
-    sanitizeFilename(filename) {
-        return filename
+    sanitizarNomeArquivo(nomeArquivo) {
+        return nomeArquivo
             .replace(/[<>:"/\\|?*]/g, '_')
             .substring(0, 255);
     }
+    createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx) {
+        return this.criarStreamsMultiplasQualidades(torrent, request, directLink, type, season, episode, isAvailableOnRD, fileIdx);
+    }
+    createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false, fileIdx) {
+        return this.criarStreamSerie(torrent, request, directLink, season, episode, isAvailableOnRD, fileIdx);
+    }
+    createMovieStream(torrent, request, directLink, isAvailableOnRD = false, fileIdx) {
+        return this.criarStreamFilme(torrent, request, directLink, isAvailableOnRD, fileIdx);
+    }
+    sortStreamsByQuality(streams) {
+        return this.ordenarStreamsPorQualidade(streams);
+    }
     getStats() {
         return {
-            versao: '1.6.0',
-            feature: 'Fix URL streams lazy Torrentio RD',
-            formato: 'title com \n (3 linhas) como Torrentio',
-            linha1: 'Titulo + episodio',
-            linha2: '🔗 seeds | 💾 tamanho | 🌐 idioma | ⚙️ tracker',
-            linha3: '📦 🎬 👥 🎞️ 🔧 🚀 ⏳ (max 3 emojis)',
-            emojis_nossos: '🔗 💾 🌐 📦 🎬 👥 🎞️ 🔧 🚀 ⏳',
-            compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100% (igual Torrentio)',
-            fix: 'URL em streams lazy para resolver via Real-Debrid'
+            versao: '2.0.0',
+            feature: 'Formato de título corrigido igual Torrentio RD',
+            linha1: 'Título COMPLETO do torrent (igual Torrentio RD)',
+            linha2: '🔗 seeds | 💾 tamanho | 🌐 idioma | ⚙️ tracker (nossos emojis)',
+            linha3: '📦 🎬 👥 🎞️ 🔧 🚀 ⏳ (máximo 3 emojis)',
+            emojis_originais: '🔗 💾 🌐 ⚙️ 📦 🎬 👥 🎞️ 🔧 🚀 ⏳',
+            compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%',
+            correcao: 'Título agora usa formato igual Torrentio RD'
         };
     }
 }

@@ -22,7 +22,7 @@ interface MagnetData {
   language: string;
   addedAt: string;
   imdbSeason?: number;
-  imdbEpisode?: number;
+  imdbEpisode?: number | null;
   imdbTitle?: string;
   matchedImdbTitle?: string;
   matchedLanguage?: 'original' | 'português';
@@ -51,11 +51,11 @@ export class AutoMagnetService {
   }>();
   private readonly cacheTTL = 30000;
 
-  // Versionamento Semantico v1.4.0 - Detecta todas qualidades do torrent
-  private readonly VERSION = '1.4.0';
+  // Versionamento Semantico v1.5.2 - Fix: Aceita null para packs de temporada completa
+  private readonly VERSION = '1.5.2';
 
   constructor() {
-    logger.info(`AutoMagnetService v${this.VERSION} inicializado - Detecta todas qualidades do torrent`);
+    logger.info(`AutoMagnetService v${this.VERSION} inicializado - Fix: Aceita null para packs de temporada completa`);
   }
 
   async autoAddMagnet(
@@ -67,7 +67,7 @@ export class AutoMagnetService {
     quality?: string,
     size?: string,
     imdbSeason?: number,
-    imdbEpisode?: number
+    imdbEpisode?: number | null
   ): Promise<AutoMagnetResult> {
     const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
     
@@ -103,7 +103,7 @@ export class AutoMagnetService {
         torrentTitle,
         imdbId,
         imdbSeason,
-        imdbEpisode
+        imdbEpisode !== null ? imdbEpisode : undefined
       );
 
       if (!titleMatchResult.matches) {
@@ -112,22 +112,26 @@ export class AutoMagnetService {
         if (type === 'series' && imdbSeason !== undefined) {
           const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
           const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+          const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
           
-          if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
-            if (imdbEpisode !== undefined) {
-              const episodeInRange = imdbEpisode >= hasMultipleEpisodes.startEpisode && 
-                                   imdbEpisode <= hasMultipleEpisodes.endEpisode;
-              if (!episodeInRange) {
-                rejectionReason = `Episodio ${imdbEpisode} fora do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`;
-              } else {
-                rejectionReason = titleMatchResult.reason || 'Outro motivo de rejeicao';
+          // Se for pack de temporada completa, nao verifica episodio
+          if (!isCompletePack) {
+            if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
+              if (imdbEpisode !== undefined && imdbEpisode !== null) {
+                const episodeInRange = imdbEpisode >= hasMultipleEpisodes.startEpisode && 
+                                     imdbEpisode <= hasMultipleEpisodes.endEpisode;
+                if (!episodeInRange) {
+                  rejectionReason = `Episodio ${imdbEpisode} fora do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`;
+                } else {
+                  rejectionReason = titleMatchResult.reason || 'Outro motivo de rejeicao';
+                }
               }
-            }
-          } else if (torrentMetadata.hasEpisodeInfo) {
-            if (torrentMetadata.season && torrentMetadata.season !== imdbSeason) {
-              rejectionReason = `Temporada errada: S${torrentMetadata.season} vs S${imdbSeason}`;
-            } else if (imdbEpisode !== undefined && torrentMetadata.episode && torrentMetadata.episode !== imdbEpisode) {
-              rejectionReason = `Episodio errado: E${torrentMetadata.episode} vs E${imdbEpisode}`;
+            } else if (torrentMetadata.hasEpisodeInfo) {
+              if (torrentMetadata.season && torrentMetadata.season !== imdbSeason) {
+                rejectionReason = `Temporada errada: S${torrentMetadata.season} vs S${imdbSeason}`;
+              } else if (imdbEpisode !== undefined && imdbEpisode !== null && torrentMetadata.episode && torrentMetadata.episode !== imdbEpisode) {
+                rejectionReason = `Episodio errado: E${torrentMetadata.episode} vs E${imdbEpisode}`;
+              }
             }
           }
         }
@@ -149,6 +153,7 @@ export class AutoMagnetService {
       if (type === 'series') {
         const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
         const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+        const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
         
         logger.debug('Season/Episode debug', {
           torrentTitle: torrentTitle.substring(0, 60),
@@ -157,6 +162,7 @@ export class AutoMagnetService {
           extractedSeason: torrentMetadata.season,
           extractedEpisode: torrentMetadata.episode,
           hasMultipleEpisodes: hasMultipleEpisodes.hasMultiple,
+          isCompletePack: isCompletePack,
           episodeRange: hasMultipleEpisodes.hasMultiple ? 
             `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}` : 'nao'
         });
@@ -165,8 +171,16 @@ export class AutoMagnetService {
           torrentSeason = torrentMetadata.season;
         }
         
-        if (hasMultipleEpisodes.hasMultiple) {
-          if (torrentEpisode === undefined && imdbEpisode !== undefined) {
+        // Para packs de temporada completa, define episode como null
+        if (isCompletePack) {
+          torrentEpisode = null;
+          logger.debug('Pack de temporada completa detectado', {
+            title: torrentTitle.substring(0, 60),
+            season: torrentSeason,
+            episodeDefinido: 'null (pack completo)'
+          });
+        } else if (hasMultipleEpisodes.hasMultiple) {
+          if (torrentEpisode === undefined && imdbEpisode !== undefined && imdbEpisode !== null) {
             torrentEpisode = imdbEpisode;
           }
         } else if (torrentEpisode === undefined && torrentMetadata.episode) {
@@ -174,16 +188,16 @@ export class AutoMagnetService {
         }
       }
 
-      logger.debug('Valores finais', {
+      logger.debug('Valores finais para banco', {
         finalSeason: torrentSeason,
         finalEpisode: torrentEpisode,
+        finalEpisodeType: torrentEpisode === null ? 'null (pack)' : torrentEpisode,
         willSaveEpisode: torrentEpisode !== undefined
       });
 
       const category = type === 'series' ? 'serie' : 'filme';
       const language = this.detectLanguage(torrentTitle);
       
-      // VERSÃO 1.4.0: Extrai TODAS qualidades do torrent (720p e 1080p)
       const allQualities = this.extractAllQualitiesFromTitle(torrentTitle);
       const finalQuality = allQualities.length > 0 ? allQualities[0] : (quality || qualityDetector.extractQualityFromFilename(torrentTitle));
 
@@ -204,7 +218,6 @@ export class AutoMagnetService {
         matchedLanguage: titleMatchResult.matchedLanguage
       };
 
-      // VERSÃO 1.4.0: Salva registro no banco indicando qualidades disponiveis
       const saved = await this.saveToDatabase(magnetData, imdbTitles, allQualities);
 
       if (saved) {
@@ -215,12 +228,13 @@ export class AutoMagnetService {
         
         if (type === 'series' && torrentSeason) {
           validationMessage += ` | S${torrentSeason}`;
-          if (torrentEpisode) {
+          if (torrentEpisode !== null && torrentEpisode !== undefined) {
             validationMessage += `E${torrentEpisode}`;
+          } else if (this.isCompleteSeasonPack(torrentTitle)) {
+            validationMessage += ' (Temporada Completa)';
           }
         }
         
-        // VERSÃO 1.4.0: Adiciona informacao das qualidades
         if (allQualities.length > 1) {
           validationMessage += ` | Qualidades: ${allQualities.join(', ')}`;
         }
@@ -232,7 +246,7 @@ export class AutoMagnetService {
           validation: {
             titleMatches: true,
             seasonMatches: torrentSeason !== undefined,
-            episodeMatches: torrentEpisode !== undefined,
+            episodeMatches: torrentEpisode !== undefined && torrentEpisode !== null,
             matchedTitle: magnetData.matchedImdbTitle,
             matchedLanguage: magnetData.matchedLanguage,
             reason: validationMessage
@@ -247,7 +261,7 @@ export class AutoMagnetService {
           qualidade: magnetData.quality,
           todasQualidades: allQualities,
           season: magnetData.imdbSeason,
-          episode: magnetData.imdbEpisode,
+          episode: magnetData.imdbEpisode === null ? 'null (pack completo)' : magnetData.imdbEpisode,
           versao: this.VERSION
         });
 
@@ -276,7 +290,27 @@ export class AutoMagnetService {
     }
   }
 
-  // VERSÃO 1.4.0: Novo metodo para extrair todas qualidades do titulo
+  private isCompleteSeasonPack(torrentTitle: string): boolean {
+    const lowerTitle = torrentTitle.toLowerCase();
+    
+    const completeSeasonPatterns = [
+      /temporada\s+completa/i,
+      /complete\s+season/i,
+      /season\s+pack/i,
+      /pack\s+temporada/i,
+      /\d+ª?\s*temporada$/i,
+      /^temporada\s+\d+$/i,
+      /season\s+\d+\s+complete/i,
+      /season\s+\d+\s+pack/i,
+      /temporada\s+\d+\s+completa/i
+    ];
+    
+    const hasCompletePattern = completeSeasonPatterns.some(pattern => pattern.test(lowerTitle));
+    const hasSpecificEpisode = /s\d+e\d+/i.test(lowerTitle) || /episode\s+\d+/i.test(lowerTitle) || /e\d+/i.test(lowerTitle);
+    
+    return hasCompletePattern && !hasSpecificEpisode;
+  }
+
   private extractAllQualitiesFromTitle(title: string): string[] {
     const qualityPatterns = [
       /\b(2160p|4k|uhd)\b/gi,
@@ -284,10 +318,9 @@ export class AutoMagnetService {
       /\b(720p|hd|high definition)\b/gi,
       /\b(480p|sd|standard definition)\b/gi,
       /\b(360p|low)\b/gi,
-      // Padroes com multiplas qualidades
-      /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,  // 720p/1080p
-      /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi, // 720p e 1080p
-      /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi  // 720p ou 1080p
+      /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,
+      /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi,
+      /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi
     ];
 
     const foundQualities: Set<string> = new Set();
@@ -441,7 +474,6 @@ export class AutoMagnetService {
     return 'pt-BR';
   }
 
-  // VERSÃO 1.4.0: Adiciona parametro para todas qualidades
   private async saveToDatabase(
     magnetData: MagnetData, 
     imdbTitles: ImdbTitles, 
@@ -450,34 +482,49 @@ export class AutoMagnetService {
     try {
       const magnetHash = this.extractHashFromMagnet(magnetData.magnet);
       if (!magnetHash) {
-        throw new Error('Nao foi extrair infoHash');
+        throw new Error('Nao foi possivel extrair infoHash');
       }
 
       logger.debug('Salvando no banco', {
         title: magnetData.title.substring(0, 60),
         imdbId: magnetData.imdbId,
         season: magnetData.imdbSeason,
-        episode: magnetData.imdbEpisode,
+        episode: magnetData.imdbEpisode === null ? 'null (pack completo)' : magnetData.imdbEpisode,
         category: magnetData.category,
         qualidadesEncontradas: allQualities.length > 1 ? allQualities.join(', ') : 'unica'
       });
 
       if (magnetData.category === 'serie' && magnetData.imdbSeason !== undefined) {
-        const existingEpisode = await File.findOne({
-          where: {
-            infoHash: magnetHash,
-            imdbId: magnetData.imdbId,
-            imdbSeason: magnetData.imdbSeason,
-            imdbEpisode: magnetData.imdbEpisode
-          }
-        });
+        let existingEntry;
+        
+        if (magnetData.imdbEpisode === null) {
+          // Para packs completos, busca por episode = null
+          existingEntry = await File.findOne({
+            where: {
+              infoHash: magnetHash,
+              imdbId: magnetData.imdbId,
+              imdbSeason: magnetData.imdbSeason,
+              imdbEpisode: null
+            }
+          });
+        } else {
+          // Para episodios especificos, busca normal
+          existingEntry = await File.findOne({
+            where: {
+              infoHash: magnetHash,
+              imdbId: magnetData.imdbId,
+              imdbSeason: magnetData.imdbSeason,
+              imdbEpisode: magnetData.imdbEpisode
+            }
+          });
+        }
 
-        if (existingEpisode) {
-          logger.debug('Episodio ja existe', {
+        if (existingEntry) {
+          logger.debug('Entrada ja existe no banco', {
             title: magnetData.title.substring(0, 60),
             imdbId: magnetData.imdbId,
             imdbSeason: magnetData.imdbSeason,
-            imdbEpisode: magnetData.imdbEpisode
+            imdbEpisode: magnetData.imdbEpisode === null ? 'null (pack)' : magnetData.imdbEpisode
           });
           return false;
         }
@@ -497,7 +544,7 @@ export class AutoMagnetService {
           magnetData.title,
           magnetData.imdbId,
           magnetData.imdbSeason,
-          magnetData.imdbEpisode
+          magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
         );
 
         if (!finalValidation.matches) {
@@ -512,7 +559,6 @@ export class AutoMagnetService {
 
       const existingTorrent = await getTorrent(magnetHash);
       if (!existingTorrent) {
-        // VERSÃO 1.4.0: Adiciona campo para indicar qualidades disponiveis
         await createTorrent({
           infoHash: magnetHash,
           provider: 'brasil-rd',
@@ -524,7 +570,6 @@ export class AutoMagnetService {
           seeders: magnetData.seeds || 0,
           languages: magnetData.language,
           resolution: magnetData.quality,
-          // Novo campo: armazena qualidades detectadas como JSON string
           metadata: allQualities.length > 1 ? JSON.stringify({ availableQualities: allQualities }) : null,
           createdAt: new Date(),
           updatedAt: new Date()
@@ -542,19 +587,18 @@ export class AutoMagnetService {
         imdbEpisode: magnetData.imdbEpisode,
         matchedTitle: magnetData.matchedImdbTitle,
         matchedLanguage: magnetData.matchedLanguage,
-        // Novo campo: registra qualidades disponiveis
         qualityMetadata: allQualities.length > 1 ? JSON.stringify({ allQualities: allQualities }) : null,
         createdAt: new Date(),
         updatedAt: new Date()
       });
 
-      logger.info('Magnet salvo no DB', {
+      logger.info('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),
         imdbId: magnetData.imdbId,
         qualidadeSalva: magnetData.quality,
         todasQualidades: allQualities,
         season: magnetData.imdbSeason,
-        episode: magnetData.imdbEpisode,
+        episode: magnetData.imdbEpisode === null ? 'null (pack completo)' : magnetData.imdbEpisode,
         versao: this.VERSION
       });
 
@@ -564,7 +608,8 @@ export class AutoMagnetService {
       logger.error('Erro ao salvar magnet', {
         error: error instanceof Error ? error.message : 'Erro',
         title: magnetData.title.substring(0, 60),
-        imdbId: magnetData.imdbId
+        imdbId: magnetData.imdbId,
+        versao: this.VERSION
       });
       throw error;
     }
@@ -606,7 +651,7 @@ export class AutoMagnetService {
     apiKey: string
   ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string }> {
     try {
-      logger.info('Processando RD', {
+      logger.info('Processando Real-Debrid', {
         title: magnetData.title.substring(0, 60),
         imdbId: magnetData.imdbId
       });
@@ -614,7 +659,7 @@ export class AutoMagnetService {
       const existingTorrent = await this.checkExistingTorrent(magnetData.magnet, apiKey);
 
       if (existingTorrent.found && existingTorrent.downloaded) {
-        logger.info('Torrent ja baixado no RD', {
+        logger.info('Torrent ja baixado no Real-Debrid', {
           title: magnetData.title.substring(0, 60),
           torrentId: existingTorrent.torrentId
         });
@@ -623,7 +668,7 @@ export class AutoMagnetService {
           existingTorrent.torrentId!,
           apiKey,
           magnetData.imdbSeason,
-          magnetData.imdbEpisode
+          magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
         );
 
         return {
@@ -646,7 +691,7 @@ export class AutoMagnetService {
         };
       }
 
-      logger.info('Adicionando ao RD', {
+      logger.info('Adicionando magnet ao Real-Debrid', {
         title: magnetData.title.substring(0, 60)
       });
 
@@ -661,7 +706,7 @@ export class AutoMagnetService {
           torrentId,
           apiKey,
           magnetData.imdbSeason,
-          magnetData.imdbEpisode
+          magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
         );
       }
 
@@ -673,7 +718,7 @@ export class AutoMagnetService {
       };
 
     } catch (error) {
-      logger.error('Erro no RD', {
+      logger.error('Erro ao processar Real-Debrid', {
         title: magnetData.title.substring(0, 60),
         error: error instanceof Error ? error.message : 'Erro'
       });
@@ -681,7 +726,7 @@ export class AutoMagnetService {
       return {
         success: false,
         status: 'error',
-        message: `Erro RD: ${error instanceof Error ? error.message : 'Erro'}`
+        message: `Erro Real-Debrid: ${error instanceof Error ? error.message : 'Erro'}`
       };
     }
   }
@@ -724,7 +769,7 @@ export class AutoMagnetService {
     torrentTitle: string,
     imdbId: string,
     testSeason?: number,
-    testEpisode?: number
+    testEpisode?: number | null
   ): Promise<{
     valid: boolean;
     torrentTitle: string;
@@ -733,18 +778,20 @@ export class AutoMagnetService {
     torrentMetadata?: SeriesMetadata;
     seasonMatch?: boolean;
     episodeMatch?: boolean;
+    isCompletePack?: boolean;
     reason?: string;
   }> {
     try {
       const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
       const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
       const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
+      const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
       
       const matchResult = await titleFilter.doTitlesMatch(
         torrentTitle,
         imdbId,
         testSeason,
-        testEpisode
+        testEpisode !== null ? testEpisode : undefined
       );
 
       let seasonMatch = true;
@@ -758,12 +805,17 @@ export class AutoMagnetService {
         }
       }
 
-      if (testEpisode !== undefined) {
-        if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
+      if (testEpisode !== undefined && testEpisode !== null) {
+        if (isCompletePack) {
+          episodeMatch = true;
+          reason += ' Pack de temporada completa - compativel com qualquer episodio.';
+        } else if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
           episodeMatch = testEpisode >= hasMultipleEpisodes.startEpisode && 
                         testEpisode <= hasMultipleEpisodes.endEpisode;
           if (!episodeMatch) {
             reason += ` Episodio fora do range: ${testEpisode} vs ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
+          } else {
+            reason += ` Episodio ${testEpisode} dentro do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
           }
         } else if (torrentMetadata.episode) {
           episodeMatch = torrentMetadata.episode === testEpisode;
@@ -781,7 +833,11 @@ export class AutoMagnetService {
           reason += ' (pt)';
         }
         if (torrentMetadata.season) reason += ` S${torrentMetadata.season}`;
-        if (torrentMetadata.episode) reason += `E${torrentMetadata.episode}`;
+        if (isCompletePack) {
+          reason += ' (Temporada Completa)';
+        } else if (torrentMetadata.episode) {
+          reason += `E${torrentMetadata.episode}`;
+        }
         if (hasMultipleEpisodes.hasMultiple) {
           reason += ` [Range: ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}]`;
         }
@@ -804,6 +860,7 @@ export class AutoMagnetService {
         torrentMetadata,
         seasonMatch,
         episodeMatch,
+        isCompletePack,
         reason
       };
 
@@ -824,7 +881,7 @@ export class AutoMagnetService {
     try {
       return await imdbScraper.getTitlesFromImdbId(imdbId);
     } catch (error) {
-      logger.error('Erro titulos IMDB', {
+      logger.error('Erro ao buscar titulos IMDB', {
         imdbId,
         error: error instanceof Error ? error.message : 'Erro'
       });
@@ -840,12 +897,13 @@ export class AutoMagnetService {
     return {
       cacheSize: this.validationCache.size,
       cacheTTL: this.cacheTTL,
-      version: this.VERSION,
-      features: [
-        'Detecta todas qualidades do torrent (720p e 1080p)',
-        'Armazena qualidades no campo metadata do banco',
-        'Registra qualidades disponiveis no qualityMetadata',
-        'Compativel com StreamFormatter v1.3.3'
+      versao: this.VERSION,
+      funcionalidades: [
+        'Aceita null para packs de temporada completa',
+        'Salva apenas uma entrada por pack completo no banco',
+        'Detecta todas qualidades do torrent',
+        'Compativel com TitleFilter v2.6.0',
+        'Remove duplicacao de entradas por episodio'
       ]
     };
   }

@@ -1,6 +1,10 @@
+// Arquivo: src/lib/title-filter/SimilarityCalculator.ts
 import { Logger } from '../../utils/logger';
 import { SmartTitleMatch, SeriesConfusion } from './interfaces';
 import { ImdbScraperService } from '../../services/ImdbScraperService';
+
+// Importa as palavras técnicas do arquivo centralizado
+import { TECHNICAL_WORDS, TECHNICAL_ACRONYMS } from './TechnicalWords';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
@@ -11,38 +15,16 @@ export class SimilarityCalculator {
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
 
-  // Versionamento Semântico v23.2.0 - Flexibilidade para séries sem ano
-  private readonly VERSION = '23.2.0';
+  // Versionamento Semântico v23.3.2 - Corrige importação de palavras técnicas
+  private readonly VERSION = '23.3.2';
 
-  // Palavras técnicas otimizadas
-  private readonly TECHNICAL_WORDS = [
-    'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv', 'rmvb',
-    '720p', '1080p', '2160p', '4k', 'hd', 'fullhd', 'uhd', 'sd', 'fhd', 'hdr', 'dv',
-    'x264', 'x265', 'h264', 'h265', 'avc', 'hevc', 'xvid', 'divx',
-    'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'camrip', 'ts', 'tc', 'r5', 'scr', 'dvdscr', 'bdscr', 'webscr',
-    'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda',
-    'ac3', 'dts', 'aac', 'dd5.1', 'dolby', 'atmos', 'truehd', 'dts-hd', 'dtshd',
-    'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'portugues', 'português', 'eng', 'english', 'ingles', 'brazilian', 'espanol', 'spanish',
-    'repack', 'proper', 'extended', 'directors', 'cut', 'remastered', 'complete', 'uncensored', 'uncut', 'limited', 'special', 'edition',
-    'directors.cut', 'theatrical', 'unrated', 'imax', '3d',
-    'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'amzn', 'nf', 'hulu', 'temporada',
-    'm2ts', 'iso', 'bdmv', 'mpls', 'playlist', 'chapter', '5.1', 'DUAL',
-    'movie', 'the movie', 'cinema', 'cinematográfico', 'cinematografico',
-    'versão', 'versao', 'version', 'edição', 'edicao', 'edition',
-    'completo', 'completa', 'complete', 'torrent', 'download', 'baixar', 'assistir',
-    'the', 'of', 'and', 'in', 'to', 'a', 'an', 'for', 'with', 'on', 'at',
-    'web', 'dl', 'rip', 'cam', 'part', 'pt', 'vol', 'volume', 'ª',
-    'i', 'ii', 'iii', 'iv', 'v', '1', '2', '3', '4', '5'
-  ];
-
-  private readonly TECHNICAL_ACRONYMS = [
-    'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
-    '5.1', '7.1', '2.0', '5.1ch', '7.1ch'
-  ];
+  // Delegar palavras técnicas para arquivo externo
+  private readonly TECHNICAL_WORDS = TECHNICAL_WORDS;
+  private readonly TECHNICAL_ACRONYMS = TECHNICAL_ACRONYMS;
 
   constructor(titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
-    this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Flexibilidade para series sem ano`);
+    this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Importação de palavras técnicas corrigida`);
     this.titleCleaner = titleCleaner;
     
     if (useTmdbScraper) {
@@ -63,8 +45,8 @@ export class SimilarityCalculator {
     torrentMetadata?: { year?: number; season?: number }
   ): Promise<SmartTitleMatch> {
     
-    this.logger.debug('Analise iniciada', {
-      titulo: torrentTitle.substring(0, 60),
+    this.logger.debug('Análise iniciada', {
+      título: torrentTitle.substring(0, 60),
       temporada: torrentMetadata?.season
     });
 
@@ -107,8 +89,8 @@ export class SimilarityCalculator {
           temporada: season,
           ano: tmdbData.year,
           tipo: tmdbData.mediaType,
-          tituloPT: movieInfo.portugueseTitle || 'nao encontrado',
-          tituloOriginal: movieInfo.originalTitle
+          títuloPT: movieInfo.portugueseTitle || 'não encontrado',
+          títuloOriginal: movieInfo.originalTitle
         });
         
       } catch (error) {
@@ -131,7 +113,7 @@ export class SimilarityCalculator {
     const torrentYear = torrentMetadata?.year || this.extractYearFromTitle(torrentTitle);
     const torrentClean = this.normalizeForComparison(torrentTitle);
     
-    this.logger.debug('Contexto da analise', {
+    this.logger.debug('Contexto da análise', {
       anoTMDB: movieInfo.year,
       anoTorrent: torrentYear,
       temporada: torrentMetadata?.season,
@@ -161,7 +143,7 @@ export class SimilarityCalculator {
       );
       
       if (yearValidation.shouldReject) {
-        this.logger.debug('Rejeitado por ano invalido', { motivo: yearValidation.reason });
+        this.logger.debug('Rejeitado por ano inválido', { motivo: yearValidation.reason });
         return {
           matches: false,
           similarity: matchResult.similarity * 0.7,
@@ -171,15 +153,15 @@ export class SimilarityCalculator {
       
       this.logger.info('Match ACEITO', {
         similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
-        confianca: matchResult.confidence || 'alta',
+        confiança: matchResult.confidence || 'alta',
         motivo: matchResult.reason,
-        versao: this.VERSION
+        versão: this.VERSION
       });
     } else {
       this.logger.debug('Match insuficiente', {
         similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
         motivo: matchResult.reason,
-        versao: this.VERSION
+        versão: this.VERSION
       });
     }
 
@@ -200,22 +182,22 @@ export class SimilarityCalculator {
     }
     
     if (!torrentYear) {
-      // NOVO: Flexibilidade para series com temporada explicita
+      // Flexibilidade para séries com temporada explícita
       if (movieInfo.mediaType === 'tv' && targetSeason) {
         const temTemporadaExplicita = this.hasExplicitSeason(torrentTitle, targetSeason);
         const temEpisodioExplicito = this.hasExplicitEpisode(torrentTitle);
         
         if (temTemporadaExplicita) {
-          // Series com temporada explicita podem nao ter ano
+          // Séries com temporada explícita podem não ter ano
           let bonus = 0.1;
           if (temEpisodioExplicito) {
-            bonus += 0.05; // Bonus extra se tiver episodio
+            bonus += 0.05;
           }
           
           if (semanticSimilarity + bonus >= 0.65) {
             return { 
               shouldReject: false, 
-              reason: `Serie com temporada explicita (S${targetSeason}) - ano opcional` 
+              reason: `Série com temporada explícita (S${targetSeason}) - ano opcional` 
             };
           }
         }
@@ -226,7 +208,7 @@ export class SimilarityCalculator {
       }
       
       if (confidence === 'alta') {
-        return { shouldReject: false, reason: 'Confianca alta, ano opcional' };
+        return { shouldReject: false, reason: 'Confiança alta, ano opcional' };
       }
       
       return {
@@ -239,7 +221,7 @@ export class SimilarityCalculator {
       const yearDiff = Math.abs(movieInfo.year - torrentYear);
       
       if (yearDiff <= 2 && semanticSimilarity >= 0.85) {
-        return { shouldReject: false, reason: `Diferenca pequena (${yearDiff} anos) com contexto forte` };
+        return { shouldReject: false, reason: `Diferença pequena (${yearDiff} anos) com contexto forte` };
       }
       
       return {
@@ -248,7 +230,7 @@ export class SimilarityCalculator {
       };
     }
     
-    return { shouldReject: false, reason: 'Ano valido' };
+    return { shouldReject: false, reason: 'Ano válido' };
   }
 
   private enhancedContextAnalysis(
@@ -266,7 +248,7 @@ export class SimilarityCalculator {
     const validTmdbTitles = this.filterValidTmdbTitles(allTmdbTitles, originalTitle);
     
     if (validTmdbTitles.length === 0) {
-      this.logger.warn('Nenhum titulo TMDB valido encontrado', {
+      this.logger.warn('Nenhum título TMDB válido encontrado', {
         imdbId: 'n/a',
         originalTitle,
         allTitles: allTmdbTitles
@@ -274,13 +256,13 @@ export class SimilarityCalculator {
       return {
         matches: false,
         similarity: 0,
-        reason: 'Nenhum titulo TMDB valido encontrado'
+        reason: 'Nenhum título TMDB válido encontrado'
       };
     }
     
     let bestMatch = {
       similarity: 0,
-      confidence: 'baixa' as 'baixa' | 'media' | 'alta',
+      confidence: 'baixa' as 'baixa' | 'média' | 'alta',
       title: '',
       reason: '',
       matchedTmdbTitle: '',
@@ -317,11 +299,11 @@ export class SimilarityCalculator {
     if (bestMatch.similarity >= effectiveThreshold) {
       this.logger.debug('Match encontrado', {
         similaridade: `${(bestMatch.similarity * 100).toFixed(1)}%`,
-        confianca: bestMatch.confidence,
+        confiança: bestMatch.confidence,
         threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
         contexto: bestMatch.contextAnalysis,
         motivo: bestMatch.reason,
-        versao: this.VERSION
+        versão: this.VERSION
       });
       return {
         matches: true,
@@ -338,7 +320,7 @@ export class SimilarityCalculator {
       threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
       contexto: bestMatch.contextAnalysis,
       motivo: bestMatch.reason || 'Similaridade insuficiente',
-      versao: this.VERSION
+      versão: this.VERSION
     });
     return {
       matches: false,
@@ -356,8 +338,7 @@ export class SimilarityCalculator {
       const lowerTitle = title.toLowerCase().trim();
       
       if (lowerTitle === 'n/a' || 
-          lowerTitle === 'nao encontrado' || 
-          lowerTitle === 'não encontrado' ||
+          lowerTitle === 'não encontrado' || 
           lowerTitle === 'not found' ||
           lowerTitle === 'unknown') {
         continue;
@@ -381,7 +362,7 @@ export class SimilarityCalculator {
     originalTorrentTitle?: string
   ): {
     similarity: number;
-    confidence: 'baixa' | 'media' | 'alta';
+    confidence: 'baixa' | 'média' | 'alta';
     reason: string;
     contextAnalysis: string;
   } {
@@ -406,7 +387,7 @@ export class SimilarityCalculator {
     mediaType?: 'movie' | 'tv'
   ): {
     similarity: number;
-    confidence: 'baixa' | 'media' | 'alta';
+    confidence: 'baixa' | 'média' | 'alta';
     reason: string;
     contextAnalysis: string;
   } {
@@ -418,8 +399,8 @@ export class SimilarityCalculator {
       return {
         similarity: 0,
         confidence: 'baixa',
-        reason: `Palavra unica "${tmdbWord}" não encontrada`,
-        contextAnalysis: 'titulo_curto_nao_contem'
+        reason: `Palavra única "${tmdbWord}" não encontrada`,
+        contextAnalysis: 'título_curto_não_contém'
       };
     }
     
@@ -482,14 +463,14 @@ export class SimilarityCalculator {
       finalSimilarity = Math.min(1.0, finalSimilarity * 1.05);
     }
     
-    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let confidence: 'baixa' | 'média' | 'alta' = 'baixa';
     let reason = '';
     
     if (finalSimilarity >= 0.85) {
       confidence = 'alta';
       reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else if (finalSimilarity >= 0.7) {
-      confidence = 'media';
+      confidence = 'média';
       reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else if (finalSimilarity >= 0.5) {
       confidence = 'baixa';
@@ -498,7 +479,7 @@ export class SimilarityCalculator {
       reason = `Similaridade muito baixa: ${(finalSimilarity * 100).toFixed(1)}%`;
     }
     
-    reason += ` (palavra unica "${tmdbWord}" com ${extraWords} palavras extras)`;
+    reason += ` (palavra única "${tmdbWord}" com ${extraWords} palavras extras)`;
     
     if (densityAnalysis.isExcessive) {
       reason += ` [DENSIDADE: ${torrentWords.length} vs 1 palavras]`;
@@ -513,21 +494,21 @@ export class SimilarityCalculator {
     }
     
     if (startsWithBonus && isFirstWord) {
-      reason += ' [BONUS: começa com titulo]';
+      reason += ' [BÔNUS: começa com título]';
     }
     
     if (isVeryShortTitle) {
-      reason += ' [BONUS: titulo muito curto]';
+      reason += ' [BÔNUS: título muito curto]';
     }
     
-    let contextAnalysisStr = `titulo_curto_1_palavra:penalidade_${penalty.toFixed(2)}`;
+    let contextAnalysisStr = `título_curto_1_palavra:penalidade_${penalty.toFixed(2)}`;
     
     if (densityAnalysis.isExcessive) {
       contextAnalysisStr += `|densidade_excessiva:${densityAnalysis.ratio.toFixed(1)}`;
     }
     
     if (!isFirstWord) {
-      contextAnalysisStr += `|posicao_${wordPosition}`;
+      contextAnalysisStr += `|posição_${wordPosition}`;
     }
     
     if (!contextAnalysis.hasStrongContext) {
@@ -535,11 +516,11 @@ export class SimilarityCalculator {
     }
     
     if (startsWithBonus) {
-      contextAnalysisStr += '|comeca_com_tmdb';
+      contextAnalysisStr += '|começa_com_tmdb';
     }
     
     if (isVeryShortTitle) {
-      contextAnalysisStr += '|titulo_muito_curto';
+      contextAnalysisStr += '|título_muito_curto';
     }
     
     return {
@@ -556,7 +537,7 @@ export class SimilarityCalculator {
     mediaType?: 'movie' | 'tv'
   ): {
     similarity: number;
-    confidence: 'baixa' | 'media' | 'alta';
+    confidence: 'baixa' | 'média' | 'alta';
     reason: string;
     contextAnalysis: string;
   } {
@@ -576,7 +557,7 @@ export class SimilarityCalculator {
         similarity: 0.1,
         confidence: 'baixa',
         reason: `Palavras faltando: ${missingWords.join(', ')}`,
-        contextAnalysis: 'titulo_duas_palavras_faltando'
+        contextAnalysis: 'título_duas_palavras_faltando'
       };
     }
     
@@ -624,14 +605,14 @@ export class SimilarityCalculator {
       finalSimilarity = Math.min(1.0, finalSimilarity * 1.15);
     }
     
-    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let confidence: 'baixa' | 'média' | 'alta' = 'baixa';
     let reason = '';
     
     if (finalSimilarity >= 0.85) {
       confidence = 'alta';
       reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else if (finalSimilarity >= 0.7) {
-      confidence = 'media';
+      confidence = 'média';
       reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else if (finalSimilarity >= 0.5) {
       confidence = 'baixa';
@@ -648,19 +629,19 @@ export class SimilarityCalculator {
     }
     
     if (startsWithBonus) {
-      reason += ' [BONUS: começa com titulo]';
+      reason += ' [BÔNUS: começa com título]';
     }
     
     if (hasVeryShortWords) {
-      reason += ' [BONUS: palavras muito curtas]';
+      reason += ' [BÔNUS: palavras muito curtas]';
     }
     
-    let contextAnalysis = `titulo_duas_palavras:penalidade_${penalty.toFixed(2)}`;
+    let contextAnalysis = `título_duas_palavras:penalidade_${penalty.toFixed(2)}`;
     if (densityAnalysis.isExcessive) {
       contextAnalysis += `|densidade_excessiva:${densityAnalysis.ratio.toFixed(1)}`;
     }
     if (startsWithBonus) {
-      contextAnalysis += '|comeca_com_tmdb';
+      contextAnalysis += '|começa_com_tmdb';
     }
     if (hasVeryShortWords) {
       contextAnalysis += '|palavras_curtas';
@@ -724,7 +705,7 @@ export class SimilarityCalculator {
       if (torrentWords.length >= 2) {
         return {
           hasStrongContext: false,
-          reason: `Titulo muito curto (${tmdbLength} letras) com contexto expandido`
+          reason: `Título muito curto (${tmdbLength} letras) com contexto expandido`
         };
       }
     }
@@ -732,14 +713,14 @@ export class SimilarityCalculator {
     if (tmdbLength <= 5 && torrentWords.length >= 3) {
       return {
         hasStrongContext: false,
-        reason: `Titulo curto com muito contexto adicional`
+        reason: `Título curto com muito contexto adicional`
       };
     }
     
     if (torrentWords.length >= 3) {
       return {
         hasStrongContext: false,
-        reason: 'Contexto muito expandido para titulo unico'
+        reason: 'Contexto muito expandido para título único'
       };
     }
     
@@ -757,7 +738,7 @@ export class SimilarityCalculator {
     originalTorrentTitle?: string
   ): {
     similarity: number;
-    confidence: 'baixa' | 'media' | 'alta';
+    confidence: 'baixa' | 'média' | 'alta';
     reason: string;
     contextAnalysis: string;
   } {
@@ -777,7 +758,7 @@ export class SimilarityCalculator {
     
     if (containmentAnalysis.contains) {
       finalSimilarity = Math.min(1.0, finalSimilarity + 0.2);
-      contextAnalysis += '|contem_tmdb';
+      contextAnalysis += '|contém_tmdb';
     } else if (containmentAnalysis.contained) {
       finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
       contextAnalysis += '|contido_por_tmdb';
@@ -788,7 +769,7 @@ export class SimilarityCalculator {
       contextAnalysis += '|contexto_suficiente';
     }
     
-    // NOVO: Bonus para series com temporada explicita
+    // Bônus para séries com temporada explícita
     if (mediaType === 'tv' && targetSeason && originalTorrentTitle) {
       const temTemporadaExplicita = this.hasExplicitSeason(originalTorrentTitle, targetSeason);
       const temEpisodioExplicito = this.hasExplicitEpisode(originalTorrentTitle);
@@ -796,26 +777,26 @@ export class SimilarityCalculator {
       if (temTemporadaExplicita) {
         let bonus = 0.1;
         if (temEpisodioExplicito) {
-          bonus += 0.05; // Bonus extra para torrents com episodios
+          bonus += 0.05;
         }
         
         finalSimilarity = Math.min(1.0, finalSimilarity + bonus);
-        contextAnalysis += `|temporada_explicita_s${targetSeason}`;
+        contextAnalysis += `|temporada_explícita_s${targetSeason}`;
         
         if (temEpisodioExplicito) {
-          contextAnalysis += '|episodio_explicito';
+          contextAnalysis += '|episódio_explícito';
         }
       }
     }
     
-    let confidence: 'baixa' | 'media' | 'alta' = 'baixa';
+    let confidence: 'baixa' | 'média' | 'alta' = 'baixa';
     let reason = '';
     
     if (finalSimilarity >= 0.85) {
       confidence = 'alta';
       reason = `Match forte: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else if (finalSimilarity >= 0.7) {
-      confidence = 'media';
+      confidence = 'média';
       reason = `Match moderado: ${(finalSimilarity * 100).toFixed(1)}%`;
     } else {
       confidence = 'baixa';
@@ -827,16 +808,16 @@ export class SimilarityCalculator {
     }
     
     if (containmentAnalysis.contains) {
-      reason += ' (torrent contem titulo TMDB)';
+      reason += ' (torrent contém título TMDB)';
     } else if (containmentAnalysis.contained) {
-      reason += ' (TMDB contem titulo torrent)';
+      reason += ' (TMDB contém título torrent)';
     }
     
-    // Adiciona informacao sobre temporada se aplicavel
+    // Adiciona informação sobre temporada se aplicável
     if (mediaType === 'tv' && targetSeason) {
       const temTemp = this.hasExplicitSeason(originalTorrentTitle || '', targetSeason);
       if (temTemp) {
-        reason += ` [TEMPORADA: S${targetSeason} explicita]`;
+        reason += ` [TEMPORADA: S${targetSeason} explícita]`;
       }
     }
     
@@ -848,35 +829,35 @@ export class SimilarityCalculator {
     };
   }
 
-  // NOVO: Metodos para detectar temporada explicita
+  // Detecta temporada explícita no título do torrent
   private hasExplicitSeason(torrentTitle: string, targetSeason: number): boolean {
     const lowerTitle = torrentTitle.toLowerCase();
     
-    // Padrões para temporada explicita
+    // Padrões para temporada explícita
     const seasonPatterns = [
-      `s${targetSeason.toString().padStart(2, '0')}`,  // S05
-      `s${targetSeason}`,                              // S5
-      `season ${targetSeason}`,                        // season 5
-      `temporada ${targetSeason}`,                     // temporada 5
-      `temporada ${targetSeason}ª`,                    // temporada 5ª
-      ` ${targetSeason}ª temporada`,                   // 5ª temporada
-      `t${targetSeason}`,                              // T5
-      `t${targetSeason.toString().padStart(2, '0')}`,  // T05
+      `s${targetSeason.toString().padStart(2, '0')}`,
+      `s${targetSeason}`,
+      `season ${targetSeason}`,
+      `temporada ${targetSeason}`,
+      `temporada ${targetSeason}ª`,
+      ` ${targetSeason}ª temporada`,
+      `t${targetSeason}`,
+      `t${targetSeason.toString().padStart(2, '0')}`,
     ];
     
     return seasonPatterns.some(pattern => lowerTitle.includes(pattern));
   }
 
-  // NOVO: Metodo para detectar episodio explicito
+  // Detecta episódio explícito no título do torrent
   private hasExplicitEpisode(torrentTitle: string): boolean {
     const lowerTitle = torrentTitle.toLowerCase();
     
-    // Padrões para episodio explicito
+    // Padrões para episódio explícito
     const episodePatterns = [
-      /\be\d{1,10}\b/,           // E01, E1
-      /\bep\d{1,10}\b/,          // EP01
-      /\bepisode \d{1,10}\b/,    // episode 1
-      /\bepis[oó]dio \d{1,10}\b/ // episodio 1
+      /\be\d{1,10}\b/,
+      /\bep\d{1,10}\b/,
+      /\bepisode \d{1,10}\b/,
+      /\bepis[oó]dio \d{1,10}\b/
     ];
     
     return episodePatterns.some(pattern => pattern.test(lowerTitle));
@@ -961,6 +942,7 @@ export class SimilarityCalculator {
     };
   }
 
+  // Normaliza título para comparação
   normalizeForComparison(title: string): string {
     const decodedTitle = title
       .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
@@ -986,17 +968,19 @@ export class SimilarityCalculator {
     return finalClean;
   }
 
+  // Remove palavras técnicas do título usando as listas importadas
   private removeTechnicalWords(title: string): string {
     let clean = title;
     
     clean = clean.replace(/[\/\.\-_:]/g, ' ');
     
-    this.TECHNICAL_WORDS.forEach(term => {
+    // Usa as palavras técnicas importadas do arquivo externo
+    this.TECHNICAL_WORDS.forEach((term: string) => {
       const regex = new RegExp(`\\b${term}\\b`, 'gi');
       clean = clean.replace(regex, '');
     });
     
-    this.TECHNICAL_ACRONYMS.forEach(acronym => {
+    this.TECHNICAL_ACRONYMS.forEach((acronym: string) => {
       const regex = new RegExp(`\\b${acronym}\\b`, 'gi');
       clean = clean.replace(regex, '');
     });
@@ -1095,25 +1079,111 @@ export class SimilarityCalculator {
     this.tmdbCache.clear();
   }
 
+  // Sugere query de busca otimizada para conteúdo em português
+  suggestSearchQuery(baseTitle: string, type: 'movie' | 'series', season?: number): string {
+    this.logger.debug('Gerando query de busca otimizada', { 
+      baseTitle, 
+      type, 
+      season 
+    });
+    
+    // Limpa o título base mantendo apenas as palavras principais
+    const cleanBase = this.normalizeForComparison(baseTitle).trim();
+    
+    if (cleanBase.length === 0) {
+      this.logger.warn('Título base vazio após limpeza', { baseTitle });
+      return baseTitle;
+    }
+    
+    // Termos de idioma prioritários para português
+    const languageTerms = this.getLanguageSearchTerms();
+    
+    // Constrói a query base
+    let query = cleanBase;
+    
+    // Para séries, adiciona formato de temporada
+    if (type === 'series' && season !== undefined) {
+      const seasonStr = season.toString().padStart(2, '0');
+      query = `${query} s${seasonStr}`;
+    }
+    
+    // Adiciona termos de idioma
+    if (languageTerms.length > 0) {
+      // Usa OR para aumentar chances de encontrar qualquer versão em português
+      const languageQuery = languageTerms.join(' OR ');
+      query = `${query} ${languageQuery}`;
+      
+      this.logger.debug('Query de busca gerada', {
+        queryBase: cleanBase,
+        termosIdioma: languageTerms.length,
+        queryFinal: query
+      });
+    }
+    
+    return query;
+  }
+
+  // Extrai termos de idioma relevantes para busca
+  getLanguageSearchTerms(): string[] {
+    // Filtra apenas os termos de idioma da lista de palavras técnicas
+    const languageTerms = [
+      'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
+      'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br',
+      'pt.br', 'pt br', 'portugues', 'português', 'brazilian', 'multi'
+    ];
+    
+    const validTerms = languageTerms.filter(term => 
+      this.TECHNICAL_WORDS.includes(term)
+    );
+    
+    this.logger.debug('Termos de idioma disponíveis', {
+      totalEncontrados: validTerms.length,
+      termos: validTerms
+    });
+    
+    return validTerms;
+  }
+
+  // Versão simplificada para queries rápidas
+  suggestSimpleSearchQuery(baseTitle: string, type: 'movie' | 'series', season?: number): string {
+    const cleanTitle = this.normalizeForComparison(baseTitle).trim();
+    
+    if (type === 'series' && season !== undefined) {
+      return `${cleanTitle} s${season.toString().padStart(2, '0')} dual OR dublado OR portugues`;
+    }
+    
+    return `${cleanTitle} dual OR dublado OR portugues`;
+  }
+
   getStats() {
+    const languageTerms = this.getLanguageSearchTerms();
+    
     return {
-      version: this.VERSION,
-      feature: 'Flexibilidade para series sem ano',
-      description: 'Aceita torrents de series sem ano quando temporada e explicita',
-      thresholdMovies: '0.75 (ajustavel para titulos curtos)',
-      thresholdSeries: '0.65',
-      fixes: [
-        'Series com temporada explicita podem nao ter ano no titulo',
-        'Bonus para series com episodios explicitos',
-        'Detecta padroes S05, temporada 5, 5ª temporada',
-        'Mantem regras rigorosas para filmes',
-        'Bonus de 0.1-0.15 para series com contexto forte'
+      versão: this.VERSION,
+      feature: 'Palavras técnicas importadas de arquivo externo',
+      descrição: 'Centraliza palavras técnicas em arquivo separado para manutenção mais fácil',
+      limiarFilmes: '0.75 (ajustável para títulos curtos)',
+      limiarSéries: '0.65',
+      termosTécnicos: {
+        totalPalavras: this.TECHNICAL_WORDS.length,
+        totalAcrônimos: this.TECHNICAL_ACRONYMS.length,
+        fonte: 'Arquivo técnico-words.ts externo'
+      },
+      termosIdioma: {
+        total: languageTerms.length,
+        termos: languageTerms
+      },
+      melhorias: [
+        'Palavras técnicas movidas para arquivo separado',
+        'Manutenção centralizada das listas de palavras',
+        'Fácil atualização de termos técnicos',
+        'Reuso em diferentes partes do sistema',
+        'Detecção mais precisa de conteúdo técnico'
       ],
-      examples: [
-        'Stranger Things S05E01-02-03-04 (sem ano) -> ACEITO',
-        'Stranger Things 5ª Temporada (sem ano) -> ACEITO',
-        'Stranger Things 5ª Temporada (2025) -> CONTINUA ACEITO',
-        'Filme Qualquer (2025) -> REQUER ANO'
+      exemplos: [
+        'Filme: "Interestelar (2014) 1080p DUAL" → "interestelar"',
+        'Série: "Breaking Bad S01E01 720p DUBLADO" → "breaking bad"',
+        'Termos removidos: 1080p, dual, dublado, s01e01'
       ]
     };
   }
