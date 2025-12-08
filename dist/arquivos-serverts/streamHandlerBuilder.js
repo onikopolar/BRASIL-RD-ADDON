@@ -7,93 +7,111 @@ const logger_1 = require("../utils/logger");
 const logger = new logger_1.Logger('StreamHandlerBuilder');
 const createStremioBuilder = (manifest) => {
     const builder = new stremio_addon_sdk_1.addonBuilder(manifest);
-    logger.info('StreamHandlerBuilder v3.0.0 - Sistema Torrentio-style otimizado');
+    logger.info('StreamHandlerBuilder v3.1.0 iniciado - Fix compatibilidade Web/Mobile');
     builder.defineStreamHandler(async (args) => {
         const requestStartTime = Date.now();
-        logger.debug('DEBUG: Args recebidos', {
+        logger.debug('DEBUG COMPLETO - Args recebidos:', {
             type: args.type,
             id: args.id,
+            config: args.config || {},
+            extra: args.extra || {},
+            query: args.query || {},
             configKeys: args.config ? Object.keys(args.config) : [],
-            extraKeys: args.extra ? Object.keys(args.extra) : []
+            extraKeys: args.extra ? Object.keys(args.extra) : [],
+            queryKeys: args.query ? Object.keys(args.query) : []
         });
         let apiKey = null;
         let authSource = 'none';
         if (args.config?.realdebrid) {
             apiKey = args.config.realdebrid;
-            authSource = 'torrentio-route';
-            logger.debug('API Key via Torrentio-style', { source: authSource });
+            authSource = 'config.realdebrid';
         }
         else if (args.config?.apiKey) {
             apiKey = args.config.apiKey;
-            authSource = 'stremio-config';
-            logger.debug('API Key via config Stremio', { source: authSource });
+            authSource = 'config.apiKey';
         }
         else if (args.extra?.apiKey) {
             apiKey = args.extra.apiKey;
-            authSource = 'legacy-extra';
-            logger.debug('API Key via extra', { source: authSource });
+            authSource = 'extra.apiKey';
         }
         else if (args.query?.apiKey) {
             apiKey = args.query.apiKey;
-            authSource = 'test-query';
-            logger.debug('API Key via query', { source: authSource });
+            authSource = 'query.apiKey';
+        }
+        else if (args.config?.rd_key) {
+            apiKey = args.config.rd_key;
+            authSource = 'config.rd_key';
+        }
+        else if (args.extra?.rd_key) {
+            apiKey = args.extra.rd_key;
+            authSource = 'extra.rd_key';
+        }
+        if (apiKey) {
+            const safeApiKey = apiKey.length > 8
+                ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
+                : '***';
+            logger.debug('API Key identificada:', {
+                source: authSource,
+                keyPreview: safeApiKey,
+                configEnviado: !!args.config,
+                extraEnviado: !!args.extra
+            });
+        }
+        else {
+            logger.warn('NENHUMA API Key encontrada em nenhuma fonte:', {
+                configKeys: args.config ? Object.keys(args.config) : [],
+                extraKeys: args.extra ? Object.keys(args.extra) : [],
+                queryKeys: args.query ? Object.keys(args.query) : []
+            });
         }
         if (!apiKey) {
-            const baseUrl = process.env.RAILWAY_PUBLIC_DOMAIN
-                ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
-                : process.env.NODE_ENV === 'production'
-                    ? 'https://brasil-rd-addon.up.railway.app'
-                    : 'http://localhost:7000';
-            const stremioUrl = baseUrl.replace('https://', '').replace('http://', '');
-            logger.warn('Falha autenticação', {
-                type: args.type,
-                id: args.id,
-                reason: 'API Key não fornecida'
-            });
+            logger.error('FALHA DE AUTENTICAÇÃO: API Key não fornecida em nenhum formato conhecido');
             return { streams: [] };
         }
-        const safeApiKey = apiKey.length > 8
-            ? `${apiKey.substring(0, 4)}...${apiKey.substring(apiKey.length - 4)}`
-            : '***';
-        logger.debug('Autenticação OK', {
-            type: args.type,
-            id: args.id,
-            source: authSource,
-            keyPreview: safeApiKey
-        });
         const streamRequest = {
             type: args.type,
             id: args.id,
-            title: '',
+            title: args.title || '',
             apiKey: apiKey,
             config: {
-                quality: 'Todas as Qualidades',
-                language: 'pt-BR',
-                streamType: 'direct',
-                maxResults: '25'
-            }
+                quality: args.config?.quality || 'Todas as Qualidades',
+                language: args.config?.language || 'pt-BR',
+                streamType: args.config?.streamType || 'direct',
+                maxResults: args.config?.maxResults || '25'
+            },
+            authSource: authSource
         };
-        logger.debug('Stream request criado', {
+        logger.debug('StreamRequest criado:', {
             type: streamRequest.type,
-            id: streamRequest.id
+            id: streamRequest.id,
+            authSource: streamRequest.authSource
         });
         try {
             const streamHandler = new StreamHandler_1.StreamHandler();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             const processingTime = Date.now() - requestStartTime;
-            logger.info('Streams processados', {
-                streamsCount: result.streams.length,
-                processingTime: `${processingTime}ms`,
-                authSource: authSource
-            });
             if (result.streams.length > 0) {
-                logger.debug('Streams disponíveis', {
-                    count: result.streams.length
+                logger.info('SUCESSO: Streams encontrados:', {
+                    count: result.streams.length,
+                    processingTime: `${processingTime}ms`,
+                    type: args.type,
+                    id: args.id,
+                    authSource: authSource
                 });
+                if (result.streams.length > 0) {
+                    const sampleStreams = result.streams.slice(0, 2).map((s) => ({
+                        title: s.title,
+                        urlLength: s.url?.length || 0
+                    }));
+                    logger.debug('Amostra de streams:', sampleStreams);
+                }
             }
             else {
-                logger.warn('Nenhum stream retornado', {
-                    id: args.id
+                logger.warn('AVISO: Nenhum stream retornado:', {
+                    processingTime: `${processingTime}ms`,
+                    type: args.type,
+                    id: args.id,
+                    authSource: authSource
                 });
             }
             return result;
@@ -101,11 +119,14 @@ const createStremioBuilder = (manifest) => {
         catch (error) {
             const errorTime = Date.now() - requestStartTime;
             const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
-            logger.error('Erro processamento', {
+            const errorStack = error instanceof Error ? error.stack : '';
+            logger.error('ERRO NO PROCESSAMENTO:', {
                 error: errorMsg,
                 type: args.type,
                 id: args.id,
-                processingTime: `${errorTime}ms`
+                processingTime: `${errorTime}ms`,
+                authSource: authSource,
+                stack: errorStack ? errorStack.substring(0, 200) : ''
             });
             return { streams: [] };
         }
@@ -117,4 +138,4 @@ const getStremioRouter = (builder) => {
     return (0, stremio_addon_sdk_1.getRouter)(builder.getInterface());
 };
 exports.getStremioRouter = getStremioRouter;
-logger.info('StreamHandlerBuilder v3.0.0 pronto - Fix mensagens localhost');
+logger.info('StreamHandlerBuilder v3.1.0 carregado - Fix: Busca unificada de API Key para Web/Mobile/TV');

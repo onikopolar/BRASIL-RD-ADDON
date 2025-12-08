@@ -22,6 +22,7 @@ export interface StreamRequest {
   title?: string;
   imdbId?: string;
   apiKey?: string;
+  authSource?: string;  // NOVO: Fonte da API Key identificada
   config?: {
     quality?: string;
     language?: string;

@@ -1,0 +1,80 @@
+{
+  "name": "brasil-rd-addon",
+  "version": "1.0.0",
+  "description": "Addon brasileiro para Stremio com suporte completo ao Real-Debrid",
+  "type": "commonjs",
+  "main": "dist/server.js",
+  "scripts": {
+    "build": "node build.js",
+    "start": "node railway-start.js",
+    "start:stremio": "node dist/server.js",
+    "dev": "npm start:stremio",
+    "dev:stremio": "ts-node src/server.ts",
+    "test": "jest",
+    "clean": "rm -rf dist",
+    "rebuild": "npm run clean && npm run build",
+    "add-magnet": "ts-node scripts/add-magnet.ts",
+    "add-magnet:dev": "ts-node --transpile-only scripts/add-magnet.ts",
+    "migrate": "node scripts/migrate-database.js",
+    "migrate:dev": "node scripts/migrate-database.js"
+  },
+  "dependencies": {
+    "@types/cors": "^2.8.19",
+    "axios": "^1.6.0",
+    "cacheable": "^2.3.0",
+    "cheerio": "^1.1.2",
+    "concurrently": "^7.6.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.3.0",
+    "express": "^5.1.0",
+    "express-rate-limit": "^8.2.1",
+    "fs-extra": "^11.3.2",
+    "named-queue": "^2.2.1",
+    "p-limit": "^7.2.0",
+    "pg": "^8.16.3",
+    "pg-hstore": "^2.3.4",
+    "prom-client": "^14.2.0",
+    "puppeteer": "^24.30.0",
+    "request-ip": "^3.3.0",
+    "sequelize": "^6.37.7",
+    "stremio-addon-sdk": "^1.6.10",
+    "swagger-stats": "^0.99.7",
+    "ts-node": "^10.9.0",
+    "tsconfig-paths": "^4.2.0",
+    "typescript": "^5.0.0",
+    "ua-parser-js": "^2.0.6"
+  },
+  "devDependencies": {
+    "@types/cheerio": "^0.22.35",
+    "@types/express": "^5.0.5",
+    "@types/fs-extra": "^11.0.4",
+    "@types/jest": "^29.0.0",
+    "@types/node": "^20.0.0",
+    "@types/p-limit": "^2.1.0",
+    "@types/puppeteer": "^5.4.6",
+    "@types/request-ip": "^0.0.41",
+    "@types/stremio-addon-sdk": "^1.6.12",
+    "jest": "^29.0.0"
+  },
+  "keywords": [
+    "stremio",
+    "addon",
+    "real-debrid",
+    "brasil",
+    "streaming",
+    "content"
+  ],
+  "author": "ONIKO",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/brasil-rd/brasil-rd-addon"
+  },
+  "bugs": {
+    "url": "https://github.com/brasil-rd/brasil-rd-addon/issues"
+  },
+  "homepage": "https://github.com/brasil-rd/brasil-rd-addon#readme",
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
