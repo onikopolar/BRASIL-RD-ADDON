@@ -11,6 +11,17 @@ exports.scraperProviders = [
         linkSelector: 'a',
         priority: 2,
         timeout: 10000
+    },
+    {
+        name: 'Starck Filmes',
+        baseUrl: 'https://www.starckfilmes-v6.com',
+        searchPath: '/?s=',
+        itemSelector: '.movies, .slide-item, .post-catalog, .item',
+        titleSelector: 'h3.sl-title',
+        linkSelector: 'a',
+        priority: 1,
+        timeout: 15000,
+        needsIndividualPageScrape: true
     }
 ];
 exports.torrentIndexerConfig = {

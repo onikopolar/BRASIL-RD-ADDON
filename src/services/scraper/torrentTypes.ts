@@ -40,6 +40,7 @@ export interface ScraperProvider {
     requiresVPN?: boolean;
     usesAPI?: boolean;
     apiEndpoint?: string;
+    needsIndividualPageScrape?: boolean;
 }
 
 export interface QualityPattern {
