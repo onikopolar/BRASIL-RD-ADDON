@@ -160,6 +160,16 @@
       "category": "filme",
       "language": "pt-BR",
       "addedAt": "2025-12-10T18:05:43.252Z"
+    },
+    {
+      "imdbId": "tt1650062",
+      "title": "Super 8 Torrent – BluRay 720p/1080p Dual Áudio",
+      "magnet": "magnet:?xt=urn:btih:1CBE002BA54CE2DCDEF9D2B7341E2DBC3FB627BF&tr=udp%3A%2F%2Ftracker.openbittorrent.com%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.trackerfix.com%3A83%2Fannounce&tr=udp%3A%2F%2Ftracker.opentrackr.org%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.trackerfix.com%3A80%2Fannounce&tr=udp%3A%2F%2Ftracker.coppersurfer.tk%3A6969%2Fannounce&tr=udp%3A%2F%2Ftracker.leechers-paradise.org%3A6969%2Fannounce&tr=udp%3A%2F%2Feddie4.nl%3A6969%2Fannounce&tr=udp%3A%2F%2Fp4p.arenabg.com%3A1337%2Fannounce&tr=udp%3A%2F%2Fexplodie.org%3A6969%2Fannounce&tr=udp%3A%2F%2Fzer0day.ch%3A1337%2Fannounce&tr=udp%3A%2F%2Fglotorrents.pw%3A6969%2Fannounce&tr=udp%3A%2F%2Ftorrent.gresille.org%3A80%2Fannounce&tr=udp%3A%2F%2Fp4p.arenabg.ch%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.internetwarriors.net%3A1337%2Fannounce&tr=udp%3A%2F%2Ftracker.btzoo.eu%3A80%2Fannounce",
+      "quality": "1080p",
+      "seeds": 5,
+      "category": "filme",
+      "language": "pt-BR,en-US",
+      "addedAt": "2025-12-13T05:30:03.720Z"
     }
   ]
 }

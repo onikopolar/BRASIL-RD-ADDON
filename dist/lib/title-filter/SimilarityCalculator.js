@@ -8,11 +8,11 @@ class SimilarityCalculator {
     constructor(titleCleaner, useTmdbScraper = true) {
         this.tmdbCache = new Map();
         this.cacheTTL = 5 * 60 * 1000;
-        this.VERSION = '23.3.2';
+        this.VERSAO = '23.5.1';
         this.TECHNICAL_WORDS = TechnicalWords_1.TECHNICAL_WORDS;
         this.TECHNICAL_ACRONYMS = TechnicalWords_1.TECHNICAL_ACRONYMS;
         this.logger = new logger_1.Logger('SimilarityCalculator');
-        this.logger.info(`SimilarityCalculator v${this.VERSION} iniciado - Importação de palavras técnicas corrigida`);
+        this.logger.info(`SimilarityCalculator v${this.VERSAO} iniciado - Correção crítica para filmes numerados`);
         this.titleCleaner = titleCleaner;
         if (useTmdbScraper) {
             this.tmdbScraper = new ImdbScraperService_1.ImdbScraperService();
@@ -53,7 +53,8 @@ class SimilarityCalculator {
                     originalTitle: tmdbData.originalTitle,
                     year: tmdbData.year,
                     allTitles: tmdbData.allTitles,
-                    mediaType: tmdbData.mediaType
+                    mediaType: tmdbData.mediaType,
+                    belongsToCollection: tmdbData.belongsToCollection
                 };
                 this.logger.debug('Dados TMDB obtidos', {
                     imdbId,
@@ -61,7 +62,8 @@ class SimilarityCalculator {
                     ano: tmdbData.year,
                     tipo: tmdbData.mediaType,
                     títuloPT: movieInfo.portugueseTitle || 'não encontrado',
-                    títuloOriginal: movieInfo.originalTitle
+                    títuloOriginal: movieInfo.originalTitle,
+                    temColeção: !!movieInfo.belongsToCollection
                 });
             }
             catch (error) {
@@ -80,14 +82,15 @@ class SimilarityCalculator {
             };
         }
         const torrentYear = torrentMetadata?.year || this.extractYearFromTitle(torrentTitle);
-        const torrentClean = this.normalizeForComparison(torrentTitle);
+        const torrentClean = this.normalizeForComparison(torrentTitle, movieInfo.mediaType);
         this.logger.debug('Contexto da análise', {
             anoTMDB: movieInfo.year,
             anoTorrent: torrentYear,
             temporada: torrentMetadata?.season,
-            tipo: movieInfo.mediaType
+            tipo: movieInfo.mediaType,
+            temColeção: !!movieInfo.belongsToCollection
         });
-        const matchResult = this.enhancedContextAnalysis(torrentClean, torrentTitle, movieInfo.portugueseTitle, movieInfo.originalTitle, movieInfo.allTitles, movieInfo.year, torrentYear, movieInfo.mediaType, torrentMetadata?.season);
+        const matchResult = this.enhancedContextAnalysis(torrentClean, torrentTitle, movieInfo.portugueseTitle, movieInfo.originalTitle, movieInfo.allTitles, movieInfo.year, torrentYear, movieInfo.mediaType, movieInfo.belongsToCollection, torrentMetadata?.season);
         if (matchResult.matches) {
             const yearValidation = this.contextualYearValidation(movieInfo, torrentYear, torrentTitle, matchResult.similarity, matchResult.confidence, torrentMetadata?.season);
             if (yearValidation.shouldReject) {
@@ -102,14 +105,14 @@ class SimilarityCalculator {
                 similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
                 confiança: matchResult.confidence || 'alta',
                 motivo: matchResult.reason,
-                versão: this.VERSION
+                versão: this.VERSAO
             });
         }
         else {
             this.logger.debug('Match insuficiente', {
                 similaridade: `${(matchResult.similarity * 100).toFixed(1)}%`,
                 motivo: matchResult.reason,
-                versão: this.VERSION
+                versão: this.VERSAO
             });
         }
         return matchResult;
@@ -120,11 +123,11 @@ class SimilarityCalculator {
         }
         if (!torrentYear) {
             if (movieInfo.mediaType === 'tv' && targetSeason) {
-                const temTemporadaExplicita = this.hasExplicitSeason(torrentTitle, targetSeason);
-                const temEpisodioExplicito = this.hasExplicitEpisode(torrentTitle);
-                if (temTemporadaExplicita) {
+                const temTemporadaExplícita = this.hasExplicitSeason(torrentTitle, targetSeason);
+                const temEpisódioExplícito = this.hasExplicitEpisode(torrentTitle);
+                if (temTemporadaExplícita) {
                     let bonus = 0.1;
-                    if (temEpisodioExplicito) {
+                    if (temEpisódioExplícito) {
                         bonus += 0.05;
                     }
                     if (semanticSimilarity + bonus >= 0.65) {
@@ -158,7 +161,7 @@ class SimilarityCalculator {
         }
         return { shouldReject: false, reason: 'Ano válido' };
     }
-    enhancedContextAnalysis(torrentClean, originalTorrentTitle, portugueseTitle, originalTitle, allTmdbTitles, tmdbYear, torrentYear, mediaType, targetSeason) {
+    enhancedContextAnalysis(torrentClean, originalTorrentTitle, portugueseTitle, originalTitle, allTmdbTitles, tmdbYear, torrentYear, mediaType, belongsToCollection, targetSeason) {
         const validTmdbTitles = this.filterValidTmdbTitles(allTmdbTitles, originalTitle);
         if (validTmdbTitles.length === 0) {
             this.logger.warn('Nenhum título TMDB válido encontrado', {
@@ -181,8 +184,8 @@ class SimilarityCalculator {
             contextAnalysis: ''
         };
         for (const tmdbTitle of validTmdbTitles) {
-            const tmdbClean = this.normalizeForComparison(tmdbTitle);
-            const contextResult = this.smartContextAnalysis(torrentClean, tmdbClean, mediaType, targetSeason, originalTorrentTitle);
+            const tmdbClean = this.normalizeForComparison(tmdbTitle, mediaType);
+            const contextResult = this.smartContextAnalysis(torrentClean, tmdbClean, mediaType, belongsToCollection, targetSeason, originalTorrentTitle);
             if (contextResult.similarity > bestMatch.similarity) {
                 bestMatch = {
                     similarity: contextResult.similarity,
@@ -204,7 +207,7 @@ class SimilarityCalculator {
                 threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
                 contexto: bestMatch.contextAnalysis,
                 motivo: bestMatch.reason,
-                versão: this.VERSION
+                versão: this.VERSAO
             });
             return {
                 matches: true,
@@ -220,7 +223,7 @@ class SimilarityCalculator {
             threshold: `${(effectiveThreshold * 100).toFixed(1)}%`,
             contexto: bestMatch.contextAnalysis,
             motivo: bestMatch.reason || 'Similaridade insuficiente',
-            versão: this.VERSION
+            versão: this.VERSAO
         });
         return {
             matches: false,
@@ -247,16 +250,170 @@ class SimilarityCalculator {
         }
         return validTitles;
     }
-    smartContextAnalysis(torrentClean, tmdbClean, mediaType, targetSeason, originalTorrentTitle) {
+    smartContextAnalysis(torrentClean, tmdbClean, mediaType, belongsToCollection, targetSeason, originalTorrentTitle) {
         const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
         const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
+        if (mediaType === 'movie') {
+            const sequenceCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection);
+            if (!sequenceCheck.compatible) {
+                return {
+                    similarity: sequenceCheck.similarity,
+                    confidence: 'baixa',
+                    reason: sequenceCheck.reason,
+                    contextAnalysis: 'sequência_incompatível'
+                };
+            }
+        }
         if (tmdbWords.length === 1) {
             return this.analyzeSingleWordTitle(tmdbClean, torrentClean, mediaType);
         }
         if (tmdbWords.length === 2) {
-            return this.analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType);
+            return this.analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType, belongsToCollection);
         }
         return this.normalContextAnalysis(torrentClean, tmdbClean, mediaType, targetSeason, originalTorrentTitle);
+    }
+    checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection) {
+        const torrentSequence = this.extractSequenceNumber(torrentClean);
+        const tmdbSequence = this.extractSequenceNumber(tmdbClean);
+        this.logger.debug('Verificação de sequência', {
+            torrent: torrentClean,
+            tmdb: tmdbClean,
+            torrentSequence,
+            tmdbSequence,
+            coleção: !!belongsToCollection
+        });
+        if (!torrentSequence && tmdbSequence) {
+            if (belongsToCollection && (tmdbSequence === '1' || tmdbSequence === 'i')) {
+                this.logger.debug('Permite sem número para primeira sequência em coleção', {
+                    tmdbSequence,
+                    coleção: !!belongsToCollection
+                });
+                return {
+                    compatible: true,
+                    similarity: 0.8,
+                    reason: `TMDB é primeira sequência (${tmdbSequence}) em coleção, torrent sem número pode ser o primeiro`
+                };
+            }
+            else {
+                this.logger.debug('Rejeita torrent sem número para filme numerado', {
+                    tmdbSequence,
+                    torrentSemNúmero: true
+                });
+                return {
+                    compatible: false,
+                    similarity: 0.15,
+                    reason: `TMDB tem sequência ${tmdbSequence} mas torrent não tem número - filme diferente`
+                };
+            }
+        }
+        if (torrentSequence && !tmdbSequence) {
+            if (belongsToCollection) {
+                if (torrentSequence === '1' || torrentSequence === 'i') {
+                    return {
+                        compatible: true,
+                        similarity: 0.8,
+                        reason: `Primeira sequência (${torrentSequence}) em coleção - pode ser o primeiro filme`
+                    };
+                }
+                else {
+                    return {
+                        compatible: false,
+                        similarity: 0.1,
+                        reason: `Torrent tem sequência ${torrentSequence} mas TMDB não tem e não é a primeira da coleção`
+                    };
+                }
+            }
+            else {
+                return {
+                    compatible: false,
+                    similarity: 0.1,
+                    reason: `Torrent tem sequência ${torrentSequence} mas TMDB não tem e não pertence a coleção`
+                };
+            }
+        }
+        if (torrentSequence && tmdbSequence) {
+            if (torrentSequence === tmdbSequence) {
+                return {
+                    compatible: true,
+                    similarity: 1,
+                    reason: `Números de sequência iguais: ${torrentSequence}`
+                };
+            }
+            else {
+                this.logger.debug('Sequências diferentes - filme diferente', {
+                    torrentSequence,
+                    tmdbSequence
+                });
+                return {
+                    compatible: false,
+                    similarity: 0.1,
+                    reason: `Números de sequência diferentes: Torrent ${torrentSequence} vs TMDB ${tmdbSequence}`
+                };
+            }
+        }
+        return {
+            compatible: true,
+            similarity: 1,
+            reason: 'Nenhum número de sequência encontrado'
+        };
+    }
+    extractSequenceNumber(title) {
+        const words = title.split(' ').filter(w => w.length > 0);
+        if (words.length === 0)
+            return null;
+        const seqMatch = title.match(/seq(\d+)/i);
+        if (seqMatch && seqMatch[1]) {
+            const num = parseInt(seqMatch[1]);
+            if (num >= 1 && num <= 20) {
+                return seqMatch[1];
+            }
+        }
+        const lastWord = words[words.length - 1].toLowerCase();
+        if (/^\d+$/.test(lastWord)) {
+            const num = parseInt(lastWord);
+            if (num >= 1 && num <= 20) {
+                return lastWord;
+            }
+        }
+        const romanMap = {
+            'i': '1', 'ii': '2', 'iii': '3', 'iv': '4', 'v': '5',
+            'vi': '6', 'vii': '7', 'viii': '8', 'ix': '9', 'x': '10',
+            'xi': '11', 'xii': '12', 'xiii': '13', 'xiv': '14', 'xv': '15',
+            'xvi': '16', 'xvii': '17', 'xviii': '18', 'xix': '19', 'xx': '20'
+        };
+        if (romanMap[lastWord]) {
+            return romanMap[lastWord];
+        }
+        for (let i = 0; i < words.length; i++) {
+            const word = words[i].toLowerCase();
+            if (romanMap[word]) {
+                return romanMap[word];
+            }
+            if (/^\d+$/.test(word) && parseInt(word) <= 20) {
+                return word;
+            }
+        }
+        const sequencePatterns = [
+            /part[ée]?\s*(\d+)/i,
+            /pt\.?\s*(\d+)/i,
+            /volume\s*(\d+)/i,
+            /vol\.?\s*(\d+)/i,
+            /filme\s*(\d+)/i,
+            /movie\s*(\d+)/i,
+            /edição\s*(\d+)/i,
+            /edition\s*(\d+)/i,
+            /seq(\d+)/i
+        ];
+        for (const pattern of sequencePatterns) {
+            const match = title.match(pattern);
+            if (match && match[1]) {
+                const num = parseInt(match[1]);
+                if (num >= 1 && num <= 20) {
+                    return match[1];
+                }
+            }
+        }
+        return null;
     }
     analyzeSingleWordTitle(tmdbWord, torrentClean, mediaType) {
         const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
@@ -376,7 +533,7 @@ class SimilarityCalculator {
             contextAnalysis: contextAnalysisStr
         };
     }
-    analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType) {
+    analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType, belongsToCollection) {
         const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
         const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
         const containsBothWords = tmdbWords.every(word => torrentWords.some(tWord => tWord === word));
@@ -545,24 +702,37 @@ class SimilarityCalculator {
             contextAnalysis += '|contém_tmdb';
         }
         else if (containmentAnalysis.contained) {
-            finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
-            contextAnalysis += '|contido_por_tmdb';
+            if (mediaType === 'movie') {
+                const tmdbSequence = this.extractSequenceNumber(tmdbClean);
+                if (tmdbSequence) {
+                    finalSimilarity = Math.min(1.0, finalSimilarity + 0.05);
+                    contextAnalysis += '|contido_por_tmdb_penalizado';
+                }
+                else {
+                    finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
+                    contextAnalysis += '|contido_por_tmdb';
+                }
+            }
+            else {
+                finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
+                contextAnalysis += '|contido_por_tmdb';
+            }
         }
         if (densityAnalysis.hasGoodContext) {
             finalSimilarity = Math.min(1.0, finalSimilarity + 0.1);
             contextAnalysis += '|contexto_suficiente';
         }
         if (mediaType === 'tv' && targetSeason && originalTorrentTitle) {
-            const temTemporadaExplicita = this.hasExplicitSeason(originalTorrentTitle, targetSeason);
-            const temEpisodioExplicito = this.hasExplicitEpisode(originalTorrentTitle);
-            if (temTemporadaExplicita) {
+            const temTemporadaExplícita = this.hasExplicitSeason(originalTorrentTitle, targetSeason);
+            const temEpisódioExplícito = this.hasExplicitEpisode(originalTorrentTitle);
+            if (temTemporadaExplícita) {
                 let bonus = 0.1;
-                if (temEpisodioExplicito) {
+                if (temEpisódioExplícito) {
                     bonus += 0.05;
                 }
                 finalSimilarity = Math.min(1.0, finalSimilarity + bonus);
                 contextAnalysis += `|temporada_explícita_s${targetSeason}`;
-                if (temEpisodioExplicito) {
+                if (temEpisódioExplícito) {
                     contextAnalysis += '|episódio_explícito';
                 }
             }
@@ -684,7 +854,7 @@ class SimilarityCalculator {
             contained
         };
     }
-    normalizeForComparison(title) {
+    normalizeForComparison(title, mediaType) {
         const decodedTitle = title
             .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
             .replace(/&ndash;|&mdash;/g, ' ')
@@ -701,15 +871,44 @@ class SimilarityCalculator {
             .replace(/[^\w\s]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-        const finalClean = this.removeTechnicalWords(clean);
+        const finalClean = this.removeTechnicalWords(clean, mediaType);
+        this.logger.debug('Normalização concluída', {
+            original: title.substring(0, 50),
+            normalizado: finalClean,
+            tipoMídia: mediaType || 'desconhecido'
+        });
         return finalClean;
     }
-    removeTechnicalWords(title) {
+    removeTechnicalWords(title, mediaType) {
         let clean = title;
+        const preservedSequences = new Map();
+        if (mediaType === 'movie') {
+            const sequenceRegex = /^(.+?)\s+(\d+|i{1,3}|iv|v|vi{0,3}|ix|x)$/i;
+            const match = clean.match(sequenceRegex);
+            if (match) {
+                const baseTitle = match[1];
+                const sequenceNum = match[2].toLowerCase();
+                const romanToArabic = {
+                    'i': '1', 'ii': '2', 'iii': '3', 'iv': '4', 'v': '5',
+                    'vi': '6', 'vii': '7', 'viii': '8', 'ix': '9', 'x': '10'
+                };
+                const arabicSequence = romanToArabic[sequenceNum] || sequenceNum;
+                if (/^\d+$/.test(arabicSequence)) {
+                    const num = parseInt(arabicSequence);
+                    if (num >= 1 && num <= 20) {
+                        const placeholder = `_SEQ${num}_`;
+                        preservedSequences.set(placeholder, ` ${num}`);
+                        clean = baseTitle + placeholder;
+                    }
+                }
+            }
+        }
         clean = clean.replace(/[\/\.\-_:]/g, ' ');
         this.TECHNICAL_WORDS.forEach((term) => {
-            const regex = new RegExp(`\\b${term}\\b`, 'gi');
-            clean = clean.replace(regex, '');
+            if (!/^\d+$/.test(term)) {
+                const regex = new RegExp(`\\b${term}\\b`, 'gi');
+                clean = clean.replace(regex, '');
+            }
         });
         this.TECHNICAL_ACRONYMS.forEach((acronym) => {
             const regex = new RegExp(`\\b${acronym}\\b`, 'gi');
@@ -720,7 +919,16 @@ class SimilarityCalculator {
         clean = clean.replace(/\b[hx]\d{3}\b/gi, '');
         clean = clean.replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
         clean = clean.replace(/\b(19|20)\d{2}\b/g, '');
+        const tempMarkers = new Map();
+        preservedSequences.forEach((value, placeholder) => {
+            const tempMarker = `_TEMP_${placeholder}_`;
+            tempMarkers.set(tempMarker, value);
+            clean = clean.replace(placeholder, tempMarker);
+        });
         clean = clean.replace(/\b\d+\b/g, '');
+        tempMarkers.forEach((value, tempMarker) => {
+            clean = clean.replace(tempMarker, value);
+        });
         clean = clean.replace(/\s+/g, ' ').trim();
         return clean;
     }
@@ -819,50 +1027,47 @@ class SimilarityCalculator {
         const languageTerms = [
             'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
             'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br',
-            'pt.br', 'pt br', 'portugues', 'português', 'brazilian', 'multi'
+            'pt.br', 'pt br', 'português', 'português', 'brazilian', 'multi'
         ];
         const validTerms = languageTerms.filter(term => this.TECHNICAL_WORDS.includes(term));
-        this.logger.debug('Termos de idioma disponíveis', {
-            totalEncontrados: validTerms.length,
-            termos: validTerms
-        });
         return validTerms;
     }
     suggestSimpleSearchQuery(baseTitle, type, season) {
         const cleanTitle = this.normalizeForComparison(baseTitle).trim();
         if (type === 'series' && season !== undefined) {
-            return `${cleanTitle} s${season.toString().padStart(2, '0')} dual OR dublado OR portugues`;
+            return `${cleanTitle} s${season.toString().padStart(2, '0')} dual OR dublado OR português`;
         }
-        return `${cleanTitle} dual OR dublado OR portugues`;
+        return `${cleanTitle} dual OR dublado OR português`;
     }
     getStats() {
         const languageTerms = this.getLanguageSearchTerms();
         return {
-            versão: this.VERSION,
-            feature: 'Palavras técnicas importadas de arquivo externo',
-            descrição: 'Centraliza palavras técnicas em arquivo separado para manutenção mais fácil',
+            versão: this.VERSAO,
+            feature: 'Correção crítica para filmes numerados',
+            descrição: 'Rejeita títulos sem número quando TMDB tem número de sequência',
             limiarFilmes: '0.75 (ajustável para títulos curtos)',
             limiarSéries: '0.65',
             termosTécnicos: {
                 totalPalavras: this.TECHNICAL_WORDS.length,
                 totalAcrônimos: this.TECHNICAL_ACRONYMS.length,
-                fonte: 'Arquivo técnico-words.ts externo'
+                fonte: 'Arquivo technical-words.ts externo'
             },
             termosIdioma: {
                 total: languageTerms.length,
                 termos: languageTerms
             },
             melhorias: [
-                'Palavras técnicas movidas para arquivo separado',
-                'Manutenção centralizada das listas de palavras',
-                'Fácil atualização de termos técnicos',
-                'Reuso em diferentes partes do sistema',
-                'Detecção mais precisa de conteúdo técnico'
+                'Correção crítica: "A Escolha Perfeita" vs "A Escolha Perfeita 2" agora rejeitado',
+                'Permite apenas sequência 1 quando TMDB pertence a coleção',
+                'Verificação rigorosa de compatibilidade de sequências',
+                'Reduz bônus para "contido por TMDB" em filmes numerados',
+                'Logs detalhados para debugging de sequências'
             ],
             exemplos: [
-                'Filme: "Interestelar (2014) 1080p DUAL" → "interestelar"',
-                'Série: "Breaking Bad S01E01 720p DUBLADO" → "breaking bad"',
-                'Termos removidos: 1080p, dual, dublado, s01e01'
+                '"A Escolha Perfeita" vs "A Escolha Perfeita 2" → REJEITADO (corrigido)',
+                '"A Escolha Perfeita 2" vs "A Escolha Perfeita 2" → ACEITO',
+                '"A Escolha Perfeita 3" vs "A Escolha Perfeita 2" → REJEITADO',
+                '"Velozes e Furiosos I" vs "Velozes e Furiosos" (coleção) → ACEITO (primeiro filme)'
             ]
         };
     }
