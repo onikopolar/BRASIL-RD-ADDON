@@ -14,7 +14,7 @@ exports.scraperProviders = [
     },
     {
         name: 'Starck Filmes',
-        baseUrl: 'https://www.starckfilmes-v6.com',
+        baseUrl: 'https://starckfilmes-v8.com',
         searchPath: '/?s=',
         itemSelector: '.movies, .slide-item, .post-catalog, .item',
         titleSelector: 'h3.sl-title',

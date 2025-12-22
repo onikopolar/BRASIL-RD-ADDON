@@ -42,48 +42,71 @@ const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 const scraperProviders_1 = require("./scraperProviders");
 const qualityDetector_1 = require("../../lib/qualityDetector");
-const SimilarityCalculator_1 = require("../../lib/title-filter/SimilarityCalculator");
+const ImdbScraperService_1 = require("../ImdbScraperService");
 const logger = new logger_1.Logger('TorrentScraperService');
 class TorrentScraperService {
-    constructor(similarityCalculator) {
-        this.version = '5.4.1';
+    constructor(tmdbScraper) {
+        this.version = '6.1.0';
         this.qualityDetector = new qualityDetector_1.QualityDetector();
-        this.similarityCalculator = similarityCalculator || new SimilarityCalculator_1.SimilarityCalculator();
+        this.tmdbScraper = tmdbScraper || new ImdbScraperService_1.ImdbScraperService();
         logger.info(`TorrentScraperService v${this.version} iniciado`);
-        logger.info(`Melhorias: Corrigida extracao de titulos do Starck Filmes`);
+        logger.info(`Melhorias: Coleta bruta de torrents baseada no TMDB, sem filtro interno`);
         logger.info(`Provedores ativos: ${this.countActiveProviders()}`);
+        logger.info(`Função: Apenas coletor de torrents brutos - filtragem feita externamente`);
     }
-    async searchTorrents(query, type = 'movie', targetSeason, targetYear) {
+    async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
         const startTime = Date.now();
-        const searchQuery = this.prepareSearchQuery(query, type, targetSeason);
-        logger.info('Iniciando busca multi-provedor', {
+        logger.info('Iniciando coleta bruta de torrents com TMDB', {
             queryOriginal: query,
-            queryBusca: searchQuery,
             tipo: type,
             temporadaAlvo: targetSeason,
-            anoAlvo: targetYear
+            anoAlvo: targetYear,
+            imdbId: imdbId
         });
         try {
+            let tmdbData = null;
+            if (imdbId) {
+                tmdbData = await this.getTmdbData(imdbId, targetSeason);
+                if (tmdbData) {
+                    logger.debug('Dados TMDB obtidos para geração de queries', {
+                        imdbId: imdbId,
+                        temTituloPortugues: !!tmdbData.portugueseTitle,
+                        temTituloOriginal: !!tmdbData.originalTitle,
+                        todosTitulos: tmdbData.allTitles.length,
+                        ano: tmdbData.year,
+                        prioridadePortugues: tmdbData.portuguesePriority
+                    });
+                }
+                else {
+                    logger.debug('TMDB não retornou dados, usando query original', { imdbId });
+                }
+            }
+            const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
+            logger.debug('Queries geradas para coleta bruta', {
+                totalQueries: searchQueries.length,
+                queries: searchQueries.map(q => q.substring(0, 60)),
+                baseadasEmTmdb: tmdbData !== null
+            });
             const allResults = [];
             if (scraperProviders_1.torrentIndexerConfig.enabled) {
                 try {
-                    const torrentIndexerResults = await this.searchTorrentIndexer(searchQuery, type, targetSeason, targetYear);
+                    const torrentIndexerResults = await this.searchTorrentIndexerWithQueries(searchQueries, type, targetSeason, targetYear, tmdbData);
                     if (torrentIndexerResults.length > 0) {
-                        logger.debug('TorrentIndexer resultados', {
+                        logger.debug('TorrentIndexer resultados coletados', {
                             quantidade: torrentIndexerResults.length
                         });
                         allResults.push(...torrentIndexerResults);
                     }
                 }
                 catch (error) {
-                    logger.debug('TorrentIndexer falhou', {
+                    logger.debug('TorrentIndexer falhou na coleta', {
                         erro: error instanceof Error ? error.message : 'Erro desconhecido'
                     });
                 }
             }
-            const webScrapersResults = await this.searchWebScrapers(searchQuery, type);
+            const webScrapersResults = await this.searchWebScrapersWithQueries(searchQueries, type, tmdbData);
             if (webScrapersResults.length > 0) {
-                logger.debug('Scrapers web resultados', {
+                logger.debug('Scrapers web resultados coletados', {
                     quantidade: webScrapersResults.length
                 });
                 allResults.push(...webScrapersResults);
@@ -92,27 +115,27 @@ class TorrentScraperService {
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
             if (uniqueResults.length > 0) {
-                logger.info('Busca finalizada com sucesso', {
-                    totalResultados: uniqueResults.length,
+                logger.info('Coleta bruta finalizada - retornando para filtragem externa', {
+                    totalResultadosBrutos: uniqueResults.length,
                     tempo: `${duration}ms`,
                     resultadosPorFonte: this.countBySource(uniqueResults),
-                    temporadaFiltrada: targetSeason
+                    temporadaFiltrada: targetSeason,
+                    nota: 'Similaridade será aplicada pelo TitleFilter posteriormente',
+                    versao: this.version
                 });
             }
             else {
-                logger.info('Busca sem resultados', {
-                    queryBusca: searchQuery,
-                    temporadaAlvo: targetSeason,
-                    tipo: type,
+                logger.info('Coleta bruta não encontrou resultados', {
                     tempo: `${duration}ms`,
-                    resultadoBruto: allResults.length
+                    queriesUsadas: searchQueries.length,
+                    nota: 'Nenhum torrent encontrado com as queries geradas'
                 });
             }
             return uniqueResults;
         }
         catch (error) {
             const duration = Date.now() - startTime;
-            logger.error('Erro na busca multi-provedor', {
+            logger.error('Erro na coleta bruta de torrents', {
                 queryOriginal: query,
                 erro: error instanceof Error ? error.message : 'Erro desconhecido',
                 tempo: `${duration}ms`
@@ -120,26 +143,99 @@ class TorrentScraperService {
             return [];
         }
     }
-    prepareSearchQuery(query, type, targetSeason) {
-        if (type === 'series' && targetSeason !== undefined) {
-            const hasSeasonInQuery = /temporada|season|s\d+/i.test(query);
-            if (!hasSeasonInQuery) {
-                const seasonStr = targetSeason.toString().padStart(2, '0');
-                const queryWithSeason = `${query} s${seasonStr}`;
-                logger.debug('Query expandida com temporada', {
-                    original: query,
-                    expandida: queryWithSeason
-                });
-                return queryWithSeason;
+    async getTmdbData(imdbId, season) {
+        try {
+            logger.debug('Obtendo dados do TMDB para geração de queries', { imdbId, season });
+            const tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId, season);
+            return tmdbData;
+        }
+        catch (error) {
+            logger.debug('Falha ao obter dados do TMDB para queries', {
+                imdbId,
+                season,
+                erro: error instanceof Error ? error.message : 'Erro desconhecido'
+            });
+            return null;
+        }
+    }
+    generateSearchQueries(query, type, targetSeason, targetYear, tmdbData) {
+        const queries = [];
+        if (tmdbData && tmdbData.allTitles && tmdbData.allTitles.length > 0) {
+            const yearToUse = targetYear || tmdbData.year;
+            tmdbData.allTitles.forEach((title) => {
+                queries.push(title);
+                if (yearToUse) {
+                    queries.push(`${title} ${yearToUse}`);
+                }
+                if (type === 'series' && targetSeason !== undefined) {
+                    queries.push(`${title} ${targetSeason}ª temporada`);
+                    queries.push(`${title} temporada ${targetSeason}`);
+                    queries.push(`${title} season ${targetSeason}`);
+                }
+                if (title.match(/^\d/)) {
+                    const tituloSemNumeros = title.replace(/^\d+\s*/, '');
+                    if (tituloSemNumeros !== title && tituloSemNumeros.trim().length > 3) {
+                        queries.push(tituloSemNumeros);
+                    }
+                }
+            });
+        }
+        if (queries.length === 0) {
+            const baseQuery = this.prepareSearchQuery(query, type, targetSeason);
+            queries.push(baseQuery);
+            if (targetYear) {
+                queries.push(`${baseQuery} ${targetYear}`);
             }
         }
-        return this.cleanQuery(query);
+        const uniqueQueries = [...new Set(queries.filter(q => q && q.trim().length > 3))];
+        logger.debug('Queries finalizadas para coleta', {
+            quantidadeFinal: uniqueQueries.length,
+            nota: 'Filtragem por similaridade será feita externamente pelo TitleFilter'
+        });
+        return uniqueQueries;
     }
-    cleanQuery(query) {
-        return query
-            .replace(/[^\w\s\-\.\:]/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
+    async searchTorrentIndexerWithQueries(queries, type, targetSeason, targetYear, tmdbData) {
+        const allResults = [];
+        const yearToUse = targetYear || tmdbData?.year;
+        for (const query of queries.slice(0, 3)) {
+            try {
+                const results = await this.searchTorrentIndexer(query, type, targetSeason, yearToUse);
+                allResults.push(...results);
+                if (results.length > 0) {
+                    logger.debug('Query coletada com sucesso no TorrentIndexer', {
+                        query: query.substring(0, 80),
+                        resultados: results.length
+                    });
+                }
+            }
+            catch (error) {
+                logger.debug('Query falhou na coleta no TorrentIndexer', {
+                    query: query.substring(0, 80)
+                });
+            }
+        }
+        return allResults;
+    }
+    async searchWebScrapersWithQueries(queries, type, tmdbData) {
+        const allResults = [];
+        for (const query of queries.slice(0, 2)) {
+            try {
+                const results = await this.searchWebScrapers(query, type);
+                allResults.push(...results);
+                if (results.length > 0) {
+                    logger.debug('Query coletada com sucesso em scrapers web', {
+                        query: query.substring(0, 80),
+                        resultados: results.length
+                    });
+                }
+            }
+            catch (error) {
+                logger.debug('Query falhou na coleta em scrapers web', {
+                    query: query.substring(0, 80)
+                });
+            }
+        }
+        return allResults;
     }
     async searchTorrentIndexer(query, type, targetSeason, targetYear) {
         const startTime = Date.now();
@@ -156,8 +252,8 @@ class TorrentScraperService {
             if (targetYear !== undefined) {
                 params.year = targetYear.toString();
             }
-            logger.debug('Buscando no TorrentIndexer', {
-                query: query,
+            logger.debug('Coletando do TorrentIndexer', {
+                query: query.substring(0, 100),
                 tipo: type,
                 temporadaFiltro: targetSeason,
                 ano: targetYear
@@ -169,14 +265,14 @@ class TorrentScraperService {
             });
             const data = response.data;
             if (!data.results || !Array.isArray(data.results)) {
-                logger.debug('TorrentIndexer dados invalidos');
+                logger.debug('TorrentIndexer dados invalidos na coleta');
                 return [];
             }
-            const results = data.results.slice(0, 30);
+            const results = data.results.slice(0, 20);
             const mappedResults = results.map((indexerResult) => this.mapTorrentIndexerResult(indexerResult, type)).filter((result) => result !== null);
             const duration = Date.now() - startTime;
             if (mappedResults.length > 0) {
-                logger.debug('TorrentIndexer processado', {
+                logger.debug('TorrentIndexer processado na coleta', {
                     resultados: mappedResults.length,
                     tempo: `${duration}ms`
                 });
@@ -185,8 +281,9 @@ class TorrentScraperService {
         }
         catch (error) {
             const duration = Date.now() - startTime;
-            logger.debug('Erro no TorrentIndexer', {
-                tempo: `${duration}ms`
+            logger.debug('Erro na coleta do TorrentIndexer', {
+                tempo: `${duration}ms`,
+                erro: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return [];
         }
@@ -198,16 +295,16 @@ class TorrentScraperService {
             .filter(provider => provider.priority > 0)
             .sort((a, b) => b.priority - a.priority);
         if (activeProviders.length === 0) {
-            logger.debug('Nenhum provedor web ativo');
+            logger.debug('Nenhum provedor web ativo para coleta');
             return [];
         }
-        logger.debug('Iniciando scrapers web', {
-            query: query,
+        logger.debug('Iniciando coleta em scrapers web', {
+            query: query.substring(0, 100),
             provedores: activeProviders.map(p => p.name)
         });
         const promises = activeProviders.map(provider => this.searchWithProvider(provider, query, type)
             .catch(error => {
-            logger.debug(`Provedor ${provider.name} falhou`, {
+            logger.debug(`Provedor ${provider.name} falhou na coleta`, {
                 erro: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return [];
@@ -220,7 +317,7 @@ class TorrentScraperService {
         });
         const duration = Date.now() - startTime;
         if (allResults.length > 0) {
-            logger.debug('Scrapers web concluidos', {
+            logger.debug('Scrapers web concluidos na coleta', {
                 totalResultados: allResults.length,
                 tempo: `${duration}ms`
             });
@@ -234,7 +331,7 @@ class TorrentScraperService {
             const mappedResults = results.map(item => this.mapProviderResult(item, provider.name, type)).filter((result) => result !== null);
             const duration = Date.now() - startTime;
             if (mappedResults.length > 0) {
-                logger.debug(`Provedor ${provider.name} retornou resultados`, {
+                logger.debug(`Provedor ${provider.name} coletou resultados`, {
                     quantidade: mappedResults.length,
                     tempo: `${duration}ms`
                 });
@@ -242,7 +339,7 @@ class TorrentScraperService {
             return mappedResults;
         }
         catch (error) {
-            logger.debug(`Erro no provedor ${provider.name}`, {
+            logger.debug(`Erro no provedor ${provider.name} na coleta`, {
                 erro: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return [];
@@ -252,9 +349,9 @@ class TorrentScraperService {
         try {
             const encodedQuery = encodeURIComponent(query);
             const searchUrl = `${provider.baseUrl}${provider.searchPath}${encodedQuery}`;
-            logger.debug(`Scraping pagina de busca`, {
+            logger.debug(`Coletando da pagina de busca`, {
                 provedor: provider.name,
-                url: searchUrl
+                url: searchUrl.substring(0, 120)
             });
             const response = await axios_1.default.get(searchUrl, {
                 timeout: provider.timeout,
@@ -266,10 +363,8 @@ class TorrentScraperService {
             });
             const $ = cheerio.load(response.data);
             const pageLinks = [];
-            const itemSelectors = provider.itemSelector?.split(',').map((s) => s.trim()) || ['article', '.post', '.item'];
-            const titleSelectors = provider.titleSelector?.split(',').map((s) => s.trim()) || ['h2 a', 'h3 a', '.title a'];
             if (provider.name === 'Starck Filmes') {
-                logger.debug(`Usando logica especifica para Starck Filmes`);
+                logger.debug(`Usando logica especifica para Starck Filmes na coleta`);
                 $('h3.sl-title').each((index, element) => {
                     const $titleElement = $(element);
                     const title = $titleElement.text().trim();
@@ -291,15 +386,13 @@ class TorrentScraperService {
                                 pageUrl: pageUrl,
                                 provider: provider.name
                             });
-                            logger.debug(`Item Starck Filmes encontrado`, {
-                                titulo: title.substring(0, 60),
-                                url: pageUrl.substring(0, 80)
-                            });
                         }
                     }
                 });
             }
             else {
+                const itemSelectors = provider.itemSelector?.split(',').map((s) => s.trim()) || ['article', '.post', '.item'];
+                const titleSelectors = provider.titleSelector?.split(',').map((s) => s.trim()) || ['h2 a', 'h3 a', '.title a'];
                 for (const itemSelector of itemSelectors) {
                     $(itemSelector).each((index, element) => {
                         const $element = $(element);
@@ -329,14 +422,8 @@ class TorrentScraperService {
                     }
                 }
             }
-            logger.debug(`Links coletados`, {
-                provedor: provider.name,
-                linksEncontrados: pageLinks.length,
-                primeiroTitulo: pageLinks[0]?.title?.substring(0, 60),
-                primeiroLink: pageLinks[0]?.pageUrl?.substring(0, 80)
-            });
             if (pageLinks.length === 0) {
-                logger.debug(`Nenhum link encontrado para ${provider.name}`);
+                logger.debug(`Nenhum link encontrado para ${provider.name} na coleta`);
                 return [];
             }
             const results = [];
@@ -352,29 +439,19 @@ class TorrentScraperService {
                             pageUrl: pageLink.pageUrl,
                             provider: provider.name
                         });
-                        logger.debug(`Magnet encontrado para pagina`, {
-                            provedor: provider.name,
-                            index: i,
-                            titulo: pageLink.title.substring(0, 60)
-                        });
                     }
                 }
                 catch (error) {
-                    logger.debug(`Falha ao extrair magnet da pagina`, {
+                    logger.debug(`Falha ao extrair magnet na coleta`, {
                         provedor: provider.name,
-                        index: i,
-                        erro: error instanceof Error ? error.message : 'Erro desconhecido'
+                        index: i
                     });
                 }
             }
-            logger.debug(`Scraping concluido`, {
-                provedor: provider.name,
-                resultadosComMagnet: results.length
-            });
             return results;
         }
         catch (error) {
-            logger.debug(`Scraping ${provider.name} falhou`, {
+            logger.debug(`Scraping ${provider.name} falhou na coleta`, {
                 erro: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             throw error;
@@ -382,9 +459,6 @@ class TorrentScraperService {
     }
     async extractMagnetFromPage(pageUrl, timeout) {
         try {
-            logger.debug(`Extraindo magnet da pagina`, {
-                url: pageUrl.substring(0, 100)
-            });
             const response = await axios_1.default.get(pageUrl, {
                 timeout: timeout,
                 headers: {
@@ -395,26 +469,19 @@ class TorrentScraperService {
             const $ = cheerio.load(response.data);
             const magnetLink = $('a[href^="magnet:"]').attr('href');
             if (magnetLink) {
-                logger.debug(`Magnet encontrado via seletor`, {
-                    magnet: magnetLink.substring(0, 80)
-                });
                 return magnetLink;
             }
             const html = response.data;
             const magnetRegex = /magnet:\?xt=urn:btih:[a-fA-F0-9]{40}[^"\s]*/g;
             const magnetMatch = html.match(magnetRegex);
             if (magnetMatch && magnetMatch[0]) {
-                logger.debug(`Magnet encontrado via regex`, {
-                    magnet: magnetMatch[0].substring(0, 80)
-                });
                 return magnetMatch[0];
             }
-            logger.debug(`Nenhum magnet encontrado na pagina`);
             return null;
         }
         catch (error) {
-            logger.debug(`Erro ao extrair magnet`, {
-                url: pageUrl.substring(0, 100),
+            logger.debug(`Erro ao extrair magnet na coleta`, {
+                url: pageUrl.substring(0, 120),
                 erro: error instanceof Error ? error.message : 'Erro desconhecido'
             });
             return null;
@@ -435,7 +502,7 @@ class TorrentScraperService {
             magnet: indexerResult.magnet_link,
             seeders: indexerResult.seed_count || this.estimateSeeders('TorrentIndexer', quality),
             leechers: indexerResult.leech_count || 0,
-            size: indexerResult.size || 'Tamanho nao especificado',
+            size: indexerResult.size || 'Tamanho não especificado',
             quality: quality,
             provider: 'TorrentIndexer',
             language: language,
@@ -462,7 +529,7 @@ class TorrentScraperService {
             magnet: item.link,
             seeders: item.seeders || this.estimateSeeders(providerName, quality),
             leechers: item.leechers || 0,
-            size: item.size || 'Tamanho nao especificado',
+            size: item.size || 'Tamanho não especificado',
             quality: quality,
             provider: providerName,
             language: language,
@@ -493,8 +560,8 @@ class TorrentScraperService {
                 title.includes('temporada completa') ||
                 title.includes('season pack');
             if (isCompletePack) {
-                logger.debug('Aceitando pack/temporada completa', {
-                    title: result.title.substring(0, 60),
+                logger.debug('Coletando pack/temporada completa para filtragem externa', {
+                    title: result.title.substring(0, 80),
                     temporadaAlvo: targetSeason
                 });
                 return true;
@@ -502,7 +569,7 @@ class TorrentScraperService {
             return false;
         });
         if (results.length !== filtered.length) {
-            logger.debug('Filtro por temporada', {
+            logger.debug('Filtro por temporada aplicado na coleta', {
                 antes: results.length,
                 depois: filtered.length,
                 temporadaAlvo: targetSeason
@@ -520,7 +587,7 @@ class TorrentScraperService {
             }
         }
         if (results.length !== uniqueResults.length) {
-            logger.debug('Duplicados removidos', {
+            logger.debug('Duplicados removidos na coleta bruta', {
                 antes: results.length,
                 depois: uniqueResults.length
             });
@@ -568,6 +635,23 @@ class TorrentScraperService {
         }
         return null;
     }
+    prepareSearchQuery(query, type, targetSeason) {
+        if (type === 'series' && targetSeason !== undefined) {
+            const hasSeasonInQuery = /temporada|season|s\d+/i.test(query);
+            if (!hasSeasonInQuery) {
+                const seasonStr = targetSeason.toString().padStart(2, '0');
+                const queryWithSeason = `${query} s${seasonStr}`;
+                return queryWithSeason;
+            }
+        }
+        return this.cleanQuery(query);
+    }
+    cleanQuery(query) {
+        return query
+            .replace(/[^\w\s\-\.\:]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
     cleanTitle(title) {
         if (title.length > 100) {
             const lines = title.split(/(?=[A-ZÀ-Ú])/);
@@ -595,7 +679,7 @@ class TorrentScraperService {
         if (titleLower.includes('legendado') || titleLower.includes('legendada') || titleLower.includes('legenda')) {
             return 'pt';
         }
-        if (titleLower.includes('portugues') || titleLower.includes('portugues') || titleLower.includes('pt-br') || titleLower.includes('ptbr')) {
+        if (titleLower.includes('português') || titleLower.includes('portugues') || titleLower.includes('pt-br') || titleLower.includes('ptbr')) {
             return 'pt-BR';
         }
         if (titleLower.includes('brazilian') || titleLower.includes('brasil')) {
@@ -610,7 +694,7 @@ class TorrentScraperService {
         return 'desconhecido';
     }
     calculateSizeInBytes(sizeStr) {
-        if (!sizeStr || sizeStr === 'Tamanho nao especificado') {
+        if (!sizeStr || sizeStr === 'Tamanho não especificado') {
             return 1.5 * 1024 * 1024 * 1024;
         }
         const match = sizeStr.match(/(\d+\.?\d*)\s*(GB|MB|G|M)/i);
@@ -645,7 +729,7 @@ class TorrentScraperService {
     }
     getTorrentIndexerHeaders() {
         return {
-            'User-Agent': 'Brasil-RD-Addon/5.4.1',
+            'User-Agent': 'Brasil-RD-Addon/6.1.0',
             'Accept': 'application/json',
             'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8'
         };
@@ -668,11 +752,13 @@ class TorrentScraperService {
             .map(p => ({ nome: p.name, prioridade: p.priority }));
         return {
             versao: this.version,
-            descricao: 'Sistema multi-provedor com scraping real usando Cheerio',
-            melhoria: 'Corrigida extracao de titulos do Starck Filmes',
+            descricao: 'Sistema multi-provedor apenas para coleta bruta de torrents',
+            funcao: 'Coletor bruto - não aplica filtro de similaridade',
+            integracaoTmdb: 'Apenas para geração de queries inteligentes',
             provedoresAtivos: this.countActiveProviders(),
             provedores: activeProviders,
-            fluxo: 'Query completa -> Scraping -> Filtro inteligente'
+            fluxo: 'TMDB -> Queries inteligentes -> Coleta bruta -> Retorna tudo para filtragem externa',
+            nota: 'Filtragem por similaridade é responsabilidade do TitleFilter/CatalogProvider'
         };
     }
 }

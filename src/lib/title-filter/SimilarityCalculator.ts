@@ -15,9 +15,9 @@ export class SimilarityCalculator {
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
 
-  // Versionamento Semântico v23.5.1 - Correção crítica: rejeita filmes numerados sem número correspondente
-  // FIX: Corrige falso positivo onde títulos sem número eram aceitos para filmes numerados
-  private readonly VERSAO = '23.5.1';
+  // Versionamento Semântico v23.6.0 - Correção crítica: não tratar anos como sequências
+  // FIX: 2023, 2024, etc não são sequências, são anos de lançamento
+  private readonly VERSAO = '23.6.0';
 
   // Delegar palavras técnicas para arquivo externo
   private readonly TECHNICAL_WORDS = TECHNICAL_WORDS;
@@ -25,7 +25,7 @@ export class SimilarityCalculator {
 
   constructor(titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
-    this.logger.info(`SimilarityCalculator v${this.VERSAO} iniciado - Correção crítica para filmes numerados`);
+    this.logger.info(`SimilarityCalculator v${this.VERSAO} iniciado - Correção: anos não são sequências`);
     this.titleCleaner = titleCleaner;
     
     if (useTmdbScraper) {
@@ -188,7 +188,6 @@ export class SimilarityCalculator {
     }
     
     if (!torrentYear) {
-      // Flexibilidade para séries com temporada explícita
       if (movieInfo.mediaType === 'tv' && targetSeason) {
         const temTemporadaExplícita = this.hasExplicitSeason(torrentTitle, targetSeason);
         const temEpisódioExplícito = this.hasExplicitEpisode(torrentTitle);
@@ -378,7 +377,6 @@ export class SimilarityCalculator {
     const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
     const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
     
-    // Verificação de sequência para filmes - CORREÇÃO CRÍTICA APLICADA
     if (mediaType === 'movie') {
       const sequenceCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection);
       if (!sequenceCheck.compatible) {
@@ -411,7 +409,6 @@ export class SimilarityCalculator {
     similarity: number;
     reason: string;
   } {
-    // Extrai números de sequência
     const torrentSequence = this.extractSequenceNumber(torrentClean);
     const tmdbSequence = this.extractSequenceNumber(tmdbClean);
     
@@ -423,39 +420,32 @@ export class SimilarityCalculator {
       coleção: !!belongsToCollection
     });
     
-    // CASO 1: TMDB tem sequência, torrent não tem - AGORA REJEITA EXCETO PARA SEQUÊNCIA 1 EM COLEÇÃO
     if (!torrentSequence && tmdbSequence) {
-      // Verifica se é uma coleção e se a sequência é 1 ou I (primeiro filme)
       if (belongsToCollection && (tmdbSequence === '1' || tmdbSequence === 'i')) {
-        // Torrent sem número pode ser o primeiro filme da coleção - aplica penalidade moderada
         this.logger.debug('Permite sem número para primeira sequência em coleção', {
           tmdbSequence,
           coleção: !!belongsToCollection
         });
         return {
           compatible: true,
-          similarity: 0.8, // Penalidade de 20%
+          similarity: 0.8,
           reason: `TMDB é primeira sequência (${tmdbSequence}) em coleção, torrent sem número pode ser o primeiro`
         };
       } else {
-        // CORREÇÃO CRÍTICA: TMDB tem sequência mas torrent não tem - REJEITA
         this.logger.debug('Rejeita torrent sem número para filme numerado', {
           tmdbSequence,
           torrentSemNúmero: true
         });
         return {
           compatible: false,
-          similarity: 0.15, // Similaridade muito baixa
+          similarity: 0.15,
           reason: `TMDB tem sequência ${tmdbSequence} mas torrent não tem número - filme diferente`
         };
       }
     }
     
-    // CASO 2: Torrent tem sequência, TMDB não tem
     if (torrentSequence && !tmdbSequence) {
-      // Torrent tem número mas TMDB não tem
       if (belongsToCollection) {
-        // Se pertence a coleção, torrent com sequência 1 pode ser compatível
         if (torrentSequence === '1' || torrentSequence === 'i') {
           return {
             compatible: true,
@@ -463,7 +453,6 @@ export class SimilarityCalculator {
             reason: `Primeira sequência (${torrentSequence}) em coleção - pode ser o primeiro filme`
           };
         } else {
-          // Torrent tem sequência mas TMDB não tem e não é a primeira
           return {
             compatible: false,
             similarity: 0.1,
@@ -471,7 +460,6 @@ export class SimilarityCalculator {
           };
         }
       } else {
-        // Não pertence a coleção, sequências diferentes são filmes diferentes
         return {
           compatible: false,
           similarity: 0.1,
@@ -480,7 +468,6 @@ export class SimilarityCalculator {
       }
     }
     
-    // CASO 3: Ambos têm sequência
     if (torrentSequence && tmdbSequence) {
       if (torrentSequence === tmdbSequence) {
         return {
@@ -489,7 +476,6 @@ export class SimilarityCalculator {
           reason: `Números de sequência iguais: ${torrentSequence}`
         };
       } else {
-        // CORREÇÃO: Sequências diferentes são filmes diferentes
         this.logger.debug('Sequências diferentes - filme diferente', {
           torrentSequence,
           tmdbSequence
@@ -502,7 +488,6 @@ export class SimilarityCalculator {
       }
     }
     
-    // CASO 4: Nenhum tem sequência - COMPATÍVEL
     return {
       compatible: true,
       similarity: 1,
@@ -514,7 +499,6 @@ export class SimilarityCalculator {
     const words = title.split(' ').filter(w => w.length > 0);
     if (words.length === 0) return null;
     
-    // 1. Primeiro verifica por padrões SEQX (criados pela normalização)
     const seqMatch = title.match(/seq(\d+)/i);
     if (seqMatch && seqMatch[1]) {
         const num = parseInt(seqMatch[1]);
@@ -525,7 +509,6 @@ export class SimilarityCalculator {
     
     const lastWord = words[words.length - 1].toLowerCase();
     
-    // 2. Verifica números arábicos (1-20)
     if (/^\d+$/.test(lastWord)) {
         const num = parseInt(lastWord);
         if (num >= 1 && num <= 20) {
@@ -533,7 +516,6 @@ export class SimilarityCalculator {
         }
     }
     
-    // 3. Verifica números romanos
     const romanMap: { [key: string]: string } = {
         'i': '1', 'ii': '2', 'iii': '3', 'iv': '4', 'v': '5',
         'vi': '6', 'vii': '7', 'viii': '8', 'ix': '9', 'x': '10',
@@ -545,7 +527,6 @@ export class SimilarityCalculator {
         return romanMap[lastWord];
     }
     
-    // 4. Verifica indicadores de sequência no título todo
     for (let i = 0; i < words.length; i++) {
         const word = words[i].toLowerCase();
         if (romanMap[word]) {
@@ -556,7 +537,6 @@ export class SimilarityCalculator {
         }
     }
     
-    // 5. Verifica por padrões como "part 2", "parte 2", "2 parte", etc.
     const sequencePatterns = [
         /part[ée]?\s*(\d+)/i,
         /pt\.?\s*(\d+)/i,
@@ -566,7 +546,7 @@ export class SimilarityCalculator {
         /movie\s*(\d+)/i,
         /edição\s*(\d+)/i,
         /edition\s*(\d+)/i,
-        /seq(\d+)/i  // Adicionado para detectar SEQ3
+        /seq(\d+)/i
     ];
     
     for (const pattern of sequencePatterns) {
@@ -962,13 +942,10 @@ export class SimilarityCalculator {
       finalSimilarity = Math.min(1.0, finalSimilarity + 0.2);
       contextAnalysis += '|contém_tmdb';
     } else if (containmentAnalysis.contained) {
-      // CORREÇÃO: Reduz bônus para "contido por TMDB" em filmes numerados
       if (mediaType === 'movie') {
-        // Penaliza mais quando torrent não tem sequência mas TMDB tem
         const tmdbSequence = this.extractSequenceNumber(tmdbClean);
         if (tmdbSequence) {
-          // Torrent está contido mas não tem o número da sequência
-          finalSimilarity = Math.min(1.0, finalSimilarity + 0.05); // Apenas 5% de bônus
+          finalSimilarity = Math.min(1.0, finalSimilarity + 0.05);
           contextAnalysis += '|contido_por_tmdb_penalizado';
         } else {
           finalSimilarity = Math.min(1.0, finalSimilarity + 0.15);
@@ -985,7 +962,6 @@ export class SimilarityCalculator {
       contextAnalysis += '|contexto_suficiente';
     }
     
-    // Bônus para séries com temporada explícita
     if (mediaType === 'tv' && targetSeason && originalTorrentTitle) {
       const temTemporadaExplícita = this.hasExplicitSeason(originalTorrentTitle, targetSeason);
       const temEpisódioExplícito = this.hasExplicitEpisode(originalTorrentTitle);
@@ -1029,7 +1005,6 @@ export class SimilarityCalculator {
       reason += ' (TMDB contém título torrent)';
     }
     
-    // Adiciona informação sobre temporada se aplicável
     if (mediaType === 'tv' && targetSeason) {
       const temTemp = this.hasExplicitSeason(originalTorrentTitle || '', targetSeason);
       if (temTemp) {
@@ -1045,11 +1020,9 @@ export class SimilarityCalculator {
     };
   }
 
-  // Detecta temporada explícita no título do torrent
   private hasExplicitSeason(torrentTitle: string, targetSeason: number): boolean {
     const lowerTitle = torrentTitle.toLowerCase();
     
-    // Padrões para temporada explícita
     const seasonPatterns = [
       `s${targetSeason.toString().padStart(2, '0')}`,
       `s${targetSeason}`,
@@ -1064,16 +1037,14 @@ export class SimilarityCalculator {
     return seasonPatterns.some(pattern => lowerTitle.includes(pattern));
   }
 
-  // Detecta episódio explícito no título do torrent
   private hasExplicitEpisode(torrentTitle: string): boolean {
     const lowerTitle = torrentTitle.toLowerCase();
     
-    // Padrões para episódio explícito
     const episodePatterns = [
       /\be\d{1,10}\b/,
       /\bep\d{1,10}\b/,
       /\bepisode \d{1,10}\b/,
-      /\bepis[oó]dio \d{1,10}\b/
+      /\bepisódio \d{1,10}\b/
     ];
     
     return episodePatterns.some(pattern => pattern.test(lowerTitle));
@@ -1158,7 +1129,6 @@ export class SimilarityCalculator {
     };
   }
 
-  // Normaliza título para comparação
   normalizeForComparison(title: string, mediaType?: 'movie' | 'tv'): string {
     const decodedTitle = title
       .replace(/&#(\d+);/g, (match, dec) => String.fromCharCode(dec))
@@ -1190,16 +1160,12 @@ export class SimilarityCalculator {
     return finalClean;
   }
 
-  // Remove palavras técnicas do título preservando números de sequência
   private removeTechnicalWords(title: string, mediaType?: 'movie' | 'tv'): string {
     let clean = title;
     
-    // Preserva números de sequência antes de remover palavras técnicas
-    // Para filmes, preservamos números no final que podem ser sequências
     const preservedSequences = new Map<string, string>();
     
     if (mediaType === 'movie') {
-      // Encontra e marca números de sequência potencial
       const sequenceRegex = /^(.+?)\s+(\d+|i{1,3}|iv|v|vi{0,3}|ix|x)$/i;
       const match = clean.match(sequenceRegex);
       
@@ -1207,19 +1173,16 @@ export class SimilarityCalculator {
         const baseTitle = match[1];
         const sequenceNum = match[2].toLowerCase();
         
-        // Converte números romanos para arábicos
-        const romanToArabic: {[key: string]: string} = {
+        const romanToArabic: { [key: string]: string } = {
           'i': '1', 'ii': '2', 'iii': '3', 'iv': '4', 'v': '5',
           'vi': '6', 'vii': '7', 'viii': '8', 'ix': '9', 'x': '10'
         };
         
         const arabicSequence = romanToArabic[sequenceNum] || sequenceNum;
         
-        // Verifica se é um número de sequência válido (1-20)
         if (/^\d+$/.test(arabicSequence)) {
           const num = parseInt(arabicSequence);
           if (num >= 1 && num <= 20) {
-            // Preserva apenas se o número está no final do título
             const placeholder = `_SEQ${num}_`;
             preservedSequences.set(placeholder, ` ${num}`);
             clean = baseTitle + placeholder;
@@ -1230,9 +1193,7 @@ export class SimilarityCalculator {
     
     clean = clean.replace(/[\/\.\-_:]/g, ' ');
     
-    // Remove palavras técnicas usando as listas importadas
     this.TECHNICAL_WORDS.forEach((term: string) => {
-      // Não remove números isolados (eles serão tratados depois)
       if (!/^\d+$/.test(term)) {
         const regex = new RegExp(`\\b${term}\\b`, 'gi');
         clean = clean.replace(regex, '');
@@ -1244,15 +1205,14 @@ export class SimilarityCalculator {
       clean = clean.replace(regex, '');
     });
     
-    // Remove formatos técnicos específicos
-    clean = clean.replace(/\b\d{3,4}[pi]\b/gi, ''); // 720p, 1080p
-    clean = clean.replace(/\b[0-9]+k\b/gi, ''); // 4k, 8k
-    clean = clean.replace(/\b[hx]\d{3}\b/gi, ''); // h264, x265
-    clean = clean.replace(/\b\d+\.\d+(?:ch)?\b/gi, ''); // 5.1, 7.1ch
-    clean = clean.replace(/\b(19|20)\d{2}\b/g, ''); // anos
+    // CORREÇÃO CRÍTICA: NÃO REMOVER ANOS (2023, 2024) como palavras técnicas
+    // Mantém anos para análise posterior, mas remove formatos técnicos
+    clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '');
+    clean = clean.replace(/\b[0-9]+k\b/gi, '');
+    clean = clean.replace(/\b[hx]\d{3}\b/gi, '');
+    clean = clean.replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
+    // NÃO REMOVE ANOS AQUI - isso é feito no extractYearFromTitle
     
-    // Remove números genéricos, mas preserva os de sequência
-    // Primeiro substitui placeholders por marcadores temporários
     const tempMarkers = new Map<string, string>();
     preservedSequences.forEach((value, placeholder) => {
       const tempMarker = `_TEMP_${placeholder}_`;
@@ -1260,15 +1220,16 @@ export class SimilarityCalculator {
       clean = clean.replace(placeholder, tempMarker);
     });
     
-    // Remove todos os números restantes
-    clean = clean.replace(/\b\d+\b/g, '');
+    // Remove números isolados, mas preserva sequências marcadas
+    // IMPORTANTE: Não remove números de 4 dígitos (anos)
+    clean = clean.replace(/\b\d{1,3}\b/g, '');
+    // Mantém números de 4 dígitos que podem ser anos (serão analisados separadamente)
+    clean = clean.replace(/\b\d{5,}\b/g, '');
     
-    // Restaura sequências preservadas
     tempMarkers.forEach((value, tempMarker) => {
       clean = clean.replace(tempMarker, value);
     });
     
-    // Limpa espaços extras
     clean = clean.replace(/\s+/g, ' ').trim();
     
     return clean;
@@ -1356,7 +1317,6 @@ export class SimilarityCalculator {
     this.tmdbCache.clear();
   }
 
-  // Sugere query de busca otimizada para conteúdo em português
   suggestSearchQuery(baseTitle: string, type: 'movie' | 'series', season?: number): string {
     this.logger.debug('Gerando query de busca otimizada', { 
       baseTitle, 
@@ -1394,7 +1354,6 @@ export class SimilarityCalculator {
     return query;
   }
 
-  // Extrai termos de idioma relevantes para busca
   getLanguageSearchTerms(): string[] {
     const languageTerms = [
       'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
@@ -1409,7 +1368,6 @@ export class SimilarityCalculator {
     return validTerms;
   }
 
-  // Versão simplificada para queries rápidas
   suggestSimpleSearchQuery(baseTitle: string, type: 'movie' | 'series', season?: number): string {
     const cleanTitle = this.normalizeForComparison(baseTitle).trim();
     
@@ -1420,39 +1378,38 @@ export class SimilarityCalculator {
     return `${cleanTitle} dual OR dublado OR português`;
   }
 
-  getStats() {
-    const languageTerms = this.getLanguageSearchTerms();
-    
-    return {
-      versão: this.VERSAO,
-      feature: 'Correção crítica para filmes numerados',
-      descrição: 'Rejeita títulos sem número quando TMDB tem número de sequência',
-      limiarFilmes: '0.75 (ajustável para títulos curtos)',
-      limiarSéries: '0.65',
-      termosTécnicos: {
-        totalPalavras: this.TECHNICAL_WORDS.length,
-        totalAcrônimos: this.TECHNICAL_ACRONYMS.length,
-        fonte: 'Arquivo technical-words.ts externo'
-      },
-      termosIdioma: {
-        total: languageTerms.length,
-        termos: languageTerms
-      },
-      melhorias: [
-        'Correção crítica: "A Escolha Perfeita" vs "A Escolha Perfeita 2" agora rejeitado',
-        'Permite apenas sequência 1 quando TMDB pertence a coleção',
-        'Verificação rigorosa de compatibilidade de sequências',
-        'Reduz bônus para "contido por TMDB" em filmes numerados',
-        'Logs detalhados para debugging de sequências'
-      ],
-      exemplos: [
-        '"A Escolha Perfeita" vs "A Escolha Perfeita 2" → REJEITADO (corrigido)',
-        '"A Escolha Perfeita 2" vs "A Escolha Perfeita 2" → ACEITO',
-        '"A Escolha Perfeita 3" vs "A Escolha Perfeita 2" → REJEITADO',
-        '"Velozes e Furiosos I" vs "Velozes e Furiosos" (coleção) → ACEITO (primeiro filme)'
-      ]
-    };
-  }
+getStats() {
+  const languageTerms = this.getLanguageSearchTerms();
+  
+  return {
+    // CORREÇÃO: Usar aspas para propriedades com acentos
+    'versão': this.VERSAO,
+    'feature': 'Correção crítica: anos não são sequências',
+    'descrição': '2023, 2024, etc são anos de lançamento, não números de sequência',
+    'limiarFilmes': '0.75 (ajustável para títulos curtos)',
+    'limiarSéries': '0.65',
+    'termosTécnicos': {
+      'totalPalavras': this.TECHNICAL_WORDS.length,
+      'totalAcrônimos': this.TECHNICAL_ACRONYMS.length,
+      'fonte': 'Arquivo technical-words.ts externo'
+    },
+    'termosIdioma': {
+      'total': languageTerms.length,
+      'termos': languageTerms
+    },
+    'melhorias': [
+      'Correção crítica: anos (2023, 2024) não são interpretados como sequências',
+      'Mantém anos no título para análise de compatibilidade',
+      'Remove apenas números de 1-3 dígitos como palavras técnicas',
+      'Logs detalhados para debugging de normalização'
+    ],
+    'exemplos': [
+      '"Férias.de.Verão.2023" -> normaliza para "ferias verao" (antes: "ferias verao SEQ1")',
+      '"Férias.Frustradas.1989" -> mantém 1989 para comparação de ano',
+      '"O.Grinch.2018" -> mantém 2018 para comparação com TMDB'
+    ]
+  };
+}
 }
 
 export type { SmartTitleMatch, SeriesConfusion };

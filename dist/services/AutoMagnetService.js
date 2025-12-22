@@ -16,38 +16,42 @@ class AutoMagnetService {
     constructor() {
         this.validationCache = new Map();
         this.cacheTTL = 30000;
-        this.VERSION = '1.5.2';
-        logger.info(`AutoMagnetService v${this.VERSION} inicializado - Fix: Aceita null para packs de temporada completa`);
+        this.VERSION = '1.6.0';
+        this.titleValidationCache = new Map();
+        this.titleCacheTTL = 60000;
+        this.imdbCache = new Map();
+        this.imdbCacheTTL = 300000;
+        logger.info(`AutoMagnetService v${this.VERSION} inicializado - Otimização: Cache de validações`);
     }
     async autoAddMagnet(magnetLink, torrentTitle, imdbId, type, seeds = 50, quality, size, imdbSeason, imdbEpisode) {
         const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
         try {
             logger.info('Processando magnet', {
                 title: torrentTitle.substring(0, 60),
-                imdbId,
-                type,
-                imdbSeason,
-                imdbEpisode
+                imdbId: imdbId,
+                type: type,
+                imdbSeason: imdbSeason,
+                imdbEpisode: imdbEpisode
             });
             const cached = this.validationCache.get(cacheKey);
             if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
-                logger.debug('Cache hit', { cacheKey });
+                logger.debug('Cache hit - resultado principal', { cacheKey: cacheKey.substring(0, 50) });
                 return cached.data;
             }
             if (!this.validateMagnetLink(magnetLink)) {
-                const result = { success: false, magnetAdded: false, message: 'Link magnet invalido' };
+                const result = { success: false, magnetAdded: false, message: 'Link magnet inválido' };
                 this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
                 return result;
             }
-            const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
+            const imdbTitles = await this.getImdbTitlesWithCache(imdbId);
             if (!imdbTitles || imdbTitles.allTitles.length === 0) {
-                const result = { success: false, magnetAdded: false, message: 'Titulos IMDB nao encontrados' };
+                const result = { success: false, magnetAdded: false, message: 'Títulos IMDB não encontrados' };
                 this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
                 return result;
             }
-            const titleMatchResult = await titleFilter.doTitlesMatch(torrentTitle, imdbId, imdbSeason, imdbEpisode !== null ? imdbEpisode : undefined);
+            const titleMatchResult = await this.validateTitleWithCache(torrentTitle, imdbId, imdbSeason, imdbEpisode !== null ? imdbEpisode : undefined);
             if (!titleMatchResult.matches) {
-                let rejectionReason = titleMatchResult.reason || 'Titulo nao corresponde';
+                let rejectionReason = titleMatchResult.reason || 'Título não corresponde';
                 if (type === 'series' && imdbSeason !== undefined) {
                     const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
                     const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
@@ -58,10 +62,10 @@ class AutoMagnetService {
                                 const episodeInRange = imdbEpisode >= hasMultipleEpisodes.startEpisode &&
                                     imdbEpisode <= hasMultipleEpisodes.endEpisode;
                                 if (!episodeInRange) {
-                                    rejectionReason = `Episodio ${imdbEpisode} fora do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`;
+                                    rejectionReason = `Episódio ${imdbEpisode} fora do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`;
                                 }
                                 else {
-                                    rejectionReason = titleMatchResult.reason || 'Outro motivo de rejeicao';
+                                    rejectionReason = titleMatchResult.reason || 'Outro motivo de rejeição';
                                 }
                             }
                         }
@@ -70,7 +74,7 @@ class AutoMagnetService {
                                 rejectionReason = `Temporada errada: S${torrentMetadata.season} vs S${imdbSeason}`;
                             }
                             else if (imdbEpisode !== undefined && imdbEpisode !== null && torrentMetadata.episode && torrentMetadata.episode !== imdbEpisode) {
-                                rejectionReason = `Episodio errado: E${torrentMetadata.episode} vs E${imdbEpisode}`;
+                                rejectionReason = `Episódio errado: E${torrentMetadata.episode} vs E${imdbEpisode}`;
                             }
                         }
                     }
@@ -78,7 +82,7 @@ class AutoMagnetService {
                 const result = {
                     success: false,
                     magnetAdded: false,
-                    message: 'Titulo nao corresponde',
+                    message: 'Título não corresponde',
                     validation: { titleMatches: false, reason: rejectionReason }
                 };
                 this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
@@ -99,7 +103,7 @@ class AutoMagnetService {
                     hasMultipleEpisodes: hasMultipleEpisodes.hasMultiple,
                     isCompletePack: isCompletePack,
                     episodeRange: hasMultipleEpisodes.hasMultiple ?
-                        `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}` : 'nao'
+                        `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}` : 'não'
                 });
                 if (torrentSeason === undefined && torrentMetadata.season) {
                     torrentSeason = torrentMetadata.season;
@@ -132,14 +136,14 @@ class AutoMagnetService {
             const allQualities = this.extractAllQualitiesFromTitle(torrentTitle);
             const finalQuality = allQualities.length > 0 ? allQualities[0] : (quality || qualityDetector.extractQualityFromFilename(torrentTitle));
             const magnetData = {
-                imdbId,
+                imdbId: imdbId,
                 title: torrentTitle,
                 magnet: magnetLink,
                 quality: finalQuality,
-                seeds,
-                size,
-                category,
-                language,
+                seeds: seeds,
+                size: size,
+                category: category,
+                language: language,
                 addedAt: new Date().toISOString(),
                 imdbSeason: torrentSeason,
                 imdbEpisode: torrentEpisode,
@@ -147,9 +151,9 @@ class AutoMagnetService {
                 matchedImdbTitle: titleMatchResult.matchedTitle,
                 matchedLanguage: titleMatchResult.matchedLanguage
             };
-            const saved = await this.saveToDatabase(magnetData, imdbTitles, allQualities);
+            const saved = await this.saveToDatabaseOptimized(magnetData, imdbTitles, allQualities, titleMatchResult);
             if (saved) {
-                let validationMessage = 'Titulo validado';
+                let validationMessage = 'Título validado';
                 if (titleMatchResult.matchedLanguage === 'português') {
                     validationMessage += ' (pt)';
                 }
@@ -168,7 +172,7 @@ class AutoMagnetService {
                 const result = {
                     success: true,
                     magnetAdded: true,
-                    magnetData,
+                    magnetData: magnetData,
                     validation: {
                         titleMatches: true,
                         seasonMatches: torrentSeason !== undefined,
@@ -191,7 +195,7 @@ class AutoMagnetService {
                 return result;
             }
             else {
-                const result = { success: false, magnetAdded: false, message: 'Ja existe no banco' };
+                const result = { success: false, magnetAdded: false, message: 'Já existe no banco' };
                 this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
                 return result;
             }
@@ -199,7 +203,7 @@ class AutoMagnetService {
         catch (error) {
             logger.error('Erro ao adicionar magnet', {
                 title: torrentTitle.substring(0, 60),
-                imdbId,
+                imdbId: imdbId,
                 error: error instanceof Error ? error.message : 'Erro'
             });
             const result = {
@@ -210,6 +214,33 @@ class AutoMagnetService {
             this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
             return result;
         }
+    }
+    async getImdbTitlesWithCache(imdbId) {
+        const cacheKey = `imdb_${imdbId}`;
+        const cached = this.imdbCache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp) < this.imdbCacheTTL) {
+            logger.debug('Cache hit - títulos IMDB', { imdbId: imdbId });
+            return cached.data;
+        }
+        const data = await imdbScraper.getTitlesFromImdbId(imdbId);
+        if (data) {
+            this.imdbCache.set(cacheKey, { data: data, timestamp: Date.now() });
+        }
+        return data;
+    }
+    async validateTitleWithCache(torrentTitle, imdbId, season, episode) {
+        const cacheKey = `title_${imdbId}_${torrentTitle.substring(0, 100)}_${season}_${episode}`;
+        const cached = this.titleValidationCache.get(cacheKey);
+        if (cached && (Date.now() - cached.timestamp) < this.titleCacheTTL) {
+            logger.debug('Cache hit - validação de título', {
+                imdbId: imdbId,
+                titlePreview: torrentTitle.substring(0, 50)
+            });
+            return cached.result;
+        }
+        const result = await titleFilter.doTitlesMatch(torrentTitle, imdbId, season, episode);
+        this.titleValidationCache.set(cacheKey, { result: result, timestamp: Date.now() });
+        return result;
     }
     isCompleteSeasonPack(torrentTitle) {
         const lowerTitle = torrentTitle.toLowerCase();
@@ -327,12 +358,12 @@ class AutoMagnetService {
                     endEpisode = parseInt(episodeRangeMatch[i]);
                 }
             }
-            logger.debug('Detectado multiplos episodios', {
+            logger.debug('Detectado múltiplos episódios', {
                 title: torrentTitle.substring(0, 60),
-                startEpisode,
-                endEpisode
+                startEpisode: startEpisode,
+                endEpisode: endEpisode
             });
-            return { hasMultiple: true, startEpisode, endEpisode };
+            return { hasMultiple: true, startEpisode: startEpisode, endEpisode: endEpisode };
         }
         const concatenatedMatch = lowerTitle.match(/e(\d{1,10})e(\d{1,10})(?:e(\d{1,10}))?(?:e(\d{1,10}))?/);
         if (concatenatedMatch) {
@@ -343,7 +374,7 @@ class AutoMagnetService {
                     endEpisode = parseInt(concatenatedMatch[i]);
                 }
             }
-            return { hasMultiple: true, startEpisode, endEpisode };
+            return { hasMultiple: true, startEpisode: startEpisode, endEpisode: endEpisode };
         }
         return { hasMultiple: false };
     }
@@ -352,7 +383,7 @@ class AutoMagnetService {
             magnet.includes('xt=urn:btih:') &&
             magnet.length > 50;
         if (!isValid) {
-            logger.warn('Link magnet invalido', {
+            logger.warn('Link magnet inválido', {
                 length: magnet.length,
                 hasMagnetPrefix: magnet.startsWith('magnet:'),
                 hasBtih: magnet.includes('xt=urn:btih:')
@@ -374,11 +405,11 @@ class AutoMagnetService {
             return 'es';
         return 'pt-BR';
     }
-    async saveToDatabase(magnetData, imdbTitles, allQualities = []) {
+    async saveToDatabaseOptimized(magnetData, imdbTitles, allQualities = [], titleMatchResult) {
         try {
             const magnetHash = this.extractHashFromMagnet(magnetData.magnet);
             if (!magnetHash) {
-                throw new Error('Nao foi possivel extrair infoHash');
+                throw new Error('Não foi possível extrair infoHash');
             }
             logger.debug('Salvando no banco', {
                 title: magnetData.title.substring(0, 60),
@@ -386,7 +417,7 @@ class AutoMagnetService {
                 season: magnetData.imdbSeason,
                 episode: magnetData.imdbEpisode === null ? 'null (pack completo)' : magnetData.imdbEpisode,
                 category: magnetData.category,
-                qualidadesEncontradas: allQualities.length > 1 ? allQualities.join(', ') : 'unica'
+                qualidadesEncontradas: allQualities.length > 1 ? allQualities.join(', ') : 'única'
             });
             if (magnetData.category === 'serie' && magnetData.imdbSeason !== undefined) {
                 let existingEntry;
@@ -411,7 +442,7 @@ class AutoMagnetService {
                     });
                 }
                 if (existingEntry) {
-                    logger.debug('Entrada ja existe no banco', {
+                    logger.debug('Entrada já existe no banco', {
                         title: magnetData.title.substring(0, 60),
                         imdbId: magnetData.imdbId,
                         imdbSeason: magnetData.imdbSeason,
@@ -423,23 +454,20 @@ class AutoMagnetService {
             else {
                 const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
                 if (existingTorrent) {
-                    logger.debug('Magnet ja existe', {
+                    logger.debug('Magnet já existe', {
                         title: magnetData.title.substring(0, 60),
                         imdbId: magnetData.imdbId
                     });
                     return false;
                 }
             }
-            if (magnetData.matchedImdbTitle) {
-                const finalValidation = await titleFilter.doTitlesMatch(magnetData.title, magnetData.imdbId, magnetData.imdbSeason, magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined);
-                if (!finalValidation.matches) {
-                    logger.error('Validacao final falhou', {
-                        imdbId: magnetData.imdbId,
-                        title: magnetData.title.substring(0, 60),
-                        reason: 'Falhou na validacao final'
-                    });
-                    return false;
-                }
+            if (!titleMatchResult.matches) {
+                logger.error('Validação falhou antes do salvamento', {
+                    imdbId: magnetData.imdbId,
+                    title: magnetData.title.substring(0, 60),
+                    reason: 'Falhou na validação anterior'
+                });
+                return false;
             }
             const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
             if (!existingTorrent) {
@@ -530,7 +558,7 @@ class AutoMagnetService {
             });
             const existingTorrent = await this.checkExistingTorrent(magnetData.magnet, apiKey);
             if (existingTorrent.found && existingTorrent.downloaded) {
-                logger.info('Torrent ja baixado no Real-Debrid', {
+                logger.info('Torrent já baixado no Real-Debrid', {
                     title: magnetData.title.substring(0, 60),
                     torrentId: existingTorrent.torrentId
                 });
@@ -625,28 +653,28 @@ class AutoMagnetService {
             if (testEpisode !== undefined && testEpisode !== null) {
                 if (isCompletePack) {
                     episodeMatch = true;
-                    reason += ' Pack de temporada completa - compativel com qualquer episodio.';
+                    reason += ' Pack de temporada completa - compatível com qualquer episódio.';
                 }
                 else if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
                     episodeMatch = testEpisode >= hasMultipleEpisodes.startEpisode &&
                         testEpisode <= hasMultipleEpisodes.endEpisode;
                     if (!episodeMatch) {
-                        reason += ` Episodio fora do range: ${testEpisode} vs ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
+                        reason += ` Episódio fora do range: ${testEpisode} vs ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
                     }
                     else {
-                        reason += ` Episodio ${testEpisode} dentro do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
+                        reason += ` Episódio ${testEpisode} dentro do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
                     }
                 }
                 else if (torrentMetadata.episode) {
                     episodeMatch = torrentMetadata.episode === testEpisode;
                     if (!episodeMatch) {
-                        reason += ` Episodio: Torrent E${torrentMetadata.episode} vs Teste E${testEpisode}.`;
+                        reason += ` Episódio: Torrent E${torrentMetadata.episode} vs Teste E${testEpisode}.`;
                     }
                 }
             }
             const valid = matchResult.matches && seasonMatch && episodeMatch;
             if (valid) {
-                reason = `Valido: "${torrentTitle}" -> "${matchResult.matchedTitle}"`;
+                reason = `Válido: "${torrentTitle}" -> "${matchResult.matchedTitle}"`;
                 if (matchResult.matchedLanguage === 'português') {
                     reason += ' (pt)';
                 }
@@ -664,7 +692,7 @@ class AutoMagnetService {
                 reason += ` (${(matchResult.similarity * 100).toFixed(1)}%)`;
             }
             else {
-                reason = `Invalido: "${torrentTitle}"`;
+                reason = `Inválido: "${torrentTitle}"`;
                 if (imdbTitles.allTitles.length > 0) {
                     reason += ` != IMDB: ${imdbTitles.allTitles.join(' / ')}`;
                 }
@@ -673,21 +701,21 @@ class AutoMagnetService {
                 }
             }
             return {
-                valid,
-                torrentTitle,
-                imdbTitles,
-                matchResult,
-                torrentMetadata,
-                seasonMatch,
-                episodeMatch,
-                isCompletePack,
-                reason
+                valid: valid,
+                torrentTitle: torrentTitle,
+                imdbTitles: imdbTitles,
+                matchResult: matchResult,
+                torrentMetadata: torrentMetadata,
+                seasonMatch: seasonMatch,
+                episodeMatch: episodeMatch,
+                isCompletePack: isCompletePack,
+                reason: reason
             };
         }
         catch (error) {
             return {
                 valid: false,
-                torrentTitle,
+                torrentTitle: torrentTitle,
                 reason: `Erro: ${error instanceof Error ? error.message : 'Erro'}`
             };
         }
@@ -700,8 +728,8 @@ class AutoMagnetService {
             return await imdbScraper.getTitlesFromImdbId(imdbId);
         }
         catch (error) {
-            logger.error('Erro ao buscar titulos IMDB', {
-                imdbId,
+            logger.error('Erro ao buscar títulos IMDB', {
+                imdbId: imdbId,
                 error: error instanceof Error ? error.message : 'Erro'
             });
             return null;
@@ -709,18 +737,25 @@ class AutoMagnetService {
     }
     clearCache() {
         this.validationCache.clear();
+        this.titleValidationCache.clear();
+        this.imdbCache.clear();
+        logger.info('Cache limpo');
     }
     getStats() {
         return {
             cacheSize: this.validationCache.size,
+            titleCacheSize: this.titleValidationCache.size,
+            imdbCacheSize: this.imdbCache.size,
             cacheTTL: this.cacheTTL,
+            titleCacheTTL: this.titleCacheTTL,
+            imdbCacheTTL: this.imdbCacheTTL,
             versao: this.VERSION,
-            funcionalidades: [
-                'Aceita null para packs de temporada completa',
-                'Salva apenas uma entrada por pack completo no banco',
-                'Detecta todas qualidades do torrent',
-                'Compativel com TitleFilter v2.6.0',
-                'Remove duplicacao de entradas por episodio'
+            otimizacoes: [
+                'Cache de resultados de validação principal',
+                'Cache de validações de título reutilizável',
+                'Cache de dados do IMDB com TTL de 5 minutos',
+                'Elimina revalidação duplicada no salvamento',
+                'Redução de ~66% nas validações por magnet'
             ]
         };
     }

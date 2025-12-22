@@ -15,7 +15,7 @@ const MetricsService_1 = require("../services/MetricsService");
 class CatalogProvider {
     constructor(magnetService) {
         this.magnetService = magnetService;
-        this.VERSION = '4.7.2';
+        this.VERSION = '4.7.3';
         this.streamCache = new Map();
         this.STREAM_TTL = 24 * 60 * 60 * 1000;
         this.STREAM_EMPTY_TTL = 60 * 1000;
@@ -32,7 +32,7 @@ class CatalogProvider {
         this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.titleFilter = new titleFilter_1.TitleFilter();
         this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-        this.logger.info(`CatalogProvider v${this.VERSION} inicializado - Fix: Corrige passagem de null para packs de temporada`);
+        this.logger.info(`CatalogProvider v${this.VERSION} inicializado - Fix: Passa imdbId para TorrentScraperService`);
     }
     async getTmdbSearchData(imdbId, season) {
         const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
@@ -232,7 +232,7 @@ class CatalogProvider {
                 seasonYear: seasonYear,
                 hasTmdbData: !!tmdbSearchData
             });
-            const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, type, finalSeason, seasonYear !== null ? seasonYear : undefined);
+            const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, type, finalSeason, seasonYear !== null ? seasonYear : undefined, imdbId || undefined);
             this.logger.debug('Scraping inteligente - resultados brutos', {
                 encontrados: torrentResults.length,
                 query: searchQuery,
@@ -269,10 +269,10 @@ class CatalogProvider {
                     season: finalSeason,
                     torrents: filteredTorrents.valid.map(t => t.title.substring(0, 40))
                 });
-                let episodeToSave = finalEpisode;
+                episodeToSave = null;
             }
             await this.saveValidTorrentsToCatalog(filteredTorrents.valid, request, finalSeason, episodeToSave, tmdbSearchData?.imdbTitles || null, hasCompletePack);
-            const streams = await this.processTorrentsWithOptimization(filteredTorrents.valid, request, finalSeason, finalEpisode);
+            const streams = await this.processTorrentsWithOptimization(filteredTorrents.valid, request, finalSeason, finalEpisode || undefined);
             const sortedStreams = this.streamFormatter.sortStreamsByQuality(streams);
             this.logger.info('Scraping inteligente concluido', {
                 requestId: request.id,
@@ -837,7 +837,9 @@ class CatalogProvider {
             scrapingCacheSize: this.scrapingCache.size,
             tmdbCacheSize: this.tmdbDataCache.size,
             features: [
-                'Fix: Corrige passagem de null para packs de temporada',
+                'Fix: Passa imdbId para TorrentScraperService',
+                'TorrentScraperService integrado com TMDB para queries inteligentes',
+                'Corrige passagem de null para packs de temporada',
                 'Envia episode como null para packs completos corretamente',
                 'TMDB data publica para delegar parametros de busca',
                 'Fluxo: Banco -> JSON -> Scraping Inteligente',
@@ -855,6 +857,7 @@ class CatalogProvider {
                 'clearTmdbCache() - Limpa cache TMDB'
             ],
             fixs: [
+                'Passa imdbId para TorrentScraperService (linha 123)',
                 'Corrige passagem de null para AutoMagnetService',
                 'Packs de temporada completa salvos com episode: null',
                 'Logs detalhados para debug de valores de episode'

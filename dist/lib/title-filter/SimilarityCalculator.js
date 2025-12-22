@@ -8,11 +8,11 @@ class SimilarityCalculator {
     constructor(titleCleaner, useTmdbScraper = true) {
         this.tmdbCache = new Map();
         this.cacheTTL = 5 * 60 * 1000;
-        this.VERSAO = '23.5.1';
+        this.VERSAO = '23.6.0';
         this.TECHNICAL_WORDS = TechnicalWords_1.TECHNICAL_WORDS;
         this.TECHNICAL_ACRONYMS = TechnicalWords_1.TECHNICAL_ACRONYMS;
         this.logger = new logger_1.Logger('SimilarityCalculator');
-        this.logger.info(`SimilarityCalculator v${this.VERSAO} iniciado - Correção crítica para filmes numerados`);
+        this.logger.info(`SimilarityCalculator v${this.VERSAO} iniciado - Correção: anos não são sequências`);
         this.titleCleaner = titleCleaner;
         if (useTmdbScraper) {
             this.tmdbScraper = new ImdbScraperService_1.ImdbScraperService();
@@ -793,7 +793,7 @@ class SimilarityCalculator {
             /\be\d{1,10}\b/,
             /\bep\d{1,10}\b/,
             /\bepisode \d{1,10}\b/,
-            /\bepis[oó]dio \d{1,10}\b/
+            /\bepisódio \d{1,10}\b/
         ];
         return episodePatterns.some(pattern => pattern.test(lowerTitle));
     }
@@ -918,14 +918,14 @@ class SimilarityCalculator {
         clean = clean.replace(/\b[0-9]+k\b/gi, '');
         clean = clean.replace(/\b[hx]\d{3}\b/gi, '');
         clean = clean.replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
-        clean = clean.replace(/\b(19|20)\d{2}\b/g, '');
         const tempMarkers = new Map();
         preservedSequences.forEach((value, placeholder) => {
             const tempMarker = `_TEMP_${placeholder}_`;
             tempMarkers.set(tempMarker, value);
             clean = clean.replace(placeholder, tempMarker);
         });
-        clean = clean.replace(/\b\d+\b/g, '');
+        clean = clean.replace(/\b\d{1,3}\b/g, '');
+        clean = clean.replace(/\b\d{5,}\b/g, '');
         tempMarkers.forEach((value, tempMarker) => {
             clean = clean.replace(tempMarker, value);
         });
@@ -1042,32 +1042,30 @@ class SimilarityCalculator {
     getStats() {
         const languageTerms = this.getLanguageSearchTerms();
         return {
-            versão: this.VERSAO,
-            feature: 'Correção crítica para filmes numerados',
-            descrição: 'Rejeita títulos sem número quando TMDB tem número de sequência',
-            limiarFilmes: '0.75 (ajustável para títulos curtos)',
-            limiarSéries: '0.65',
-            termosTécnicos: {
-                totalPalavras: this.TECHNICAL_WORDS.length,
-                totalAcrônimos: this.TECHNICAL_ACRONYMS.length,
-                fonte: 'Arquivo technical-words.ts externo'
+            'versão': this.VERSAO,
+            'feature': 'Correção crítica: anos não são sequências',
+            'descrição': '2023, 2024, etc são anos de lançamento, não números de sequência',
+            'limiarFilmes': '0.75 (ajustável para títulos curtos)',
+            'limiarSéries': '0.65',
+            'termosTécnicos': {
+                'totalPalavras': this.TECHNICAL_WORDS.length,
+                'totalAcrônimos': this.TECHNICAL_ACRONYMS.length,
+                'fonte': 'Arquivo technical-words.ts externo'
             },
-            termosIdioma: {
-                total: languageTerms.length,
-                termos: languageTerms
+            'termosIdioma': {
+                'total': languageTerms.length,
+                'termos': languageTerms
             },
-            melhorias: [
-                'Correção crítica: "A Escolha Perfeita" vs "A Escolha Perfeita 2" agora rejeitado',
-                'Permite apenas sequência 1 quando TMDB pertence a coleção',
-                'Verificação rigorosa de compatibilidade de sequências',
-                'Reduz bônus para "contido por TMDB" em filmes numerados',
-                'Logs detalhados para debugging de sequências'
+            'melhorias': [
+                'Correção crítica: anos (2023, 2024) não são interpretados como sequências',
+                'Mantém anos no título para análise de compatibilidade',
+                'Remove apenas números de 1-3 dígitos como palavras técnicas',
+                'Logs detalhados para debugging de normalização'
             ],
-            exemplos: [
-                '"A Escolha Perfeita" vs "A Escolha Perfeita 2" → REJEITADO (corrigido)',
-                '"A Escolha Perfeita 2" vs "A Escolha Perfeita 2" → ACEITO',
-                '"A Escolha Perfeita 3" vs "A Escolha Perfeita 2" → REJEITADO',
-                '"Velozes e Furiosos I" vs "Velozes e Furiosos" (coleção) → ACEITO (primeiro filme)'
+            'exemplos': [
+                '"Férias.de.Verão.2023" -> normaliza para "ferias verao" (antes: "ferias verao SEQ1")',
+                '"Férias.Frustradas.1989" -> mantém 1989 para comparação de ano',
+                '"O.Grinch.2018" -> mantém 2018 para comparação com TMDB'
             ]
         };
     }

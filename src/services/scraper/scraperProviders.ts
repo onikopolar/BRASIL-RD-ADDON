@@ -13,7 +13,7 @@ export const scraperProviders: ScraperProvider[] = [
     },
     {
         name: 'Starck Filmes',
-        baseUrl: 'https://www.starckfilmes-v6.com',
+        baseUrl: 'https://starckfilmes-v8.com',
         searchPath: '/?s=',
         itemSelector: '.movies, .slide-item, .post-catalog, .item',
         titleSelector: 'h3.sl-title', // CORRIGIDO: Título está no h3, não no link
