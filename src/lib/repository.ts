@@ -1,10 +1,8 @@
 import { Op } from 'sequelize';
 import { Torrent, File, Subtitle } from '../database/models';
 
-// Exportar os models também
 export { Torrent, File, Subtitle };
 
-// Funções de query baseadas no Torrentio
 export function getTorrent(infoHash: string) {
   return Torrent.findOne({ where: { infoHash } });
 }
@@ -15,19 +13,30 @@ export function getFiles(infoHashes: string[]) {
 
 export function getImdbIdMovieEntries(imdbId: string) {
   return File.findAll({
-    where: {
-      imdbId: { [Op.eq]: imdbId }
-    },
+    where: { imdbId: { [Op.eq]: imdbId } },
     include: [Torrent],
     limit: 500,
-    order: [
-      [Torrent, 'seeders', 'DESC']
-    ]
+    order: [[Torrent, 'seeders', 'DESC']]
   });
 }
 
-export function getImdbIdSeriesEntries(imdbId: string, season: number, episode: number) {
-  return File.findAll({
+// NOVA LÓGICA: busca episódio exato e, se não encontrar, busca packs (episode = null)
+export async function getImdbIdSeriesEntries(imdbId: string, season: number, episode?: number) {
+  // Se episódio não informado, busca todos os arquivos da temporada (inclui packs)
+  if (episode === undefined) {
+    return File.findAll({
+      where: {
+        imdbId: { [Op.eq]: imdbId },
+        imdbSeason: { [Op.eq]: season }
+      },
+      include: [Torrent],
+      limit: 500,
+      order: [[Torrent, 'seeders', 'DESC']]
+    });
+  }
+
+  // Busca episódio exato
+  const exactMatches = await File.findAll({
     where: {
       imdbId: { [Op.eq]: imdbId },
       imdbSeason: { [Op.eq]: season },
@@ -35,22 +44,34 @@ export function getImdbIdSeriesEntries(imdbId: string, season: number, episode: 
     },
     include: [Torrent],
     limit: 500,
-    order: [
-      [Torrent, 'seeders', 'DESC']
-    ]
+    order: [[Torrent, 'seeders', 'DESC']]
   });
+
+  if (exactMatches.length > 0) {
+    return exactMatches;
+  }
+
+  // Fallback: busca packs da temporada (episode = null)
+  const packMatches = await File.findAll({
+    where: {
+      imdbId: { [Op.eq]: imdbId },
+      imdbSeason: { [Op.eq]: season },
+      imdbEpisode: { [Op.eq]: null }
+    },
+    include: [Torrent],
+    limit: 500,
+    order: [[Torrent, 'seeders', 'DESC']]
+  });
+
+  return packMatches;
 }
 
 export function getKitsuIdMovieEntries(kitsuId: number) {
   return File.findAll({
-    where: {
-      kitsuId: { [Op.eq]: kitsuId }
-    },
+    where: { kitsuId: { [Op.eq]: kitsuId } },
     include: [Torrent],
     limit: 500,
-    order: [
-      [Torrent, 'seeders', 'DESC']
-    ]
+    order: [[Torrent, 'seeders', 'DESC']]
   });
 }
 
@@ -62,13 +83,10 @@ export function getKitsuIdSeriesEntries(kitsuId: number, episode: number) {
     },
     include: [Torrent],
     limit: 500,
-    order: [
-      [Torrent, 'seeders', 'DESC']
-    ]
+    order: [[Torrent, 'seeders', 'DESC']]
   });
 }
 
-// Funções para inserir dados
 export async function createTorrent(torrentData: any) {
   return Torrent.create(torrentData);
 }
@@ -81,7 +99,6 @@ export async function createSubtitle(subtitleData: any) {
   return Subtitle.create(subtitleData);
 }
 
-// Função para sincronizar o banco (cria as tabelas)
 export async function syncDatabase() {
   await Torrent.sync();
   await File.sync();

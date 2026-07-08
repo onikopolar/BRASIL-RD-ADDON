@@ -24,18 +24,25 @@ function getFiles(infoHashes) {
 }
 function getImdbIdMovieEntries(imdbId) {
     return models_1.File.findAll({
-        where: {
-            imdbId: { [sequelize_1.Op.eq]: imdbId }
-        },
+        where: { imdbId: { [sequelize_1.Op.eq]: imdbId } },
         include: [models_1.Torrent],
         limit: 500,
-        order: [
-            [models_1.Torrent, 'seeders', 'DESC']
-        ]
+        order: [[models_1.Torrent, 'seeders', 'DESC']]
     });
 }
-function getImdbIdSeriesEntries(imdbId, season, episode) {
-    return models_1.File.findAll({
+async function getImdbIdSeriesEntries(imdbId, season, episode) {
+    if (episode === undefined) {
+        return models_1.File.findAll({
+            where: {
+                imdbId: { [sequelize_1.Op.eq]: imdbId },
+                imdbSeason: { [sequelize_1.Op.eq]: season }
+            },
+            include: [models_1.Torrent],
+            limit: 500,
+            order: [[models_1.Torrent, 'seeders', 'DESC']]
+        });
+    }
+    const exactMatches = await models_1.File.findAll({
         where: {
             imdbId: { [sequelize_1.Op.eq]: imdbId },
             imdbSeason: { [sequelize_1.Op.eq]: season },
@@ -43,21 +50,29 @@ function getImdbIdSeriesEntries(imdbId, season, episode) {
         },
         include: [models_1.Torrent],
         limit: 500,
-        order: [
-            [models_1.Torrent, 'seeders', 'DESC']
-        ]
+        order: [[models_1.Torrent, 'seeders', 'DESC']]
     });
-}
-function getKitsuIdMovieEntries(kitsuId) {
-    return models_1.File.findAll({
+    if (exactMatches.length > 0) {
+        return exactMatches;
+    }
+    const packMatches = await models_1.File.findAll({
         where: {
-            kitsuId: { [sequelize_1.Op.eq]: kitsuId }
+            imdbId: { [sequelize_1.Op.eq]: imdbId },
+            imdbSeason: { [sequelize_1.Op.eq]: season },
+            imdbEpisode: { [sequelize_1.Op.eq]: null }
         },
         include: [models_1.Torrent],
         limit: 500,
-        order: [
-            [models_1.Torrent, 'seeders', 'DESC']
-        ]
+        order: [[models_1.Torrent, 'seeders', 'DESC']]
+    });
+    return packMatches;
+}
+function getKitsuIdMovieEntries(kitsuId) {
+    return models_1.File.findAll({
+        where: { kitsuId: { [sequelize_1.Op.eq]: kitsuId } },
+        include: [models_1.Torrent],
+        limit: 500,
+        order: [[models_1.Torrent, 'seeders', 'DESC']]
     });
 }
 function getKitsuIdSeriesEntries(kitsuId, episode) {
@@ -68,9 +83,7 @@ function getKitsuIdSeriesEntries(kitsuId, episode) {
         },
         include: [models_1.Torrent],
         limit: 500,
-        order: [
-            [models_1.Torrent, 'seeders', 'DESC']
-        ]
+        order: [[models_1.Torrent, 'seeders', 'DESC']]
     });
 }
 async function createTorrent(torrentData) {

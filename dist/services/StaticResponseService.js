@@ -34,7 +34,6 @@ class StaticResponseService {
     }
     setBaseUrl(baseUrl) {
         this.baseUrl = baseUrl;
-        this.logger.info('URL base atualizada', { baseUrl });
     }
     getResponseInfo(response) {
         const videoFileMap = {
@@ -67,30 +66,30 @@ class StaticResponseService {
                 videoUrl: videoUrl
             },
             [StaticResponse.FAILED_ACCESS]: {
-                name: 'Chave API inválida',
-                title: 'Brasil RD - API inválida',
-                description: 'Chave do Real-Debrid inválida\nObtenha nova chave em real-debrid.com/apitoken',
+                name: 'Chave API invalida',
+                title: 'Brasil RD - API invalida',
+                description: 'Chave do Real-Debrid invalida\nObtenha nova chave em real-debrid.com/apitoken',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
             [StaticResponse.FAILED_RAR]: {
                 name: 'Arquivo RAR',
                 title: 'Brasil RD - RAR/ZIP',
-                description: 'Contém arquivos compactados\nAguarde extração ou tente outro',
+                description: 'Contem arquivos compactados\nAguarde extracao ou tente outro',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
             [StaticResponse.FAILED_TOO_BIG]: {
                 name: 'Muito grande',
                 title: 'Brasil RD - Grande demais',
-                description: 'Torrent excede limite do Real-Debrid\nTente versão menor',
+                description: 'Torrent excede limite do Real-Debrid\nTente versao menor',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
             [StaticResponse.FAILED_OPENING]: {
                 name: 'Erro no magnet',
-                title: 'Brasil RD - Magnet inválido',
-                description: 'Não conseguiu processar magnet link\nVerifique o link',
+                title: 'Brasil RD - Magnet invalido',
+                description: 'Nao conseguiu processar magnet link\nVerifique o link',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
@@ -104,14 +103,14 @@ class StaticResponseService {
             [StaticResponse.FAILED_INFRINGEMENT]: {
                 name: 'Bloqueado',
                 title: 'Brasil RD - Bloqueado',
-                description: 'Conteúdo removido por direitos autorais\nTente outra fonte',
+                description: 'Conteudo removido por direitos autorais\nTente outra fonte',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
             [StaticResponse.LIMITS_EXCEEDED]: {
                 name: 'Limites excedidos',
                 title: 'Brasil RD - Limites',
-                description: 'Limites do Real-Debrid excedidos\nAguarde ou faça upgrade',
+                description: 'Limites do Real-Debrid excedidos\nAguarde ou faca upgrade',
                 url: videoUrl,
                 videoUrl: videoUrl
             },
@@ -127,7 +126,7 @@ class StaticResponseService {
     }
     createInformativeStream(response, requestId) {
         const info = this.getResponseInfo(response);
-        const stream = {
+        return {
             title: info.title,
             name: `Brasil RD - ${info.name}`,
             description: `${info.description}${requestId ? `\nID: ${requestId}` : ''}`,
@@ -136,13 +135,6 @@ class StaticResponseService {
                 notWebReady: false
             }
         };
-        this.logger.info(`Stream informativo criado: ${info.name}`, {
-            requestId,
-            videoUrl: info.url,
-            baseUrl: this.baseUrl,
-            notWebReady: stream.behaviorHints.notWebReady
-        });
-        return stream;
     }
     createInformativeStreamWithStatus(response, rdStatus, progress, requestId) {
         const info = this.getResponseInfo(response);
@@ -153,7 +145,7 @@ class StaticResponseService {
             description += `\nProgresso: ${progress}%`;
         if (requestId)
             description += `\nID: ${requestId}`;
-        const stream = {
+        return {
             title: info.title,
             name: `Brasil RD - ${info.name}`,
             description: description,
@@ -162,14 +154,6 @@ class StaticResponseService {
                 notWebReady: false
             }
         };
-        this.logger.info(`Stream informativo com status criado: ${info.name}`, {
-            requestId,
-            rdStatus,
-            progress,
-            videoUrl: info.url,
-            baseUrl: this.baseUrl
-        });
-        return stream;
     }
     getResponseForRealDebridStatus(rdStatus, errorCode) {
         if (errorCode !== undefined) {

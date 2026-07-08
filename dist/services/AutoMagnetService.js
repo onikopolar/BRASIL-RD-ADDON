@@ -3,7 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.AutoMagnetService = void 0;
 const repository_1 = require("../lib/repository");
 const RealDebridService_1 = require("./RealDebridService");
-const ImdbScraperService_1 = require("./ImdbScraperService");
+const ImdbScraperService_1 = require("../services/ImdbScraperService");
 const logger_1 = require("../utils/logger");
 const titleFilter_1 = require("../lib/titleFilter");
 const qualityDetector_1 = require("../lib/qualityDetector");
@@ -16,12 +16,11 @@ class AutoMagnetService {
     constructor() {
         this.validationCache = new Map();
         this.cacheTTL = 30000;
-        this.VERSION = '1.6.0';
+        this.VERSION = '1.6.1';
         this.titleValidationCache = new Map();
         this.titleCacheTTL = 60000;
         this.imdbCache = new Map();
         this.imdbCacheTTL = 300000;
-        logger.info(`AutoMagnetService v${this.VERSION} inicializado - Otimização: Cache de validações`);
     }
     async autoAddMagnet(magnetLink, torrentTitle, imdbId, type, seeds = 50, quality, size, imdbSeason, imdbEpisode) {
         const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
@@ -35,7 +34,6 @@ class AutoMagnetService {
             });
             const cached = this.validationCache.get(cacheKey);
             if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
-                logger.debug('Cache hit - resultado principal', { cacheKey: cacheKey.substring(0, 50) });
                 return cached.data;
             }
             if (!this.validateMagnetLink(magnetLink)) {
@@ -219,7 +217,6 @@ class AutoMagnetService {
         const cacheKey = `imdb_${imdbId}`;
         const cached = this.imdbCache.get(cacheKey);
         if (cached && (Date.now() - cached.timestamp) < this.imdbCacheTTL) {
-            logger.debug('Cache hit - títulos IMDB', { imdbId: imdbId });
             return cached.data;
         }
         const data = await imdbScraper.getTitlesFromImdbId(imdbId);
@@ -232,32 +229,29 @@ class AutoMagnetService {
         const cacheKey = `title_${imdbId}_${torrentTitle.substring(0, 100)}_${season}_${episode}`;
         const cached = this.titleValidationCache.get(cacheKey);
         if (cached && (Date.now() - cached.timestamp) < this.titleCacheTTL) {
-            logger.debug('Cache hit - validação de título', {
-                imdbId: imdbId,
-                titlePreview: torrentTitle.substring(0, 50)
-            });
             return cached.result;
         }
         const result = await titleFilter.doTitlesMatch(torrentTitle, imdbId, season, episode);
         this.titleValidationCache.set(cacheKey, { result: result, timestamp: Date.now() });
         return result;
     }
-    isCompleteSeasonPack(torrentTitle) {
-        const lowerTitle = torrentTitle.toLowerCase();
-        const completeSeasonPatterns = [
-            /temporada\s+completa/i,
-            /complete\s+season/i,
-            /season\s+pack/i,
-            /pack\s+temporada/i,
-            /\d+ª?\s*temporada$/i,
-            /^temporada\s+\d+$/i,
-            /season\s+\d+\s+complete/i,
-            /season\s+\d+\s+pack/i,
-            /temporada\s+\d+\s+completa/i
+    hasSeasonIndicator(title) {
+        const lower = title.toLowerCase();
+        const patterns = [
+            /\bs\d{1,3}\b/,
+            /\bseason\s*\d{1,3}\b/,
+            /\bt\d{1,3}\b/,
+            /\btemporada\s*\d{1,3}\b/,
+            /\b\d{1,2}ª?\s*temporada\b/
         ];
-        const hasCompletePattern = completeSeasonPatterns.some(pattern => pattern.test(lowerTitle));
-        const hasSpecificEpisode = /s\d+e\d+/i.test(lowerTitle) || /episode\s+\d+/i.test(lowerTitle) || /e\d+/i.test(lowerTitle);
-        return hasCompletePattern && !hasSpecificEpisode;
+        return patterns.some(p => p.test(lower));
+    }
+    hasEpisodeIndicator(title) {
+        const lower = title.toLowerCase();
+        return /s\d+e\d+/i.test(lower) || /episode\s+\d+/i.test(lower) || /\be\d{1,3}\b/i.test(lower);
+    }
+    isCompleteSeasonPack(torrentTitle) {
+        return this.hasSeasonIndicator(torrentTitle) && !this.hasEpisodeIndicator(torrentTitle);
     }
     extractAllQualitiesFromTitle(title) {
         const qualityPatterns = [
@@ -755,7 +749,7 @@ class AutoMagnetService {
                 'Cache de validações de título reutilizável',
                 'Cache de dados do IMDB com TTL de 5 minutos',
                 'Elimina revalidação duplicada no salvamento',
-                'Redução de ~66% nas validações por magnet'
+                'Detecção de packs ampliada (temporada sem episódio)'
             ]
         };
     }
