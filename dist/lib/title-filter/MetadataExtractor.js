@@ -3,6 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetadataExtractor = void 0;
 const logger_1 = require("../../utils/logger");
 class MetadataExtractor {
+    static getInstance() {
+        if (!MetadataExtractor.instance) {
+            MetadataExtractor.instance = new MetadataExtractor();
+        }
+        return MetadataExtractor.instance;
+    }
     constructor() {
         this.metadataCache = new Map();
         this.cacheTTL = 30000;
@@ -46,7 +52,7 @@ class MetadataExtractor {
             { pattern: /\b(480p|sd|standard definition)\b/i, quality: 'SD' },
         ];
         this.logger = new logger_1.Logger('MetadataExtractor');
-        this.logger.info('MetadataExtractor v1.4.0 inicializado');
+        this.logger.debug('MetadataExtractor ready');
     }
     extractSeriesMetadata(torrentTitle) {
         const basic = this.extractBasicMetadataInternal(torrentTitle);

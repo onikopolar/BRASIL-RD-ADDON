@@ -3,11 +3,17 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.TitleCleaner = void 0;
 const logger_1 = require("../../utils/logger");
 class TitleCleaner {
+    static getInstance() {
+        if (!TitleCleaner.instance) {
+            TitleCleaner.instance = new TitleCleaner();
+        }
+        return TitleCleaner.instance;
+    }
     constructor() {
         this.cleanTitleCache = new Map();
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
         this.logger = new logger_1.Logger('TitleCleaner');
-        this.logger.info('✅ TitleCleaner inicializado - Versão exata do original');
+        this.logger.debug('TitleCleaner ready');
     }
     cleanupOldCaches() {
         const now = Date.now();

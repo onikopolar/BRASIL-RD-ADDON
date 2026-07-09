@@ -36,13 +36,7 @@ export class TorrentIndexerService {
 
     constructor() {
         this.logger = new Logger('TorrentIndexer');
-        this.logger.info('Serviço Torrent Indexer inicializado', { 
-            mirrors: this.mirrors.length,
-            supportedSites: [
-                'bludv', 'comando_torrents', 'torrent-dos-filmes', 
-                'starck-filmes', 'rede_torrent', 'filme_torrent', 'vaca_torrent'
-            ]
-        });
+        this.logger.debug('TorrentIndexer ready');
     }
 
     async searchTorrents(

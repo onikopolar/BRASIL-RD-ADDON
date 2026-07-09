@@ -33,13 +33,6 @@ export class AdvancedCacheService {
     };
     
     this.cache = new Cacheable(cacheableOptions);
-    
-    this.logger.info('AdvancedCacheService v1.0.0 inicializado', {
-      namespace,
-      maxAge: `${cacheableOptions.ttl}ms`,
-      staleWhileRevalidate: `${cacheableOptions.staleWhileRevalidate}ms`,
-      maxSize: cacheableOptions.max
-    });
   }
   
   /**

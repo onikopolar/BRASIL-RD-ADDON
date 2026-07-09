@@ -1,4 +1,3 @@
-// Arquivo: src/lib/title-filter/SimilarityCalculator.ts
 import { Logger } from '../../utils/logger';
 import { SmartTitleMatch, SeriesConfusion } from './interfaces';
 import { ImdbScraperService } from '../../services/ImdbScraperService';
@@ -7,21 +6,25 @@ import { TECHNICAL_WORDS, TECHNICAL_ACRONYMS } from './TechnicalWords';
 export class SimilarityCalculator {
   private readonly logger: Logger;
   private confusingSeries: SeriesConfusion[];
-  private readonly titleCleaner: any;
   private readonly tmdbScraper: ImdbScraperService | null;
 
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
 
-  private readonly VERSAO = '23.6.1'; // Ajuste contextual para séries com SxxExx
+  private readonly VERSAO = '23.6.1';
 
-  private readonly TECHNICAL_WORDS = TECHNICAL_WORDS;
-  private readonly TECHNICAL_ACRONYMS = TECHNICAL_ACRONYMS;
+  private static instance: SimilarityCalculator;
 
-  constructor(titleCleaner?: any, useTmdbScraper: boolean = true) {
+  public static getInstance(): SimilarityCalculator {
+    if (!SimilarityCalculator.instance) {
+      SimilarityCalculator.instance = new SimilarityCalculator(undefined, true);
+    }
+    return SimilarityCalculator.instance;
+  }
+
+  constructor(_titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
-    this.titleCleaner = titleCleaner;
-    this.tmdbScraper = useTmdbScraper ? new ImdbScraperService() : null;
+    this.tmdbScraper = useTmdbScraper ? ImdbScraperService.getInstance() : null;
 
     this.confusingSeries = [
       { original: 'american horror story', derivative: 'american horror stories', minSimilarity: 0.85 },
@@ -168,7 +171,7 @@ export class SimilarityCalculator {
     const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
 
     if (mediaType === 'movie') {
-      const seqCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection);
+      const seqCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection, originalTorrentTitle);
       if (!seqCheck.compatible) return { similarity: seqCheck.similarity, confidence: 'baixa', reason: seqCheck.reason, contextAnalysis: 'sequência_incompatível' };
     }
 
@@ -177,10 +180,16 @@ export class SimilarityCalculator {
     return this.normalContextAnalysis(torrentClean, tmdbClean, mediaType, targetSeason, originalTorrentTitle);
   }
 
-  private checkSequenceCompatibility(torrentClean: string, tmdbClean: string, belongsToCollection?: any) {
+  private checkSequenceCompatibility(torrentClean: string, tmdbClean: string, belongsToCollection?: any, originalTorrentTitle?: string) {
     const torrentSeq = this.extractSequenceNumber(torrentClean);
     const tmdbSeq = this.extractSequenceNumber(tmdbClean);
     if (!torrentSeq && tmdbSeq) {
+      // TMDB tem sequência mas torrent não — verifica no título ORIGINAL (pré-limpeza)
+      // Ex: "Toy Story 5" vs "Toy Story 5 Dublado 1080p" — o 5 foi removido na normalização
+      const originalLower = (originalTorrentTitle || torrentClean).toLowerCase();
+      if (originalLower.includes(tmdbSeq) || originalLower.includes(' ' + tmdbSeq)) {
+        return { compatible: true, similarity: 0.75, reason: `Número ${tmdbSeq} encontrado no título original` };
+      }
       if (belongsToCollection && (tmdbSeq === '1' || tmdbSeq === 'i')) return { compatible: true, similarity: 0.8, reason: `TMDB é primeira sequência em coleção` };
       return { compatible: false, similarity: 0.15, reason: `TMDB tem sequência ${tmdbSeq} mas torrent não` };
     }
@@ -195,18 +204,39 @@ export class SimilarityCalculator {
     return { compatible: true, similarity: 1, reason: 'Nenhum número de sequência' };
   }
 
+  private static readonly ROMAN_MAP: Record<string, string> = {
+    i:'1', ii:'2', iii:'3', iv:'4', v:'5', vi:'6', vii:'7', viii:'8', ix:'9', x:'10',
+    xi:'11', xii:'12', xiii:'13', xiv:'14', xv:'15', xvi:'16', xvii:'17', xviii:'18', xix:'19', xx:'20'
+  };
+
+  private static readonly SEQ_PATTERNS = [
+    /part[ée]?\s*(\d+)/i, /pt\.?\s*(\d+)/i, /volume\s*(\d+)/i, /vol\.?\s*(\d+)/i,
+    /filme\s*(\d+)/i, /movie\s*(\d+)/i, /edição\s*(\d+)/i, /edition\s*(\d+)/i, /seq(\d+)/i
+  ];
+
   private extractSequenceNumber(title: string): string | null {
     const words = title.split(' ').filter(w => w.length > 0);
     if (!words.length) return null;
+
+    const isValidSeq = (n: number) => n >= 1 && n <= 20;
+
     const seqMatch = title.match(/seq(\d+)/i);
-    if (seqMatch) { const n = parseInt(seqMatch[1]); if (n >= 1 && n <= 20) return seqMatch[1]; }
+    if (seqMatch && isValidSeq(parseInt(seqMatch[1]))) return seqMatch[1];
+
     const lastWord = words[words.length - 1].toLowerCase();
-    if (/^\d+$/.test(lastWord)) { const n = parseInt(lastWord); if (n >= 1 && n <= 20) return lastWord; }
-    const romanMap: Record<string, string> = { i:'1', ii:'2', iii:'3', iv:'4', v:'5', vi:'6', vii:'7', viii:'8', ix:'9', x:'10', xi:'11', xii:'12', xiii:'13', xiv:'14', xv:'15', xvi:'16', xvii:'17', xviii:'18', xix:'19', xx:'20' };
-    if (romanMap[lastWord]) return romanMap[lastWord];
-    for (const w of words) { if (romanMap[w.toLowerCase()]) return romanMap[w.toLowerCase()]; if (/^\d+$/.test(w) && parseInt(w) <= 20) return w; }
-    const patterns = [/part[ée]?\s*(\d+)/i, /pt\.?\s*(\d+)/i, /volume\s*(\d+)/i, /vol\.?\s*(\d+)/i, /filme\s*(\d+)/i, /movie\s*(\d+)/i, /edição\s*(\d+)/i, /edition\s*(\d+)/i, /seq(\d+)/i];
-    for (const p of patterns) { const m = title.match(p); if (m && m[1]) { const n = parseInt(m[1]); if (n >= 1 && n <= 20) return m[1]; } }
+    if (/^\d+$/.test(lastWord) && isValidSeq(parseInt(lastWord))) return lastWord;
+    if (SimilarityCalculator.ROMAN_MAP[lastWord]) return SimilarityCalculator.ROMAN_MAP[lastWord];
+
+    for (const w of words) {
+      const lower = w.toLowerCase();
+      if (SimilarityCalculator.ROMAN_MAP[lower]) return SimilarityCalculator.ROMAN_MAP[lower];
+      if (/^\d+$/.test(w) && isValidSeq(parseInt(w))) return w;
+    }
+
+    for (const p of SimilarityCalculator.SEQ_PATTERNS) {
+      const m = title.match(p);
+      if (m && m[1] && isValidSeq(parseInt(m[1]))) return m[1];
+    }
     return null;
   }
 
@@ -218,7 +248,6 @@ export class SimilarityCalculator {
     const containsWord = torrentWords.some(w => w === tmdbWord);
     if (!containsWord) return { similarity: 0, confidence: 'baixa', reason: `Palavra "${tmdbWord}" não encontrada`, contextAnalysis: 'título_curto_não_contém' };
 
-    // Override contextual para séries com SxxExx correspondente
     if (mediaType === 'tv' && targetSeason !== undefined && originalTorrentTitle) {
       const hasSeason = this.hasExplicitSeason(originalTorrentTitle, targetSeason);
       const hasEpisode = this.hasExplicitEpisode(originalTorrentTitle);
@@ -399,8 +428,8 @@ export class SimilarityCalculator {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // Preservar números de sequência (filmes)
-    const preservedSequences = new Map<string, string>();
+    // Preserva número de sequência em filmes (ex: "Matrix 2" → "matrix 2")
+    let seqSuffix = '';
     if (mediaType === 'movie') {
       const match = clean.match(/^(.+?)\s+(\d+|i{1,3}|iv|v|vi{0,3}|ix|x)$/i);
       if (match) {
@@ -408,29 +437,20 @@ export class SimilarityCalculator {
         const romanMap: Record<string, string> = { i:'1', ii:'2', iii:'3', iv:'4', v:'5', vi:'6', vii:'7', viii:'8', ix:'9', x:'10' };
         const arabic = romanMap[seq] || seq;
         if (/^\d+$/.test(arabic) && parseInt(arabic) <= 20) {
-          const placeholder = `_SEQ${arabic}_`;
-          preservedSequences.set(placeholder, ` ${arabic}`);
-          clean = match[1] + placeholder;
+          seqSuffix = ` ${arabic}`;
+          clean = match[1];
         }
       }
     }
 
     clean = clean.replace(/[\/\.\-_:]/g, ' ');
-    this.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term)) clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
-    this.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
+    TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term)) clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
+    TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
     clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
-
-    // Restaura sequências
-    preservedSequences.forEach((value, placeholder) => {
-      const tempMarker = `_TEMP_${placeholder}_`;
-      clean = clean.replace(placeholder, tempMarker);
-      clean = clean.replace(tempMarker, value);
-    });
-
-    // Remove números isolados (1-3 dígitos), mas preserva anos (4 dígitos)
     clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
     clean = clean.replace(/\s+/g, ' ').trim();
-    return clean;
+
+    return clean + seqSuffix;
   }
 
   private extractYearFromTitle(title: string): number | null {
@@ -475,14 +495,8 @@ export class SimilarityCalculator {
     return type === 'series' && season !== undefined ? `${clean} s${season.toString().padStart(2, '0')} dual OR dublado` : `${clean} dual OR dublado`;
   }
 
-  suggestSimpleSearchQuery(baseTitle: string, type: 'movie' | 'series', season?: number): string {
-    const clean = this.normalizeForComparison(baseTitle).trim() || baseTitle;
-    return type === 'series' && season !== undefined ? `${clean} s${season.toString().padStart(2, '0')} dual OR dublado` : `${clean} dual OR dublado`;
-  }
-
   getLanguageSearchTerms(): string[] {
-    return ['dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'português', 'português', 'brazilian', 'multi']
-      .filter(t => this.TECHNICAL_WORDS.includes(t));
+    return ['dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'português', 'brazilian', 'multi'];
   }
 
   getStats() {

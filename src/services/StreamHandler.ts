@@ -1,8 +1,7 @@
-import { RealDebridService } from './RealDebridService';
+import { TorboxService } from './RealDebridService';
 import { CuratedMagnetService } from './CuratedMagnetService';
 import { AutoMagnetService } from './AutoMagnetService';
 import { CacheService } from './CacheService';
-import { ImdbScraperService, ImdbTitles } from './ImdbScraperService';
 import { Logger } from '../utils/logger';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index';
 import { Op } from 'sequelize';
@@ -29,11 +28,10 @@ interface DatabaseStreamResult {
 
 export class StreamHandler {
   private static instance: StreamHandler;
-  private readonly rdService: RealDebridService;
+  private readonly torboxService: TorboxService;
   private readonly magnetService: CuratedMagnetService;
   private readonly autoMagnetService: AutoMagnetService;
   private readonly cacheService: CacheService;
-  private readonly imdbScraper: ImdbScraperService;
   private readonly logger: Logger;
   private staticResponseService: StaticResponseService;
   private readonly qualityDetector: QualityDetector;
@@ -55,16 +53,15 @@ export class StreamHandler {
   };
 
   private constructor(baseUrl?: string) {
-    this.rdService = new RealDebridService(baseUrl);
+    this.torboxService = new TorboxService(baseUrl);
     this.magnetService = new CuratedMagnetService();
     this.autoMagnetService = new AutoMagnetService();
     this.cacheService = new CacheService();
-    this.imdbScraper = new ImdbScraperService();
     this.logger = new Logger('StreamHandler');
     this.staticResponseService = new StaticResponseService(baseUrl);
-    this.qualityDetector = new QualityDetector();
-    this.titleFilter = new TitleFilter();
-    this.streamFormatter = new StreamFormatter();
+    this.qualityDetector = QualityDetector.getInstance();
+    this.titleFilter = TitleFilter.getInstance();
+    this.streamFormatter = StreamFormatter.getInstance();
     this.catalogProvider = new CatalogProvider(this.magnetService);
   }
 
@@ -94,7 +91,7 @@ export class StreamHandler {
 
   public setStaticResponseBaseUrl(baseUrl: string): void {
     this.staticResponseService.setBaseUrl(baseUrl);
-    this.rdService.setStaticResponseBaseUrl(baseUrl);
+    this.torboxService.setStaticResponseBaseUrl(baseUrl);
   }
 
   private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {

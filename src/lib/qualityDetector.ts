@@ -1,4 +1,13 @@
 export class QualityDetector {
+  private static instance: QualityDetector;
+
+  public static getInstance(): QualityDetector {
+    if (!QualityDetector.instance) {
+      QualityDetector.instance = new QualityDetector();
+    }
+    return QualityDetector.instance;
+  }
+
   private readonly qualityPatterns = [
     // 2160p / 4K
     { pattern: /\.2160p\./i, quality: '2160p', confidence: 100 },

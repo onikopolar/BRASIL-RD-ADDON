@@ -24,12 +24,12 @@ class CatalogProvider {
         this.tmdbDataCache = new Map();
         this.TMDB_CACHE_TTL = 5 * 60 * 1000;
         this.logger = new logger_1.Logger('CatalogProvider');
-        this.qualityDetector = new qualityDetector_1.QualityDetector();
-        this.streamFormatter = new streamFormatter_1.StreamFormatter();
-        this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
+        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
+        this.streamFormatter = streamFormatter_1.StreamFormatter.getInstance();
+        this.metadataExtractor = MetadataExtractor_1.MetadataExtractor.getInstance();
         this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
-        this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
-        this.titleFilter = new titleFilter_1.TitleFilter();
+        this.imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
+        this.titleFilter = titleFilter_1.TitleFilter.getInstance();
         this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
     }
     async getTmdbSearchData(imdbId, season) {
@@ -68,12 +68,8 @@ class CatalogProvider {
         if (cached !== null)
             return cached;
         let allStreams = [];
-        const dbStreams = await this.getStreamsFromDatabase(request, season, episode);
-        allStreams.push(...dbStreams);
-        if (dbStreams.length === 0) {
-            const jsonStreams = await this.getStreamsFromJson(request, season, episode);
-            allStreams.push(...jsonStreams);
-        }
+        const jsonStreams = await this.getStreamsFromJson(request, season, episode);
+        allStreams.push(...jsonStreams);
         const uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
         uniqueStreams.forEach(s => MetricsService_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
         if (uniqueStreams.length === 0) {
@@ -82,6 +78,7 @@ class CatalogProvider {
                 this.saveToCache(cacheKey, []);
                 return [];
             }
+            this.logger.debug(`🚀 Iniciando scraping para ${request.imdbId || request.id}`);
             const scraped = await this.performIntelligentScraping(request, season, episode);
             const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
             scrapedUnique.forEach(s => MetricsService_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
@@ -322,9 +319,9 @@ class CatalogProvider {
         const seen = new Set();
         const unique = [];
         for (const s of streams) {
-            const hash = s.infoHash || 'unknown';
+            const hash = s.infoHash || s.url || s.title || Math.random().toString();
             const quality = this.extractStreamQuality(s);
-            const key = hash === 'unknown' ? (s.title || Math.random().toString()) : `${hash}|${quality}`;
+            const key = `${hash}|${quality}`;
             if (seen.has(key))
                 continue;
             seen.add(key);

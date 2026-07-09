@@ -5,17 +5,20 @@ import { TorrentResult } from './torrentTypes';
 import { torrentIndexerConfig, scraperProviders } from './scraperProviders';
 import { QualityDetector } from '../../lib/qualityDetector';
 import { ImdbScraperService } from '../ImdbScraperService';
+import { WordPressScraper } from './wordpressScraper';
 
 const logger = new Logger('TorrentScraperService');
 
 export class TorrentScraperService {
     private readonly qualityDetector: QualityDetector;
     private readonly tmdbScraper: ImdbScraperService;
-    private readonly version = '6.1.1'; // Performance e limpeza de logs
+    private readonly wpScraper: WordPressScraper;
+    private readonly version = '6.2.0'; // WP API scraper integrado
 
     constructor(tmdbScraper?: ImdbScraperService) {
-        this.qualityDetector = new QualityDetector();
-        this.tmdbScraper = tmdbScraper || new ImdbScraperService();
+        this.qualityDetector = QualityDetector.getInstance();
+        this.tmdbScraper = tmdbScraper || ImdbScraperService.getInstance();
+        this.wpScraper = new WordPressScraper();
     }
 
     async searchTorrents(
@@ -35,7 +38,7 @@ export class TorrentScraperService {
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
             const allResults: TorrentResult[] = [];
 
-            // Executa TorrentIndexer e WebScrapers em paralelo
+            // Executa TorrentIndexer, WebScrapers e WordPress API em paralelo
             const indexerPromise = torrentIndexerConfig.enabled
                 ? this.searchTorrentIndexerWithQueries(searchQueries, type, targetSeason, targetYear, tmdbData)
                     .catch(() => [])
@@ -44,8 +47,12 @@ export class TorrentScraperService {
             const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
 
-            const [indexerResults, webResults] = await Promise.all([indexerPromise, webScrapersPromise]);
-            allResults.push(...indexerResults, ...webResults);
+            const wpPromise = this.wpScraper.search(query, type).catch(() => []);
+
+            const [indexerResults, webResults, wpResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise
+            ]);
+            allResults.push(...indexerResults, ...webResults, ...wpResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
@@ -401,7 +408,7 @@ export class TorrentScraperService {
     }
 
     private estimateSeeders(provider: string, quality: string): number {
-        const base: Record<string, number> = { 'TorrentIndexer': 70, 'Pop Torrent': 65, 'Starck Filmes': 50, 'default': 35 };
+        const base: Record<string, number> = { 'TorrentIndexer': 70, 'BLUDV Filmes': 80, 'default': 35 };
         const mult: Record<string, number> = { '2160p': 1.5, '1080p': 1.3, '720p': 1.0, 'HD': 1.1, 'desconhecido': 0.8, '480p': 0.6 };
         return Math.round((base[provider] || base['default']) * (mult[quality] || 0.8));
     }
@@ -409,7 +416,7 @@ export class TorrentScraperService {
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: scraperProviders.filter(p => p.priority > 0).length + (torrentIndexerConfig.enabled ? 1 : 0)
+            provedoresAtivos: (torrentIndexerConfig.enabled ? 1 : 0) + 1 // Indexer + WP API
         };
     }
 }

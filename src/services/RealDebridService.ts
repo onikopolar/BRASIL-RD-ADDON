@@ -1,26 +1,32 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import { config } from '../config/index';
 import { Logger } from '../utils/logger';
-import { RDTorrentInfo, RDFile } from '../types/index';
+import { TorboxTorrentInfo, TorboxFile } from '../types/index';
 import { StaticResponseService, StaticResponse } from './StaticResponseService';
 import { StreamStatusException } from './StreamStatusException';
 
-interface RealDebridError {
+interface TorboxError {
   error?: string;
-  error_code?: number;
+  detail?: string;
 }
 
-interface RealDebridTorrentAddResponse {
-  id: string;
-  uri: string;
+interface TorboxCreateTorrentResponse {
+  data?: {
+    torrent_id?: number;
+    id?: number;
+    hash?: string;
+  };
+  torrent_id?: number;
+  id?: number;
+  hash?: string;
 }
 
-interface RealDebridUnrestrictResponse {
-  download: string;
-  stream?: string[];
+interface TorboxListResponse {
+  data?: TorboxTorrentInfo[];
+  success?: boolean;
 }
 
-export class RealDebridService {
+export class TorboxService {
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
@@ -31,7 +37,7 @@ export class RealDebridService {
   private staticResponseService: StaticResponseService;
 
   constructor(baseUrl?: string) {
-    this.logger = new Logger('RealDebridService');
+    this.logger = new Logger('TorboxService');
     this.staticResponseService = new StaticResponseService(baseUrl);
   }
 
@@ -41,108 +47,71 @@ export class RealDebridService {
 
   private createHttpClient(apiKey: string): AxiosInstance {
     if (!apiKey || apiKey.trim().length === 0) {
-      throw new Error('Real-Debrid API Key is required');
-    }
-
-    if (!config.realDebrid.baseUrl) {
-      throw new Error('Real-Debrid base URL is required');
+      throw new Error('Torbox API Key is required');
     }
 
     const client = axios.create({
-      baseURL: config.realDebrid.baseUrl,
-      timeout: config.realDebrid.timeout || 30000,
+      baseURL: config.torbox.baseUrl,
+      timeout: config.torbox.timeout || 30000,
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json'
       }
     });
 
-    // Interceptor de resposta para transformar erros HTTP em StreamStatusException quando aplicável
     client.interceptors.response.use(
       response => response,
       (error: AxiosError) => {
-        const errorData = error.response?.data as RealDebridError;
+        const errorData = error.response?.data as TorboxError;
         const status = error.response?.status;
-        const errorMessage = errorData?.error || error.message;
-        const errorCode = errorData?.error_code;
-
-        // Mapeia erros conhecidos para StreamStatusException (vídeo informativo)
-        if (status === 451 && errorMessage?.includes('infringing_file')) {
-          throw new StreamStatusException(
-            StaticResponse.FAILED_INFRINGEMENT,
-            'error',
-            undefined,
-            'Conteúdo bloqueado por direitos autorais (RD)'
-          );
-        }
+        const errorMessage = errorData?.detail || errorData?.error || error.message;
 
         if (status === 503) {
           throw new StreamStatusException(
-            StaticResponse.FAILED_DOWNLOAD,
-            'error',
-            undefined,
-            'Real-Debrid indisponível no momento'
+            StaticResponse.FAILED_DOWNLOAD, 'error', undefined,
+            'Torbox indisponível no momento'
           );
         }
 
-        if (status === 401) {
-          throw new Error('Real-Debrid authentication failed: Invalid or expired token');
+        if (status === 401 || status === 403) {
+          throw new Error('Torbox authentication failed: Invalid or expired API token');
         }
 
-        if (status === 403) {
-          throw new Error('Real-Debrid permission denied');
-        }
-
-        if (errorCode === 35) {
-          throw new StreamStatusException(
-            StaticResponse.FAILED_INFRINGEMENT,
-            'error',
-            undefined,
-            'Arquivo bloqueado (infringing_file)'
-          );
-        }
-
-        // Erro genérico
-        throw new Error(`Real-Debrid API Error: ${errorMessage}`);
+        throw new Error(`Torbox API Error (${status}): ${errorMessage}`);
       }
     );
 
     return client;
   }
 
+  // ── Public API (mesma interface do RealDebridService) ─────────────────
+
   async addMagnet(magnetLink: string, apiKey: string): Promise<string> {
     this.validateMagnetLink(magnetLink);
     const client = this.createHttpClient(apiKey);
 
     try {
-      const response = await this.retryableRequest<RealDebridTorrentAddResponse>(
-        () => client.post(
-          '/torrents/addMagnet',
-          `magnet=${encodeURIComponent(magnetLink)}`,
-          {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded'
-            }
-          }
-        ),
+      // Torbox espera form-data, não JSON. Usamos URLSearchParams para compatibilidade.
+      const body = new URLSearchParams();
+      body.append('magnet', magnetLink);
+
+      const response = await this.retryableRequest<TorboxCreateTorrentResponse>(
+        () => client.post('/torrents/createtorrent', body.toString(), {
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+        }),
         'addMagnet'
       );
 
-      if (response.status === 201 && response.data.id) {
-        this.logger.info('Magnet adicionado', {
-          torrentId: response.data.id,
-          magnetHash: this.extractMagnetHash(magnetLink)
-        });
-        return response.data.id;
-      } else {
-        throw new Error('Formato de resposta inválido do addMagnet');
+      const torrentId = response.data?.torrent_id || response.data?.id || response.data?.data?.torrent_id || response.data?.data?.id;
+      if (torrentId) {
+        this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: this.extractMagnetHash(magnetLink) });
+        return String(torrentId);
       }
+
+      throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
     } catch (error) {
-      // StreamStatusException já é tratada nas camadas superiores
-      if (error instanceof StreamStatusException) {
-        throw error;
-      }
-      this.logger.error('Falha ao adicionar magnet', {
+      if (error instanceof StreamStatusException) throw error;
+      this.logger.error('Falha ao adicionar magnet ao Torbox', {
         error: error instanceof Error ? error.message : 'Erro',
         magnetHash: this.extractMagnetHash(magnetLink)
       });
@@ -150,16 +119,26 @@ export class RealDebridService {
     }
   }
 
-  async getTorrentInfo(torrentId: string, apiKey: string): Promise<RDTorrentInfo> {
+  async getTorrentInfo(torrentId: string, apiKey: string): Promise<TorboxTorrentInfo> {
     this.validateTorrentId(torrentId);
     const client = this.createHttpClient(apiKey);
 
     try {
-      const response = await this.retryableRequest<RDTorrentInfo>(
-        () => client.get(`/torrents/info/${torrentId}`),
+      const response = await this.retryableRequest<TorboxListResponse>(
+        () => client.get('/torrents/mylist', { params: { id: torrentId } }),
         'getTorrentInfo'
       );
-      return response.data;
+
+      const data = response.data?.data;
+      if (data) {
+        // ?id=ID retorna objeto único; sem parâmetros retorna array
+        if (Array.isArray(data)) {
+          if (data.length === 0) throw new Error('Torrent não encontrado no Torbox');
+          return data[0];
+        }
+        return data as TorboxTorrentInfo;
+      }
+      throw new Error('Torrent não encontrado no Torbox');
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
       this.logger.error('Falha ao obter info do torrent', { torrentId });
@@ -167,65 +146,43 @@ export class RealDebridService {
     }
   }
 
-  async selectFiles(torrentId: string, apiKey: string, fileIds: string = 'all'): Promise<void> {
-    this.validateTorrentId(torrentId);
-    const client = this.createHttpClient(apiKey);
-
-    try {
-      await this.retryableRequest(
-        () => client.post(
-          `/torrents/selectFiles/${torrentId}`,
-          `files=${fileIds}`,
-          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-        ),
-        'selectFiles'
-      );
-    } catch (error) {
-      if (error instanceof StreamStatusException) throw error;
-      this.logger.error('Falha ao selecionar arquivos', { torrentId });
-      throw error;
-    }
+  async selectFiles(_torrentId: string, _apiKey: string, _fileIds: string = 'all'): Promise<void> {
+    // Torbox não requer seleção de arquivos — todos os arquivos já estão disponíveis
+    // Mantido para compatibilidade com a interface existente
   }
 
-  async unrestrictLink(link: string, apiKey: string): Promise<string> {
-    if (!link || link.trim().length === 0) {
-      throw new Error('Link não pode ser vazio');
-    }
+  async unrestrictLink(_link: string, _apiKey: string): Promise<string> {
+    // Torbox não usa unrestrict — usa permalink direto
+    throw new Error('Torbox não suporta unrestrictLink. Use getStreamLinkForFile/getStreamLinkForTorrent.');
+  }
 
-    const client = this.createHttpClient(apiKey);
-
-    try {
-      const response = await this.retryableRequest<RealDebridUnrestrictResponse>(
-        () => client.post(
-          '/unrestrict/link',
-          `link=${encodeURIComponent(link)}`,
-          { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
-        ),
-        'unrestrictLink'
-      );
-
-      if (response.data.download) {
-        return response.data.download;
-      } else {
-        throw new Error('Nenhum link de download retornado');
-      }
-    } catch (error) {
-      if (error instanceof StreamStatusException) throw error;
-      this.logger.error('Falha ao unrestrict link', { link: link.substring(0, 40) });
-      throw error;
-    }
+  /**
+   * Constrói o permalink de download do Torbox.
+   * Não requer chamada à API — a URL redireciona automaticamente para o CDN.
+   */
+  buildStreamPermalink(torrentId: string | number, fileId: number, apiKey: string): string {
+    return `https://api.torbox.app/v1/api/torrents/requestdl?token=${encodeURIComponent(apiKey)}&torrent_id=${torrentId}&file_id=${fileId}&redirect=true`;
   }
 
   async getStreamLinkForFile(torrentId: string, fileId: number, apiKey: string): Promise<string | null> {
     try {
       const info = await this.getTorrentInfo(torrentId, apiKey);
-      if (info.status !== 'downloaded' || !info.links?.length) return null;
 
-      const selected = info.files?.filter(f => f.selected === 1) || [];
-      const idx = selected.findIndex(f => f.id === fileId);
-      if (idx === -1 || idx >= info.links.length) return null;
+      const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
+      if (staticResponse) {
+        throw new StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
+      }
 
-      return await this.unrestrictLink(info.links[idx], apiKey);
+      if (!this.isReadyStatus(info.download_state)) {
+        throw new StreamStatusException(StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
+      }
+
+      const file = (info.files || []).find(f => f.id === fileId);
+      if (!file) {
+        throw new StreamStatusException(StaticResponse.FAILED_UNEXPECTED, info.download_state, undefined, 'Arquivo não encontrado');
+      }
+
+      return this.buildStreamPermalink(torrentId, fileId, apiKey);
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
       this.logger.error('Falha ao obter stream para arquivo', { torrentId, fileId });
@@ -241,34 +198,35 @@ export class RealDebridService {
     try {
       const info = await this.getTorrentInfo(torrentId, apiKey);
 
-      const staticResponse = this.staticResponseService.getResponseForRealDebridStatus(info.status);
+      const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
       if (staticResponse) {
-        throw new StreamStatusException(staticResponse, info.status, info.progress, `Status: ${info.status}`);
+        throw new StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
       }
 
-      if (info.status !== 'downloaded' || !info.links?.length) {
-        throw new StreamStatusException(StaticResponse.DOWNLOADING, info.status, info.progress, 'Aguardando download');
+      if (!this.isReadyStatus(info.download_state)) {
+        throw new StreamStatusException(StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
       }
 
       const files = info.files || [];
-      const selected = files.filter(f => f.selected === 1);
-      let bestIdx = 0;
+      let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
-      for (let i = 0; i < selected.length; i++) {
-        const f = selected[i];
-        if (!this.videoExtensions.some(ext => f.path.toLowerCase().endsWith(ext))) continue;
-        let score = f.bytes;
+      for (const f of files) {
+        if (!this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext))) continue;
+        let score = f.size;
         if (targetSeason !== undefined && targetEpisode !== undefined) {
-          const fs = this.extractSeasonFromFileName(f.path);
-          const fe = this.extractEpisodeFromFileName(f.path);
+          const fs = this.extractSeasonFromFileName(f.name);
+          const fe = this.extractEpisodeFromFileName(f.name);
           if (fs === targetSeason && fe === targetEpisode) score += 10_000_000_000;
         }
-        if (score > bestScore) { bestScore = score; bestIdx = i; }
+        if (score > bestScore) { bestScore = score; bestFile = f; }
       }
 
-      const link = info.links[Math.min(bestIdx, info.links.length - 1)];
-      return await this.unrestrictLink(link, apiKey);
+      if (!bestFile) {
+        throw new StreamStatusException(StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
+      }
+
+      return this.buildStreamPermalink(torrentId, bestFile.id, apiKey);
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
       this.logger.error('Falha ao obter stream', { torrentId });
@@ -283,13 +241,13 @@ export class RealDebridService {
   }> {
     try {
       const info = await this.getTorrentInfo(torrentId, apiKey);
-      const sr = this.staticResponseService.getResponseForRealDebridStatus(info.status);
-      if (sr) return { url: null, status: info.status, staticResponse: sr, progress: info.progress };
-      if (info.status === 'downloaded' && info.links?.length) {
+      const sr = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
+      if (sr) return { url: null, status: info.download_state, staticResponse: sr, progress: Math.round(info.progress * 100) };
+      if (this.isReadyStatus(info.download_state)) {
         const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode);
-        return { url: link, status: 'downloaded', progress: 100 };
+        return { url: link, status: 'cached', progress: 100 };
       }
-      return { url: null, status: info.status, progress: info.progress };
+      return { url: null, status: info.download_state, progress: Math.round(info.progress * 100) };
     } catch (error) {
       if (error instanceof StreamStatusException) {
         return { url: null, status: 'downloading', staticResponse: error.staticResponse, progress: error.progress };
@@ -298,19 +256,22 @@ export class RealDebridService {
     }
   }
 
-  async getTorrentFiles(torrentId: string, apiKey: string): Promise<RDFile[]> {
+  async getTorrentFiles(torrentId: string, apiKey: string): Promise<TorboxFile[]> {
     return (await this.getTorrentInfo(torrentId, apiKey)).files || [];
   }
 
-  async findExistingTorrent(magnetHash: string, apiKey: string): Promise<RDTorrentInfo | null> {
+  async findExistingTorrent(magnetHash: string, apiKey: string): Promise<TorboxTorrentInfo | null> {
     const client = this.createHttpClient(apiKey);
     try {
-      const resp = await this.retryableRequest<RDTorrentInfo[]>(
-        () => client.get('/torrents', { params: { limit: 5000 } }),
+      const response = await this.retryableRequest<TorboxListResponse>(
+        () => client.get('/torrents/mylist'),
         'findExistingTorrent'
       );
-      const t = resp.data.find(torrent => torrent.hash?.toLowerCase() === magnetHash.toLowerCase());
-      if (t) this.logger.info('Torrent existente encontrado', { id: t.id, status: t.status });
+      const list = response.data?.data || [];
+      const t = list.find((torrent: TorboxTorrentInfo) =>
+        torrent.hash?.toLowerCase() === magnetHash.toLowerCase()
+      );
+      if (t) this.logger.info('Torrent existente encontrado no Torbox', { id: t.id, status: t.download_state });
       return t || null;
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
@@ -323,15 +284,28 @@ export class RealDebridService {
     const hash = this.extractMagnetHash(magnetLink);
     try {
       const existing = await this.findExistingTorrent(hash, apiKey);
-      if (existing) return { added: true, ready: existing.status === 'downloaded', status: existing.status, torrentId: existing.id, progress: existing.progress };
+      if (existing) {
+        const ready = this.isReadyStatus(existing.download_state);
+        return { added: true, ready, status: existing.download_state, torrentId: String(existing.id), progress: Math.round(existing.progress * 100) };
+      }
       const id = await this.addMagnet(magnetLink, apiKey);
-      await this.selectFiles(id, apiKey);
+      // Torbox processa automaticamente, não precisa selectFiles
       const info = await this.getTorrentInfo(id, apiKey);
-      return { added: true, ready: info.status === 'downloaded', status: info.status, torrentId: id, progress: info.progress };
+      const ready = this.isReadyStatus(info.download_state);
+      return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
       return { added: false, ready: false, status: 'error' };
     }
+  }
+
+  // ── Helpers ──────────────────────────────────────────────────────────
+
+  /** Status do Torbox que indicam que o torrent está pronto para stream */
+  private isReadyStatus(status: string): boolean {
+    const ready = ['completed', 'cached', 'uploading', 'seeding'];
+    const s = status?.toLowerCase() || '';
+    return ready.includes(s);
   }
 
   private async retryableRequest<T>(

@@ -4,6 +4,12 @@ exports.LanguageDetector = void 0;
 const logger_1 = require("../../utils/logger");
 const TechnicalWords_1 = require("../../lib/title-filter/TechnicalWords");
 class LanguageDetector {
+    static getInstance() {
+        if (!LanguageDetector.instance) {
+            LanguageDetector.instance = new LanguageDetector();
+        }
+        return LanguageDetector.instance;
+    }
     constructor() {
         this.VERSION = '2.3.0';
         this.PORTUGUES_INDICATORS = [
@@ -59,87 +65,45 @@ class LanguageDetector {
             }
         ];
         this.logger = new logger_1.Logger('LanguageDetector');
-        this.logger.info(`LanguageDetector v${this.VERSION} iniciado`);
-        this.logger.debug(`Integrado com TechnicalWords - Detecção aprimorada de releases`);
     }
     isPortugueseContent(torrentTitle) {
         const titleLower = torrentTitle.toLowerCase();
-        this.logger.debug('Analisando idioma do título', {
-            title: torrentTitle.substring(0, 80),
-            versao: this.VERSION
-        });
         const intlCheck = this.checkInternationalRelease(titleLower, torrentTitle);
         if (intlCheck.isInternational) {
-            this.logger.debug('Rejeitado: Release internacional detectado', {
-                titulo: torrentTitle.substring(0, 60),
-                indicadores: intlCheck.indicators,
-                motivo: intlCheck.reason
-            });
             return false;
         }
         const brCheck = this.checkBrazilianRelease(titleLower, torrentTitle);
         if (brCheck.isBrazilian) {
-            this.logger.debug('Aceito: Release brasileiro detectado', {
-                titulo: torrentTitle.substring(0, 60),
-                indicadores: brCheck.indicators,
-                motivo: brCheck.reason
-            });
             return true;
         }
         const hasPortugueseDualAudio = this.hasPortugueseDualAudio(titleLower);
         if (hasPortugueseDualAudio) {
-            this.logger.debug('Aceito: Dual áudio com português', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return true;
         }
         const isEnglishOnly = this.isEnglishOnlyContent(titleLower);
         if (isEnglishOnly) {
-            this.logger.debug('Rejeitado: Conteúdo apenas em inglês', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return false;
         }
         const hasPortugueseIndicators = this.hasPortugueseIndicators(titleLower);
         if (hasPortugueseIndicators) {
-            this.logger.debug('Aceito: Indicadores de português', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return true;
         }
         const hasBRPatterns = this.hasBRPatterns(titleLower);
         if (hasBRPatterns) {
-            this.logger.debug('Aceito: Padrão BR detectado', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return true;
         }
         const hasRelevantKeywords = this.hasRelevantKeywords(titleLower);
         if (hasRelevantKeywords) {
-            this.logger.debug('Aceito: Palavras-chave relevantes', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return true;
         }
         const isShortTitle = this.isShortTitle(torrentTitle);
         if (isShortTitle) {
-            this.logger.debug('Aceito: Título curto - benefício da dúvida', {
-                titulo: torrentTitle.substring(0, 60)
-            });
             return true;
         }
         const isInternationalTechPattern = this.isInternationalTechnicalPattern(titleLower);
         if (isInternationalTechPattern) {
-            this.logger.debug('Rejeitado: Padrão técnico internacional sem indicadores PT', {
-                titulo: torrentTitle.substring(0, 60),
-                motivo: 'Formato típico de release internacional sem áudio PT'
-            });
             return false;
         }
-        this.logger.debug('Rejeitado: Sem indicadores claros de português', {
-            titulo: torrentTitle.substring(0, 60),
-            motivo: 'Nenhum indicador de português encontrado após análise completa'
-        });
         return false;
     }
     checkInternationalRelease(titleLower, originalTitle) {

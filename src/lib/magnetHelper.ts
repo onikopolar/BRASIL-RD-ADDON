@@ -48,11 +48,15 @@ export function generateLazyResolveUrl(
     throw new Error('Could not extract info hash from magnet');
   }
 
-  const domain = process.env.RAILWAY_STATIC_URL || "localhost:7000";
-  const protocol = process.env.RAILWAY_STATIC_URL ? "https" : "http";
   const encodedFilename = encodeURIComponent(filename);
   
-  let url = `${protocol}://${domain}/resolve/realdebrid/${apiKey}/${infoHash}/null/${fileIndex}/${encodedFilename}`;
+  // URL base absoluta para compatibilidade com Stremio Web
+  const baseUrl = process.env.BASE_URL
+    || (process.env.RAILWAY_STATIC_URL
+      ? `https://${process.env.RAILWAY_STATIC_URL}`
+      : `http://localhost:${process.env.PORT || 7000}`);
+  
+  let url = `${baseUrl}/resolve/torbox/${apiKey}/${infoHash}/null/${fileIndex}/${encodedFilename}`;
   
   const params = new URLSearchParams();
   if (type) params.append('type', type);

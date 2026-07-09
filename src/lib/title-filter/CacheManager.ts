@@ -20,6 +20,15 @@ export class CacheManager {
   private readonly IMDB_CACHE_TTL: number;
   private readonly DEDUP_CACHE_TTL: number;
   private readonly TITLE_CACHE_TTL: number;
+
+  private static instance: CacheManager;
+
+  public static getInstance(): CacheManager {
+    if (!CacheManager.instance) {
+      CacheManager.instance = new CacheManager();
+    }
+    return CacheManager.instance;
+  }
   
   constructor(
     imdbCacheTTL: number = 30 * 60 * 1000,    // 30 minutos
@@ -30,7 +39,7 @@ export class CacheManager {
     this.IMDB_CACHE_TTL = imdbCacheTTL;
     this.DEDUP_CACHE_TTL = dedupCacheTTL;
     this.TITLE_CACHE_TTL = titleCacheTTL;
-    this.logger.info('✅ CacheManager inicializado - 100% compatível com original');
+    this.logger.debug('CacheManager ready');
   }
 
   /**

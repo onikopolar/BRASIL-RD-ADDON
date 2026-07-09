@@ -5,18 +5,25 @@ const logger_1 = require("../utils/logger");
 const ImdbScraperService_1 = require("../services/ImdbScraperService");
 const title_filter_1 = require("./title-filter");
 class TitleFilter {
+    static getInstance() {
+        if (!TitleFilter.instance) {
+            TitleFilter.instance = new TitleFilter();
+        }
+        return TitleFilter.instance;
+    }
     constructor() {
         this.IMDB_CACHE_TTL = 30 * 60 * 1000;
         this.DEDUP_CACHE_TTL = 10 * 60 * 1000;
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
         this.VERSION = '2.6.1';
+        this.cleanupCounter = 0;
         this.logger = new logger_1.Logger('TitleFilter');
-        this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
-        this.titleCleaner = new title_filter_1.TitleCleaner();
-        this.languageDetector = new title_filter_1.LanguageDetector();
-        this.similarityCalculator = new title_filter_1.SimilarityCalculator(undefined, true);
-        this.metadataExtractor = new title_filter_1.MetadataExtractor();
-        this.cacheManager = new title_filter_1.CacheManager();
+        this.imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
+        this.titleCleaner = title_filter_1.TitleCleaner.getInstance();
+        this.languageDetector = title_filter_1.LanguageDetector.getInstance();
+        this.similarityCalculator = title_filter_1.SimilarityCalculator.getInstance();
+        this.metadataExtractor = title_filter_1.MetadataExtractor.getInstance();
+        this.cacheManager = title_filter_1.CacheManager.getInstance();
     }
     cleanupOldCaches() {
         this.cacheManager.cleanupOldCaches(this.IMDB_CACHE_TTL, this.DEDUP_CACHE_TTL, this.TITLE_CACHE_TTL);
@@ -44,7 +51,7 @@ class TitleFilter {
         const infoHash = this.extractInfoHash(torrent.magnet || torrent);
         const title = torrent.title || torrent;
         const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
-        if (Math.random() < 0.01)
+        if (++this.cleanupCounter % 100 === 0)
             this.cleanupOldCaches();
         if (this.cacheManager.isAlreadyProcessed(dedupeKey))
             return true;

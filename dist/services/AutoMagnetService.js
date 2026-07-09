@@ -8,10 +8,10 @@ const logger_1 = require("../utils/logger");
 const titleFilter_1 = require("../lib/titleFilter");
 const qualityDetector_1 = require("../lib/qualityDetector");
 const logger = new logger_1.Logger('AutoMagnetService');
-const rdService = new RealDebridService_1.RealDebridService();
-const imdbScraper = new ImdbScraperService_1.ImdbScraperService();
-const titleFilter = new titleFilter_1.TitleFilter();
-const qualityDetector = new qualityDetector_1.QualityDetector();
+const torboxService = new RealDebridService_1.TorboxService();
+const imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
+const titleFilter = titleFilter_1.TitleFilter.getInstance();
+const qualityDetector = qualityDetector_1.QualityDetector.getInstance();
 class AutoMagnetService {
     constructor() {
         this.validationCache = new Map();
@@ -544,19 +544,19 @@ class AutoMagnetService {
         const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
         return match ? match[1].toLowerCase() : null;
     }
-    async processRealDebridOnClick(magnetData, apiKey) {
+    async processTorboxOnClick(magnetData, apiKey) {
         try {
-            logger.info('Processando Real-Debrid', {
+            logger.info('Processando Torbox', {
                 title: magnetData.title.substring(0, 60),
                 imdbId: magnetData.imdbId
             });
             const existingTorrent = await this.checkExistingTorrent(magnetData.magnet, apiKey);
             if (existingTorrent.found && existingTorrent.downloaded) {
-                logger.info('Torrent já baixado no Real-Debrid', {
+                logger.info('Torrent já baixado no Torbox', {
                     title: magnetData.title.substring(0, 60),
                     torrentId: existingTorrent.torrentId
                 });
-                const streamLink = await rdService.getStreamLinkForTorrent(existingTorrent.torrentId, apiKey, magnetData.imdbSeason, magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined);
+                const streamLink = await torboxService.getStreamLinkForTorrent(existingTorrent.torrentId, apiKey, magnetData.imdbSeason, magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined);
                 return {
                     success: true,
                     streamLink: streamLink || undefined,
@@ -574,25 +574,24 @@ class AutoMagnetService {
                     message: `Download: ${existingTorrent.status}`
                 };
             }
-            logger.info('Adicionando magnet ao Real-Debrid', {
+            logger.info('Adicionando magnet ao Torbox', {
                 title: magnetData.title.substring(0, 60)
             });
-            const torrentId = await rdService.addMagnet(magnetData.magnet, apiKey);
-            await rdService.selectFiles(torrentId, apiKey, 'all');
-            const torrentInfo = await rdService.getTorrentInfo(torrentId, apiKey);
+            const torrentId = await torboxService.addMagnet(magnetData.magnet, apiKey);
+            const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
             let streamLink = null;
-            if (torrentInfo.status === 'downloaded') {
-                streamLink = await rdService.getStreamLinkForTorrent(torrentId, apiKey, magnetData.imdbSeason, magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined);
+            if (torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached') {
+                streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, magnetData.imdbSeason, magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined);
             }
             return {
                 success: true,
-                status: torrentInfo.status,
+                status: torrentInfo.download_state,
                 streamLink: streamLink || undefined,
-                message: `Torrent adicionado: ${torrentInfo.status}`
+                message: `Torrent adicionado: ${torrentInfo.download_state}`
             };
         }
         catch (error) {
-            logger.error('Erro ao processar Real-Debrid', {
+            logger.error('Erro ao processar Torbox', {
                 title: magnetData.title.substring(0, 60),
                 error: error instanceof Error ? error.message : 'Erro'
             });
@@ -609,13 +608,13 @@ class AutoMagnetService {
             if (!magnetHash) {
                 return { found: false, downloaded: false };
             }
-            const existingTorrent = await rdService.findExistingTorrent(magnetHash, apiKey);
+            const existingTorrent = await torboxService.findExistingTorrent(magnetHash, apiKey);
             if (existingTorrent) {
                 return {
                     found: true,
-                    torrentId: existingTorrent.id,
-                    status: existingTorrent.status,
-                    downloaded: existingTorrent.status === 'downloaded'
+                    torrentId: String(existingTorrent.id),
+                    status: existingTorrent.download_state,
+                    downloaded: existingTorrent.download_state === 'completed' || existingTorrent.download_state === 'cached'
                 };
             }
             return { found: false, downloaded: false };

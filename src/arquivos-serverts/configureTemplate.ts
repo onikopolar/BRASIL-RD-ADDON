@@ -2,16 +2,10 @@ import { Logger } from '../utils/logger';
 
 const logger = new Logger('ConfigureTemplate');
 
-// Version: 2.2.0 - Fix para usar sistema igual Torrentio (realdebrid=API_KEY na URL)
 export const configureTemplate = (manifest: any) => {
     const background = manifest.background || 'https://dl.strem.io/addon-background.jpg';
     const logo = manifest.logo || 'https://dl.strem.io/addon-logo.png';
     
-    logger.debug('Gerando template Torrentio-style', {
-        version: '2.2.0',
-        feature: 'realdebrid=API_KEY na URL como Torrentio'
-    });
-
     return `<!DOCTYPE html>
     <html style="background-image: url(${background});">
     <head>
@@ -30,7 +24,7 @@ export const configureTemplate = (manifest: any) => {
             }
             body { display: flex; font-family: 'Open Sans', Arial, sans-serif; color: white; }
             h1 { font-size: 4.5vh; font-weight: 700; margin: 0; }
-            h2 { font-size: 2.2vh; font-weight: normal; font-style: italic; opacity: 0.8; margin: 0; }
+            h2 { font-size: 2.2vh; font-weight: normal; font-style: italic; opacity: 0.8; margin:0; }
             h3 { font-size: 2.2vh; margin: 0; }
             p { font-size: 1.75vh; margin: 0; text-shadow: 0 0 1vh rgba(0, 0, 0, 0.15); }
             ul { font-size: 1.75vh; margin: 0; margin-top: 1vh; padding-left: 3vh; }
@@ -103,8 +97,8 @@ export const configureTemplate = (manifest: any) => {
             <form class="pure-form" id="mainForm">
                 <div class="form-element">
                     <div class="label-to-top">
-                        Chave de API do Real-Debrid 
-                        <a href="https://real-debrid.com/apitoken" target="_blank" class="api-link">
+                        Chave de API do Torbox 
+                        <a href="https://torbox.app/" target="_blank" class="api-link">
                             (Obtenha sua API aqui)
                         </a>
                     </div>
@@ -114,7 +108,7 @@ export const configureTemplate = (manifest: any) => {
                            name="${manifest.config[0].key}" 
                            class="full-width" 
                            required 
-                           placeholder="${manifest.config[0].placeholder}"
+                           placeholder="Cole sua chave de API do Torbox"
                            autocomplete="off" />
                     
                     <div class="info-text">
@@ -139,46 +133,39 @@ export const configureTemplate = (manifest: any) => {
         </div>
         
         <script>
-            // Sistema igual Torrentio: realdebrid=API_KEY na URL
             console.log('[Brasil RD] Configuração v2.2.0 - Sistema Torrentio-style');
             
             const apiKeyInput = document.getElementById('${manifest.config[0].key}');
             const installLink = document.getElementById('installLink');
             const mainForm = document.getElementById('mainForm');
             
-            // Função para gerar link igual Torrentio
             function updateLink() {
                 const apiKey = apiKeyInput.value.trim();
                 
                 if (apiKey) {
-                    // Sistema Torrentio: realdebrid=API_KEY na URL
-                    installLink.href = 'stremio://' + window.location.host + '/realdebrid=' + encodeURIComponent(apiKey) + '/manifest.json';
-                    
-                    console.log('[Brasil RD] Link gerado:', installLink.href.substring(0, 100) + '...');
+                    // Usa hostname (ex: localhost ou 127.0.0.1) para gerar o link stremio://
+                    installLink.href = 'stremio://' + window.location.hostname + ':' + window.location.port + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
+                    console.log('[Brasil RD] Link gerado:', installLink.href);
                 } else {
                     installLink.href = '#';
                 }
             }
             
-            // Event Listeners
             mainForm.onchange = updateLink;
             mainForm.onsubmit = (e) => e.preventDefault();
             
             installLink.onclick = () => {
                 if (!mainForm.reportValidity()) {
-                    alert('Por favor, insira sua API Key do Real-Debrid.');
+                    alert('Por favor, insira sua API Key do Torbox.');
                     return false;
                 }
                 return true;
             };
             
-            // Inicialização
             updateLink();
-            console.log('[Brasil RD] Configuração inicializada - Sistema Torrentio-style pronto');
         </script>
     </body>
     </html>`;
 };
 
-// Log de inicialização
-logger.info('ConfigureTemplate v2.2.0 carregado - Sistema Torrentio-style (realdebrid=API_KEY)');
+logger.info('ConfigureTemplate v2.3.0 carregado - Sistema Torrentio-style (torbox=API_KEY)');

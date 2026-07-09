@@ -43,12 +43,14 @@ const cheerio = __importStar(require("cheerio"));
 const scraperProviders_1 = require("./scraperProviders");
 const qualityDetector_1 = require("../../lib/qualityDetector");
 const ImdbScraperService_1 = require("../ImdbScraperService");
+const wordpressScraper_1 = require("./wordpressScraper");
 const logger = new logger_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
-        this.version = '6.1.1';
-        this.qualityDetector = new qualityDetector_1.QualityDetector();
-        this.tmdbScraper = tmdbScraper || new ImdbScraperService_1.ImdbScraperService();
+        this.version = '6.2.0';
+        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
+        this.tmdbScraper = tmdbScraper || ImdbScraperService_1.ImdbScraperService.getInstance();
+        this.wpScraper = new wordpressScraper_1.WordPressScraper();
     }
     async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
         const startTime = Date.now();
@@ -65,8 +67,11 @@ class TorrentScraperService {
                 : Promise.resolve([]);
             const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
-            const [indexerResults, webResults] = await Promise.all([indexerPromise, webScrapersPromise]);
-            allResults.push(...indexerResults, ...webResults);
+            const wpPromise = this.wpScraper.search(query, type).catch(() => []);
+            const [indexerResults, webResults, wpResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise
+            ]);
+            allResults.push(...indexerResults, ...webResults, ...wpResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
@@ -420,14 +425,14 @@ class TorrentScraperService {
         return 1.5 * 1024 ** 3;
     }
     estimateSeeders(provider, quality) {
-        const base = { 'TorrentIndexer': 70, 'Pop Torrent': 65, 'Starck Filmes': 50, 'default': 35 };
+        const base = { 'TorrentIndexer': 70, 'BLUDV Filmes': 80, 'default': 35 };
         const mult = { '2160p': 1.5, '1080p': 1.3, '720p': 1.0, 'HD': 1.1, 'desconhecido': 0.8, '480p': 0.6 };
         return Math.round((base[provider] || base['default']) * (mult[quality] || 0.8));
     }
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: scraperProviders_1.scraperProviders.filter(p => p.priority > 0).length + (scraperProviders_1.torrentIndexerConfig.enabled ? 1 : 0)
+            provedoresAtivos: (scraperProviders_1.torrentIndexerConfig.enabled ? 1 : 0) + 1
         };
     }
 }

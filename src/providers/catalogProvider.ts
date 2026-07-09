@@ -54,12 +54,12 @@ export class CatalogProvider {
 
   constructor(private readonly magnetService: CuratedMagnetService) {
     this.logger = new Logger('CatalogProvider');
-    this.qualityDetector = new QualityDetector();
-    this.streamFormatter = new StreamFormatter();
-    this.metadataExtractor = new MetadataExtractor();
+    this.qualityDetector = QualityDetector.getInstance();
+    this.streamFormatter = StreamFormatter.getInstance();
+    this.metadataExtractor = MetadataExtractor.getInstance();
     this.torrentScraper = new TorrentScraperService();
-    this.imdbScraper = new ImdbScraperService();
-    this.titleFilter = new TitleFilter();
+    this.imdbScraper = ImdbScraperService.getInstance();
+    this.titleFilter = TitleFilter.getInstance();
     this.autoMagnetService = new AutoMagnetService();
   }
 
@@ -104,13 +104,9 @@ export class CatalogProvider {
 
     let allStreams: Stream[] = [];
 
-    const dbStreams = await this.getStreamsFromDatabase(request, season, episode);
-    allStreams.push(...dbStreams);
-
-    if (dbStreams.length === 0) {
-      const jsonStreams = await this.getStreamsFromJson(request, season, episode);
-      allStreams.push(...jsonStreams);
-    }
+    // DB query já foi feita pelo StreamHandler - vai direto pro JSON
+    const jsonStreams = await this.getStreamsFromJson(request, season, episode);
+    allStreams.push(...jsonStreams);
 
     const uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
     uniqueStreams.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
@@ -122,6 +118,7 @@ export class CatalogProvider {
         return [];
       }
 
+      this.logger.debug(`🚀 Iniciando scraping para ${request.imdbId || request.id}`);
       const scraped = await this.performIntelligentScraping(request, season, episode);
       const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
       scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
@@ -407,9 +404,10 @@ export class CatalogProvider {
     const seen = new Set<string>();
     const unique: Stream[] = [];
     for (const s of streams) {
-      const hash = s.infoHash || 'unknown';
+      // Usa infoHash, url, ou title como chave de dedup
+      const hash = s.infoHash || s.url || s.title || Math.random().toString();
       const quality = this.extractStreamQuality(s);
-      const key = hash === 'unknown' ? (s.title || Math.random().toString()) : `${hash}|${quality}`;
+      const key = `${hash}|${quality}`;
       if (seen.has(key)) continue;
       seen.add(key);
       unique.push(s);

@@ -15,12 +15,6 @@ class AdvancedCacheService {
             max: options.maxSize || 1000,
         };
         this.cache = new cacheable_1.Cacheable(cacheableOptions);
-        this.logger.info('AdvancedCacheService v1.0.0 inicializado', {
-            namespace,
-            maxAge: `${cacheableOptions.ttl}ms`,
-            staleWhileRevalidate: `${cacheableOptions.staleWhileRevalidate}ms`,
-            maxSize: cacheableOptions.max
-        });
     }
     async get(key) {
         const fullKey = `${this.namespace}:${key}`;

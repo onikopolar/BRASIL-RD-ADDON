@@ -8,7 +8,8 @@
     "build": "node build.js",
     "start": "node railway-start.js",
     "start:stremio": "node dist/server.js",
-    "dev": "npm start:stremio",
+    "dev": "node scripts/dev.js",
+    "dev:tunnel": "node scripts/dev-tunnel.js",
     "dev:stremio": "ts-node src/server.ts",
     "test": "jest",
     "clean": "rm -rf dist",
@@ -23,7 +24,6 @@
     "axios": "^1.6.0",
     "cacheable": "^2.3.0",
     "cheerio": "^1.1.2",
-    "concurrently": "^7.6.0",
     "cors": "^2.8.5",
     "dotenv": "^16.3.0",
     "express": "^5.1.0",
@@ -46,6 +46,7 @@
     "swagger-stats": "^0.99.7",
     "ts-node": "^10.9.0",
     "tsconfig-paths": "^4.2.0",
+    "tunnel": "^0.0.6",
     "typescript": "^5.0.0",
     "ua-parser-js": "^2.0.6"
   },
@@ -59,6 +60,8 @@
     "@types/puppeteer": "^5.4.6",
     "@types/request-ip": "^0.0.41",
     "@types/stremio-addon-sdk": "^1.6.12",
+    "@types/tunnel": "^0.0.7",
+    "concurrently": "^10.0.3",
     "jest": "^29.0.0"
   },
   "keywords": [

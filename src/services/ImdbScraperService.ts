@@ -27,6 +27,15 @@ export class ImdbScraperService {
   
   private readonly cacheTTL = 5 * 60 * 1000;
 
+  private static instance: ImdbScraperService;
+
+  public static getInstance(): ImdbScraperService {
+    if (!ImdbScraperService.instance) {
+      ImdbScraperService.instance = new ImdbScraperService();
+    }
+    return ImdbScraperService.instance;
+  }
+
   constructor() {
     this.tmdbApiKey = process.env.TMDB_API_KEY || '4bfe2bbccad24f1bb07507953a137ebd';
     
@@ -34,9 +43,7 @@ export class ImdbScraperService {
       logger.error('TMDB API KEY não configurada!');
     }
     
-    logger.info('TMDB Scraper v2.0.0 inicializado', {
-      feature: 'Português primeiro + cache otimizado'
-    });
+    logger.debug('TMDB Scraper ready');
   }
 
   async getTitlesFromImdbId(imdbId: string, season?: number): Promise<ImdbTitles> {

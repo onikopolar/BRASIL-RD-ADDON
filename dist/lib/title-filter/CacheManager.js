@@ -3,6 +3,12 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheManager = void 0;
 const logger_1 = require("../../utils/logger");
 class CacheManager {
+    static getInstance() {
+        if (!CacheManager.instance) {
+            CacheManager.instance = new CacheManager();
+        }
+        return CacheManager.instance;
+    }
     constructor(imdbCacheTTL = 30 * 60 * 1000, dedupCacheTTL = 10 * 60 * 1000, titleCacheTTL = 5 * 60 * 1000) {
         this.imdbTitleCache = new Map();
         this.deduplicationCache = new Map();
@@ -13,7 +19,7 @@ class CacheManager {
         this.IMDB_CACHE_TTL = imdbCacheTTL;
         this.DEDUP_CACHE_TTL = dedupCacheTTL;
         this.TITLE_CACHE_TTL = titleCacheTTL;
-        this.logger.info('✅ CacheManager inicializado - 100% compatível com original');
+        this.logger.debug('CacheManager ready');
     }
     cleanupOldCaches(imdbCacheTTL, dedupCacheTTL, titleCacheTTL) {
         const now = Date.now();

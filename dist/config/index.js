@@ -2,9 +2,9 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.config = void 0;
 exports.config = {
-    realDebrid: {
-        apiKey: process.env.REAL_DEBRID_API_KEY || '',
-        baseUrl: 'https://api.real-debrid.com/rest/1.0',
+    torbox: {
+        apiKey: process.env.TORBOX_API_KEY || '',
+        baseUrl: 'https://api.torbox.app/v1/api',
         timeout: 10000
     },
     stremio: {

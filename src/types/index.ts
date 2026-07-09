@@ -53,25 +53,31 @@ export interface CuratedMagnet {
   episode?: number;
 }
 
-export interface RDFile {
+export interface TorboxFile {
   id: number;
-  path: string;
-  bytes: number;
-  selected: number;
+  name: string;
+  size: number;
+  short_name?: string;
+  mimetype?: string;
+}
+
+export interface TorboxTorrentInfo {
+  id: number;
+  name: string;
+  hash: string;
+  download_state: string;
+  progress: number;        // 0-1 (Torbox usa fração, não %)
+  files: TorboxFile[];
+  size?: number;
+  download_speed?: number;
+  upload_speed?: number;
+  created_at?: string;
+  download_present?: boolean;
+  active?: boolean;
 }
 
 export interface CacheData<T = any> {
   value: T;
   timestamp: number;
   ttl: number;
-}
-
-export interface RDTorrentInfo {
-  id: string;
-  filename: string;
-  status: string;
-  progress: number;
-  files: RDFile[];
-  links?: string[];
-  hash?: string;
 }

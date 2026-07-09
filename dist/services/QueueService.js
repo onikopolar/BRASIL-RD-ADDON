@@ -13,9 +13,7 @@ class QueueService {
         this.queues = new Map();
         this.namedQueues = new Map();
         this.defaultConcurrent = config?.defaultConcurrent || 5;
-        this.logger.info('QueueService inicializado', {
-            defaultConcurrent: this.defaultConcurrent
-        });
+        this.logger.debug('QueueService ready');
     }
     getQueue(name, maxConcurrent) {
         if (!this.queues.has(name)) {

@@ -19,7 +19,7 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
             features: {
                 cache: true,
                 lazyStreams: true,
-                realDebrid: true,
+                torbox: true,
                 optimizations: true,
                 webAuth: true
             }
@@ -49,9 +49,16 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
 
     // Rota de autenticação para Stremio Web
     app.post('/api/auth', async (req: any, res: any) => {
-        logger.debug('Autenticação Web solicitada', { 
+        const authLogger = new Logger('🔐AUTH');
+        authLogger.info('═══════════════════════════════════════', {});
+        authLogger.info('🔐 SOLICITAÇÃO DE AUTENTICAÇÃO WEB', {
+            requestId: req._ultraDebugId,
             ip: req.ip,
-            hasBody: !!req.body 
+            hasBody: !!req.body,
+            bodyKeys: req.body ? Object.keys(req.body) : [],
+            contentType: req.get('content-type'),
+            origin: req.get('origin'),
+            userAgent: req.get('user-agent')?.substring(0, 100),
         });
         
         try {
@@ -59,9 +66,12 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
             
             // Validação básica
             if (!apiKey || typeof apiKey !== 'string') {
-                logger.warn('Autenticação Web falhou - API Key inválida', {
+                authLogger.warn('❌ AUTENTICAÇÃO REJEITADA - API Key inválida', {
+                    requestId: req._ultraDebugId,
                     ip: req.ip,
-                    apiKeyType: typeof apiKey
+                    apiKeyPresent: !!apiKey,
+                    apiKeyType: typeof apiKey,
+                    reason: !apiKey ? 'API Key ausente no body' : `Tipo inválido: ${typeof apiKey}`,
                 });
                 
                 return res.status(400).json({
@@ -69,26 +79,52 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
                     error: 'API Key é obrigatória e deve ser uma string'
                 });
             }
-            
-            // Valida API Key com Real-Debrid
-            logger.debug('Validando API Key com Real-Debrid', {
-                ip: req.ip,
-                apiKeyPreview: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)
+
+            authLogger.info('🔑 API Key recebida para validação', {
+                requestId: req._ultraDebugId,
+                apiKeyLength: apiKey.length,
+                apiKeyPreview: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4),
             });
             
-            const rdResponse = await fetch('https://api.real-debrid.com/rest/1.0/user', {
+            // Valida API Key com Torbox
+            authLogger.debug('🌐 Enviando validação para api.torbox.app...', {
+                requestId: req._ultraDebugId,
+                endpoint: 'https://api.torbox.app/v1/api/user/me',
+            });
+            
+            const tbResponse = await fetch('https://api.torbox.app/v1/api/user/me', {
                 headers: { 'Authorization': `Bearer ${apiKey}` }
             });
             
-            if (!rdResponse.ok) {
-                logger.warn('Autenticação Web falhou - API Key rejeitada pelo Real-Debrid', {
+            authLogger.info('📥 Resposta do Torbox recebida', {
+                requestId: req._ultraDebugId,
+                status: tbResponse.status,
+                ok: tbResponse.ok,
+                statusText: tbResponse.statusText,
+            });
+
+            if (!tbResponse.ok) {
+                let torboxErrorBody = '';
+                try {
+                    torboxErrorBody = await tbResponse.text();
+                    torboxErrorBody = torboxErrorBody.substring(0, 200);
+                } catch {}
+
+                authLogger.warn('❌ AUTENTICAÇÃO REJEITADA PELO TORBOX', {
+                    requestId: req._ultraDebugId,
                     ip: req.ip,
-                    status: rdResponse.status
+                    torboxStatus: tbResponse.status,
+                    torboxStatusText: tbResponse.statusText,
+                    torboxErrorBody,
+                    reason: tbResponse.status === 401 ? 'API Key inválida/expirada' :
+                             tbResponse.status === 403 ? 'Acesso proibido (API Key bloqueada?)' :
+                             tbResponse.status === 429 ? 'Rate limit excedido no Torbox' :
+                             `Status HTTP ${tbResponse.status}`,
                 });
                 
                 return res.status(401).json({
                     success: false,
-                    error: 'API Key inválida ou expirada. Verifique no Real-Debrid.'
+                    error: 'API Key inválida ou expirada. Verifique no Torbox.'
                 });
             }
             
@@ -96,10 +132,12 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
             const timestamp = Date.now();
             const token = Buffer.from(`${timestamp}:${apiKey.substring(0, 10)}:${req.ip}`).toString('base64');
             
-            logger.info('Autenticação Web bem-sucedida', {
+            authLogger.info('✅ AUTENTICAÇÃO WEB BEM-SUCEDIDA!', {
+                requestId: req._ultraDebugId,
                 ip: req.ip,
                 tokenPreview: token.substring(0, 20) + '...',
-                apiKeyPreview: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)
+                apiKeyPreview: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4),
+                tokenLength: token.length,
             });
             
             // Resposta de sucesso
@@ -114,10 +152,12 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
         } catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
             
-            logger.error('Erro na autenticação Web', {
+            authLogger.error('💥 ERRO FATAL na autenticação Web', {
+                requestId: req._ultraDebugId,
                 ip: req.ip,
                 error: errorMsg,
-                stack: error instanceof Error ? error.stack : undefined
+                stack: error instanceof Error ? error.stack?.substring(0, 500) : undefined,
+                cause: error instanceof Error ? (error as any).cause : undefined,
             });
             
             res.status(500).json({

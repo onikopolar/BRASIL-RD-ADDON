@@ -24,15 +24,25 @@ export class TitleFilter {
   private readonly DEDUP_CACHE_TTL = 10 * 60 * 1000;
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
   private readonly VERSION = '2.6.1'; // Melhoria na detecção de packs
+  private cleanupCounter = 0;
+
+  private static instance: TitleFilter;
+
+  public static getInstance(): TitleFilter {
+    if (!TitleFilter.instance) {
+      TitleFilter.instance = new TitleFilter();
+    }
+    return TitleFilter.instance;
+  }
 
   constructor() {
     this.logger = new Logger('TitleFilter');
-    this.imdbScraper = new ImdbScraperService();
-    this.titleCleaner = new TitleCleaner();
-    this.languageDetector = new LanguageDetector();
-    this.similarityCalculator = new SimilarityCalculator(undefined, true);
-    this.metadataExtractor = new MetadataExtractor();
-    this.cacheManager = new CacheManager();
+    this.imdbScraper = ImdbScraperService.getInstance();
+    this.titleCleaner = TitleCleaner.getInstance();
+    this.languageDetector = LanguageDetector.getInstance();
+    this.similarityCalculator = SimilarityCalculator.getInstance();
+    this.metadataExtractor = MetadataExtractor.getInstance();
+    this.cacheManager = CacheManager.getInstance();
   }
 
   private cleanupOldCaches(): void {
@@ -62,7 +72,7 @@ export class TitleFilter {
     const infoHash = this.extractInfoHash(torrent.magnet || torrent);
     const title = torrent.title || torrent;
     const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
-    if (Math.random() < 0.01) this.cleanupOldCaches();
+    if (++this.cleanupCounter % 100 === 0) this.cleanupOldCaches();
     if (this.cacheManager.isAlreadyProcessed(dedupeKey)) return true;
     this.cacheManager.markAsProcessed(dedupeKey);
     return false;

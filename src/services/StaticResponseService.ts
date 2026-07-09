@@ -64,13 +64,14 @@ export class StaticResponseService {
     };
 
     const videoFileName = videoFileMap[response];
-    const videoUrl = videoFileName ? `${this.baseUrl}/videos/${videoFileName}` : `${this.baseUrl}/videos/downloading_v2.mp4`;
+    // URL relativa: funciona tanto local quanto via funnel público
+    const videoUrl = videoFileName ? `/videos/${videoFileName}` : `/videos/downloading_v2.mp4`;
 
     const responses: Record<StaticResponse, StaticResponseInfo> = {
       [StaticResponse.DOWNLOADING]: {
         name: 'Baixando',
         title: 'Brasil RD - Baixando',
-        description: 'Torrent sendo baixado pelo Real-Debrid\nAguarde 1-10 minutos',
+        description: 'Torrent sendo baixado pelo Torbox\nAguarde 1-10 minutos',
         url: videoUrl,
         videoUrl: videoUrl
       },
@@ -84,7 +85,7 @@ export class StaticResponseService {
       [StaticResponse.FAILED_ACCESS]: {
         name: 'Chave API invalida',
         title: 'Brasil RD - API invalida',
-        description: 'Chave do Real-Debrid invalida\nObtenha nova chave em real-debrid.com/apitoken',
+        description: 'Chave do Torbox invalida\nObtenha nova chave em torbox.app',
         url: videoUrl,
         videoUrl: videoUrl
       },
@@ -98,7 +99,7 @@ export class StaticResponseService {
       [StaticResponse.FAILED_TOO_BIG]: {
         name: 'Muito grande',
         title: 'Brasil RD - Grande demais',
-        description: 'Torrent excede limite do Real-Debrid\nTente versao menor',
+        description: 'Torrent excede limite do Torbox\nTente versao menor',
         url: videoUrl,
         videoUrl: videoUrl
       },
@@ -126,14 +127,14 @@ export class StaticResponseService {
       [StaticResponse.LIMITS_EXCEEDED]: {
         name: 'Limites excedidos',
         title: 'Brasil RD - Limites',
-        description: 'Limites do Real-Debrid excedidos\nAguarde ou faca upgrade',
+        description: 'Limites do Torbox excedidos\nAguarde ou faca upgrade',
         url: videoUrl,
         videoUrl: videoUrl
       },
       [StaticResponse.BLOCKED_ACCESS]: {
         name: 'Acesso bloqueado',
         title: 'Brasil RD - Acesso bloqueado',
-        description: 'Acesso ao Real-Debrid bloqueado\nVerifique sua conta',
+        description: 'Acesso ao Torbox bloqueado\nVerifique sua conta',
         url: videoUrl,
         videoUrl: videoUrl
       }
@@ -163,7 +164,7 @@ export class StaticResponseService {
   ): any {
     const info = this.getResponseInfo(response);
     let description = info.description;
-    if (rdStatus) description += `\nStatus Real-Debrid: ${rdStatus}`;
+    if (rdStatus) description += `\nStatus Torbox: ${rdStatus}`;
     if (progress !== undefined) description += `\nProgresso: ${progress}%`;
     if (requestId) description += `\nID: ${requestId}`;
 
@@ -178,42 +179,32 @@ export class StaticResponseService {
     };
   }
 
-  getResponseForRealDebridStatus(rdStatus: string, errorCode?: number): StaticResponse | null {
-    if (errorCode !== undefined) {
-      const errorMap: Record<number, StaticResponse> = {
-        8: StaticResponse.FAILED_ACCESS,
-        9: StaticResponse.FAILED_ACCESS,
-        20: StaticResponse.FAILED_ACCESS,
-        21: StaticResponse.LIMITS_EXCEEDED,
-        23: StaticResponse.LIMITS_EXCEEDED,
-        26: StaticResponse.LIMITS_EXCEEDED,
-        29: StaticResponse.FAILED_TOO_BIG,
-        35: StaticResponse.FAILED_INFRINGEMENT,
-        36: StaticResponse.LIMITS_EXCEEDED
-      };
-
-      if (errorMap[errorCode]) return errorMap[errorCode];
-    }
-
+  getResponseForTorboxStatus(torboxStatus: string): StaticResponse | null {
+    // Torbox usa status do qBittorrent
     const statusMap: Record<string, StaticResponse> = {
       'downloading': StaticResponse.DOWNLOADING,
-      'uploading': StaticResponse.DOWNLOADING,
+      'metaDL': StaticResponse.DOWNLOADING,
+      'stalled': StaticResponse.DOWNLOADING,
+      'checkingResumeData': StaticResponse.DOWNLOADING,
+      'paused': StaticResponse.DOWNLOADING,
       'queued': StaticResponse.DOWNLOADING,
-      'magnet_conversion': StaticResponse.DOWNLOADING,
-      'waiting_files_selection': StaticResponse.DOWNLOADING,
       'error': StaticResponse.FAILED_DOWNLOAD,
-      'magnet_error': StaticResponse.FAILED_OPENING,
-      'dead': StaticResponse.FAILED_DOWNLOAD
+      'missingFiles': StaticResponse.FAILED_DOWNLOAD,
+      'unknown': StaticResponse.FAILED_DOWNLOAD,
     };
 
-    return statusMap[rdStatus] || null;
+    const lower = torboxStatus?.toLowerCase() || '';
+    for (const [key, value] of Object.entries(statusMap)) {
+      if (lower.includes(key)) return value;
+    }
+    return null;
   }
 
   isInformativeStream(stream: any): boolean {
     if (!stream?.url) return false;
     const url = stream.url.toLowerCase();
     return (
-      url.includes(`${this.baseUrl}/videos/`) ||
+      url.includes('/videos/') ||
       url.includes('downloading_v2.mp4') ||
       url.includes('download_failed_v2.mp4') ||
       url.includes('failed_access_v2.mp4')

@@ -1,27 +1,10 @@
 import { ScraperProvider } from './torrentTypes';
 
+// Apenas scrapers ativos e verificados
+// WordPress API scraper (BLUDV) está em wordpressScraper.ts
 export const scraperProviders: ScraperProvider[] = [
-    {
-        name: 'Pop Torrent',
-        baseUrl: 'https://poptorrent.org',
-        searchPath: '/?s=',
-        itemSelector: 'article, .post, .item, [class*="post-"]',
-        titleSelector: 'h2 a, h3 a, .title a, .entry-title a',
-        linkSelector: 'a',
-        priority: 2,
-        timeout: 10000
-    },
-    {
-        name: 'Starck Filmes',
-        baseUrl: 'https://starckfilmes-v8.com',
-        searchPath: '/?s=',
-        itemSelector: '.movies, .slide-item, .post-catalog, .item',
-        titleSelector: 'h3.sl-title', // CORRIGIDO: Título está no h3, não no link
-        linkSelector: 'a', // Link está em um elemento 'a' separado
-        priority: 1,
-        timeout: 15000,
-        needsIndividualPageScrape: true
-    }
+    // Scrapers HTML diretos desativados - domínios offline
+    // Mantidos como referência para futuros sites
 ];
 
 export const torrentIndexerConfig = {

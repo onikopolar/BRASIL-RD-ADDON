@@ -1,3 +1,7 @@
+// Força DNS público para bypass de bloqueios de operadora
+import dns from 'dns';
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
@@ -14,7 +18,7 @@ import { Logger } from './utils/logger';
 import { clientInfoMiddleware } from './middlewares/clientInfo';
 import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit';
 import { metricsService } from './services/MetricsService';
-import { StreamHandler } from './services/StreamHandler';
+import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug';
 
 const logger = new Logger('Main');
 const cacheService = new CacheService();
@@ -22,6 +26,7 @@ const app = express();
 
 app.set('trust proxy', 1);
 
+// CORS
 app.use(cors({
     origin: '*',
     methods: ['GET', 'POST', 'OPTIONS'],
@@ -30,10 +35,12 @@ app.use(cors({
 }));
 
 app.use(express.json());
+app.use(ultraDebugMiddleware());
 app.use(clientInfoMiddleware());
 app.use(metricsService.httpMetricsMiddleware());
 app.use(createRateLimiter());
 
+// Interceptor Torrentio
 app.use((req: any, res: any, next: any) => {
     if (req.path.includes('/realdebrid=')) {
         req._torrentioHandled = true;
@@ -56,12 +63,15 @@ async function initializeDatabase() {
         logger.error('Falha no banco de dados', {
             error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
-        if (process.env.NODE_ENV !== 'production') {
+        if (process.env.NODE_ENV === 'production') {
+            logger.warn('Continuando sem banco de dados em produção');
+        } else {
             throw error;
         }
     }
 }
 
+// Cache middleware
 const cacheMaxAge = 600;
 app.use((req: any, res: any, next: any) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
@@ -77,32 +87,94 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-app.get('/configure', (req: any, res: any) => {
+// Configure
+app.get('/configure', configureDebugMiddleware(), (req: any, res: any) => {
+    const ultraLogger = new Logger('⚙️CONFIGURE');
+    ultraLogger.info('🔧 Servindo página de configuração HTML', {
+        requestId: req._ultraDebugId,
+        manifestVersion: manifest.version,
+        manifestId: manifest.id,
+        host: req.get('host'),
+        protocol: req.protocol,
+    });
     res.setHeader('content-type', 'text/html');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.end(configureTemplate(manifest));
 });
 
-app.get('/realdebrid=:apiKey/manifest.json', torrentioRateLimiter, (req: any, res: any) => {
+// ROTA TORRENTIO 1: /torbox=APIKEY/manifest.json
+app.get('/torbox=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMiddleware(), (req: any, res: any) => {
+    const ultraLogger = new Logger('📋TORBOX-MANIFEST');
+    const apiKey = req.params.apiKey;
+    ultraLogger.info('🔑 MANIFEST via TORBOX solicitado', {
+        requestId: req._ultraDebugId,
+        apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
+        apiKeyLength: apiKey?.length || 0,
+        manifestId: manifest.id,
+        manifestVersion: manifest.version,
+        host: req.get('host'),
+        origin: req.get('origin'),
+        userAgent: req.get('user-agent')?.substring(0, 80),
+    });
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
     res.json(manifest);
 });
 
-app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (req: any, res: any) => {
+// Compatibilidade: /realdebrid=APIKEY/manifest.json
+app.get('/realdebrid=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMiddleware(), (req: any, res: any) => {
+    const ultraLogger = new Logger('📋RD-MANIFEST');
+    const apiKey = req.params.apiKey;
+    ultraLogger.info('🔑 MANIFEST via REALDEBRID solicitado', {
+        requestId: req._ultraDebugId,
+        apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
+        apiKeyLength: apiKey?.length || 0,
+        host: req.get('host'),
+        origin: req.get('origin'),
+    });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
+    res.json(manifest);
+});
+
+// ROTA TORRENTIO 2: /torbox=APIKEY/stream/:type/:id.json
+app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (req: any, res: any) => {
+    const ultraLogger = new Logger('🎬STREAM-TORBOX');
+    const { apiKey, type, id } = req.params;
+    const decodedId = decodeURIComponent(id);
+    const requestId = req._ultraDebugId || 'no-id';
+
+    ultraLogger.info('═══════════════════════════════════════', {});
+    ultraLogger.info('🎬 STREAM SOLICITADO (Torbox route)', {
+        requestId,
+        type,
+        id: decodedId,
+        apiKeyPresent: !!apiKey,
+        apiKeyLength: apiKey?.length || 0,
+        apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
+        host: req.get('host'),
+        origin: req.get('origin'),
+        userAgent: req.get('user-agent')?.substring(0, 100),
+        clientInfo: (req as any)._clientInfo,
+    });
+
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Type, Content-Length');
 
-    const { apiKey, type, id } = req.params;
-    const decodedId = decodeURIComponent(id);
-
     try {
         if (!apiKey || apiKey.length < 10) {
+            ultraLogger.warn('⚠️ API Key inválida ou ausente para stream', {
+                requestId,
+                apiKeyLength: apiKey?.length || 0,
+                reason: !apiKey ? 'API Key ausente' : 'API Key muito curta (< 10 chars)',
+            });
             return res.json({ streams: [] });
         }
 
+        const { StreamHandler } = await import('./services/StreamHandler');
         const streamHandler = StreamHandler.getInstance();
+
         const streamRequest = {
             type: type as 'movie' | 'series',
             id: decodedId,
@@ -116,6 +188,16 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
         };
 
         const result = await streamHandler.handleStreamRequest(streamRequest);
+
+        ultraLogger.info('✅ STREAM RESULT retornado', {
+            requestId,
+            totalStreams: result.streams?.length || 0,
+            streamPreviews: result.streams?.slice(0, 5).map((s: any) => ({
+                title: s.title?.substring(0, 60),
+                quality: s.behaviorHints?.streamQuality || 'unknown',
+                hasUrl: !!s.url,
+            })),
+        });
 
         result.streams.forEach((stream: any) => {
             let quality = 'unknown';
@@ -132,13 +214,19 @@ app.get('/realdebrid=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async
 
         return res.json(result);
     } catch (error) {
-        logger.error('Erro na rota Torrentio Stream', {
-            error: error instanceof Error ? error.message : 'Erro desconhecido'
+        const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
+        ultraLogger.error('❌ ERRO FATAL na rota Torrentio Stream', {
+            requestId,
+            error: errorMsg,
+            stack: error instanceof Error ? error.stack?.substring(0, 500) : undefined,
+            type,
+            id: decodedId,
         });
         return res.json({ streams: [] });
     }
 });
 
+// Pula Stremio Router se rota já tratada
 app.use((req: any, res: any, next: any) => {
     if (req._torrentioHandled) {
         return next('route');
@@ -146,13 +234,33 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
+// ═══════════════════════════════════════════
+// LOGGER para rotas do Stremio SDK
+// ═══════════════════════════════════════════
+app.use((req: any, res: any, next: any) => {
+    const sdkLogger = new Logger('SDK-Router');
+    // Só loga rotas que o SDK vai processar (manifest, stream, configure)
+    const sdkPaths = ['/manifest.json', '/stream/', '/configure'];
+    const isSdkPath = sdkPaths.some(p => req.path === p || req.path.startsWith(p));
+    if (isSdkPath) {
+        sdkLogger.info('🔌 Rota caiu no Stremio SDK Router', {
+            requestId: req._ultraDebugId,
+            method: req.method,
+            path: req.path,
+            originalUrl: req.originalUrl?.substring(0, 200),
+            query: req.query,
+            params: req.params,
+        });
+    }
+    next();
+});
+
 async function startServer() {
     try {
-        await initializeDatabase();
+        const startupLogger = new Logger('Startup');
+        startupLogger.info(`BRASIL RD Addon starting on port ${process.env.PORT || 7000}`);
 
-        // Inicializa o StreamHandler como singleton e carrega dependencias
-        const streamHandler = StreamHandler.getInstance();
-        await streamHandler.initialize();
+        await initializeDatabase();
 
         setupBasicRoutes(app, manifest);
         setupResolveRoutes(app);
@@ -160,6 +268,38 @@ async function startServer() {
 
         const builder = createStremioBuilder(manifest);
         const stremioRouter = getStremioRouter(builder);
+
+        // ═══════════════════════════════════════════
+        // INTERCEPTOR para /manifest.json do SDK
+        // ═══════════════════════════════════════════
+        app.use((req: any, res: any, next: any) => {
+            if (req.path === '/manifest.json' || req.path === '/manifest') {
+                const manifestLogger = new Logger('📋MANIFEST-SDK');
+                manifestLogger.info('═══════════════════════════════════════', {});
+                manifestLogger.info('📋 STREMIO PEDIU MANIFEST (via SDK router)', {
+                    requestId: req._ultraDebugId,
+                    method: req.method,
+                    host: req.get('host'),
+                    origin: req.get('origin'),
+                    userAgent: req.get('user-agent')?.substring(0, 100),
+                    stremioAddonCollection: req.get('stremio-addon-collection'),
+                    protocol: req.protocol,
+                    fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
+                });
+                manifestLogger.info('📋 Respondendo com manifest:', {
+                    id: manifest.id,
+                    version: manifest.version,
+                    name: manifest.name,
+                    configurationRequired: manifest.behaviorHints?.configurationRequired,
+                    configurable: manifest.behaviorHints?.configurable,
+                    resources: manifest.resources,
+                    types: manifest.types,
+                });
+                manifestLogger.info('═══════════════════════════════════════', {});
+            }
+            next();
+        });
+
         app.use(stremioRouter);
 
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;

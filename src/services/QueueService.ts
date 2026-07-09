@@ -20,9 +20,7 @@ export class QueueService {
     this.namedQueues = new Map();
     this.defaultConcurrent = config?.defaultConcurrent || 5;
     
-    this.logger.info('QueueService inicializado', {
-      defaultConcurrent: this.defaultConcurrent
-    });
+    this.logger.debug('QueueService ready');
   }
 
   // Fila genérica com p-limit

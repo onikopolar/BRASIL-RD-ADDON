@@ -12,7 +12,7 @@ class RdTorrentCacheService {
         this.STREAM_LINK_TTL = 24 * 60 * 60 * 1000;
         this.processingLocks = new Map();
         this.logger = new logger_1.Logger('RdTorrentCacheService');
-        this.logger.info('RdTorrentCacheService v1.1.0 inicializado - Cache avançado integrado');
+        this.logger.debug('RdTorrentCacheService ready');
     }
     getTorrentCacheKey(magnetHash, apiKey) {
         const apiKeyPrefix = apiKey.substring(0, 8);
@@ -29,7 +29,7 @@ class RdTorrentCacheService {
     isCacheExpired(cachedAt, ttl) {
         return Date.now() - cachedAt > ttl;
     }
-    async getTorrentId(magnetHash, apiKey, rdService) {
+    async getTorrentId(magnetHash, apiKey, torboxService) {
         const cacheKey = this.getTorrentCacheKey(magnetHash, apiKey);
         const lockKey = this.getLockKey(magnetHash, apiKey);
         const existingLock = this.processingLocks.get(lockKey);
@@ -70,11 +70,12 @@ class RdTorrentCacheService {
                     };
                 }
                 this.logger.debug('Cache de torrent MISS', { magnetHash });
-                const existingTorrent = await rdService.findExistingTorrent(magnetHash, apiKey);
+                const existingTorrent = await torboxService.findExistingTorrent(magnetHash, apiKey);
                 if (existingTorrent && existingTorrent.id) {
+                    const tid = String(existingTorrent.id);
                     const cachedTorrent = {
-                        torrentId: existingTorrent.id,
-                        status: existingTorrent.status,
+                        torrentId: tid,
+                        status: existingTorrent.download_state,
                         cachedAt: Date.now(),
                         apiKeyPrefix: apiKey.substring(0, 8)
                     };
@@ -86,12 +87,12 @@ class RdTorrentCacheService {
                     MetricsService_1.metricsService.setCacheSize(this.torrentCache.size);
                     this.logger.info('Torrent salvo no cache avançado', {
                         magnetHash,
-                        torrentId: existingTorrent.id,
-                        status: existingTorrent.status
+                        torrentId: tid,
+                        status: existingTorrent.download_state
                     });
                     return {
-                        torrentId: existingTorrent.id,
-                        status: existingTorrent.status,
+                        torrentId: tid,
+                        status: existingTorrent.download_state,
                         fromCache: false
                     };
                 }
@@ -110,7 +111,7 @@ class RdTorrentCacheService {
         this.logger.debug('Novo lock criado', { magnetHash, lockKey });
         return processPromise;
     }
-    async getStreamLink(torrentId, apiKey, season, episode, rdService) {
+    async getStreamLink(torrentId, apiKey, season, episode, torboxService) {
         const cacheKey = this.getStreamLinkCacheKey(torrentId, season, episode);
         const advancedCacheKey = `stream:${torrentId}:${season || 'all'}:${episode || 'all'}`;
         const cachedFromAdvanced = await AdvancedCacheService_1.streamCacheService.get(advancedCacheKey);
@@ -143,10 +144,10 @@ class RdTorrentCacheService {
             };
         }
         this.logger.debug('Cache de stream link MISS', { torrentId, season, episode });
-        if (!rdService) {
+        if (!torboxService) {
             return { streamLink: null, fromCache: false };
         }
-        const streamLink = await rdService.getStreamLinkForTorrent(torrentId, apiKey, season, episode);
+        const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode);
         if (streamLink) {
             const cachedStream = {
                 streamLink,

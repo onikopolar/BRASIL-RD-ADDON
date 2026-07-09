@@ -11,7 +11,7 @@ export const manifest = {
     
     // Informações básicas
     name: 'Brasil RD',
-    description: 'Addon brasileiro com suporte completo ao Real-Debrid',
+    description: 'Addon brasileiro com suporte ao Torbox',
     
     // Imagens (placeholders do Stremio)
     logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
@@ -38,14 +38,14 @@ export const manifest = {
         p2p: false                    // Não usa P2P
     },
     
-    // Configuração opcional (API Key do Real-Debrid)
+    // Configuração opcional (API Key do Torbox)
     config: [
         {
             key: 'apiKey',
             type: 'text',
-            title: 'Chave de API do Real-Debrid',
+            title: 'Chave de API do Torbox',
             required: true,           // Requerido para funcionalidade completa
-            placeholder: 'Cole sua chave de API aqui'
+            placeholder: 'Cole sua chave de API do Torbox aqui'
         }
     ]
 };

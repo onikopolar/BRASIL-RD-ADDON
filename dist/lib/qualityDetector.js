@@ -36,6 +36,12 @@ class QualityDetector {
         this.allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
         this.qualityOrder = ['2160p', '1080p', '720p', 'HD'];
     }
+    static getInstance() {
+        if (!QualityDetector.instance) {
+            QualityDetector.instance = new QualityDetector();
+        }
+        return QualityDetector.instance;
+    }
     extractAllQualities(title) {
         const cleanTitle = title.toLowerCase();
         const foundQualities = new Set();

@@ -5,15 +5,18 @@ const logger_1 = require("../../utils/logger");
 const ImdbScraperService_1 = require("../../services/ImdbScraperService");
 const TechnicalWords_1 = require("./TechnicalWords");
 class SimilarityCalculator {
-    constructor(titleCleaner, useTmdbScraper = true) {
+    static getInstance() {
+        if (!SimilarityCalculator.instance) {
+            SimilarityCalculator.instance = new SimilarityCalculator(undefined, true);
+        }
+        return SimilarityCalculator.instance;
+    }
+    constructor(_titleCleaner, useTmdbScraper = true) {
         this.tmdbCache = new Map();
         this.cacheTTL = 5 * 60 * 1000;
         this.VERSAO = '23.6.1';
-        this.TECHNICAL_WORDS = TechnicalWords_1.TECHNICAL_WORDS;
-        this.TECHNICAL_ACRONYMS = TechnicalWords_1.TECHNICAL_ACRONYMS;
         this.logger = new logger_1.Logger('SimilarityCalculator');
-        this.titleCleaner = titleCleaner;
-        this.tmdbScraper = useTmdbScraper ? new ImdbScraperService_1.ImdbScraperService() : null;
+        this.tmdbScraper = useTmdbScraper ? ImdbScraperService_1.ImdbScraperService.getInstance() : null;
         this.confusingSeries = [
             { original: 'american horror story', derivative: 'american horror stories', minSimilarity: 0.85 },
             { original: 'stranger things', derivative: 'stranger things stories', minSimilarity: 0.85 }
@@ -112,7 +115,7 @@ class SimilarityCalculator {
         const tmdbWords = tmdbClean.split(' ').filter(w => w.length > 0);
         const torrentWords = torrentClean.split(' ').filter(w => w.length > 0);
         if (mediaType === 'movie') {
-            const seqCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection);
+            const seqCheck = this.checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection, originalTorrentTitle);
             if (!seqCheck.compatible)
                 return { similarity: seqCheck.similarity, confidence: 'baixa', reason: seqCheck.reason, contextAnalysis: 'sequência_incompatível' };
         }
@@ -122,10 +125,14 @@ class SimilarityCalculator {
             return this.analyzeDoubleWordTitle(tmdbClean, torrentClean, mediaType, belongsToCollection, targetSeason, originalTorrentTitle);
         return this.normalContextAnalysis(torrentClean, tmdbClean, mediaType, targetSeason, originalTorrentTitle);
     }
-    checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection) {
+    checkSequenceCompatibility(torrentClean, tmdbClean, belongsToCollection, originalTorrentTitle) {
         const torrentSeq = this.extractSequenceNumber(torrentClean);
         const tmdbSeq = this.extractSequenceNumber(tmdbClean);
         if (!torrentSeq && tmdbSeq) {
+            const originalLower = (originalTorrentTitle || torrentClean).toLowerCase();
+            if (originalLower.includes(tmdbSeq) || originalLower.includes(' ' + tmdbSeq)) {
+                return { compatible: true, similarity: 0.75, reason: `Número ${tmdbSeq} encontrado no título original` };
+            }
             if (belongsToCollection && (tmdbSeq === '1' || tmdbSeq === 'i'))
                 return { compatible: true, similarity: 0.8, reason: `TMDB é primeira sequência em coleção` };
             return { compatible: false, similarity: 0.15, reason: `TMDB tem sequência ${tmdbSeq} mas torrent não` };
@@ -146,35 +153,26 @@ class SimilarityCalculator {
         const words = title.split(' ').filter(w => w.length > 0);
         if (!words.length)
             return null;
+        const isValidSeq = (n) => n >= 1 && n <= 20;
         const seqMatch = title.match(/seq(\d+)/i);
-        if (seqMatch) {
-            const n = parseInt(seqMatch[1]);
-            if (n >= 1 && n <= 20)
-                return seqMatch[1];
-        }
+        if (seqMatch && isValidSeq(parseInt(seqMatch[1])))
+            return seqMatch[1];
         const lastWord = words[words.length - 1].toLowerCase();
-        if (/^\d+$/.test(lastWord)) {
-            const n = parseInt(lastWord);
-            if (n >= 1 && n <= 20)
-                return lastWord;
-        }
-        const romanMap = { i: '1', ii: '2', iii: '3', iv: '4', v: '5', vi: '6', vii: '7', viii: '8', ix: '9', x: '10', xi: '11', xii: '12', xiii: '13', xiv: '14', xv: '15', xvi: '16', xvii: '17', xviii: '18', xix: '19', xx: '20' };
-        if (romanMap[lastWord])
-            return romanMap[lastWord];
+        if (/^\d+$/.test(lastWord) && isValidSeq(parseInt(lastWord)))
+            return lastWord;
+        if (SimilarityCalculator.ROMAN_MAP[lastWord])
+            return SimilarityCalculator.ROMAN_MAP[lastWord];
         for (const w of words) {
-            if (romanMap[w.toLowerCase()])
-                return romanMap[w.toLowerCase()];
-            if (/^\d+$/.test(w) && parseInt(w) <= 20)
+            const lower = w.toLowerCase();
+            if (SimilarityCalculator.ROMAN_MAP[lower])
+                return SimilarityCalculator.ROMAN_MAP[lower];
+            if (/^\d+$/.test(w) && isValidSeq(parseInt(w)))
                 return w;
         }
-        const patterns = [/part[ée]?\s*(\d+)/i, /pt\.?\s*(\d+)/i, /volume\s*(\d+)/i, /vol\.?\s*(\d+)/i, /filme\s*(\d+)/i, /movie\s*(\d+)/i, /edição\s*(\d+)/i, /edition\s*(\d+)/i, /seq(\d+)/i];
-        for (const p of patterns) {
+        for (const p of SimilarityCalculator.SEQ_PATTERNS) {
             const m = title.match(p);
-            if (m && m[1]) {
-                const n = parseInt(m[1]);
-                if (n >= 1 && n <= 20)
-                    return m[1];
-            }
+            if (m && m[1] && isValidSeq(parseInt(m[1])))
+                return m[1];
         }
         return null;
     }
@@ -352,7 +350,7 @@ class SimilarityCalculator {
             .replace(/[^\w\s]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-        const preservedSequences = new Map();
+        let seqSuffix = '';
         if (mediaType === 'movie') {
             const match = clean.match(/^(.+?)\s+(\d+|i{1,3}|iv|v|vi{0,3}|ix|x)$/i);
             if (match) {
@@ -360,25 +358,19 @@ class SimilarityCalculator {
                 const romanMap = { i: '1', ii: '2', iii: '3', iv: '4', v: '5', vi: '6', vii: '7', viii: '8', ix: '9', x: '10' };
                 const arabic = romanMap[seq] || seq;
                 if (/^\d+$/.test(arabic) && parseInt(arabic) <= 20) {
-                    const placeholder = `_SEQ${arabic}_`;
-                    preservedSequences.set(placeholder, ` ${arabic}`);
-                    clean = match[1] + placeholder;
+                    seqSuffix = ` ${arabic}`;
+                    clean = match[1];
                 }
             }
         }
         clean = clean.replace(/[\/\.\-_:]/g, ' ');
-        this.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term))
+        TechnicalWords_1.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term))
             clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
-        this.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
+        TechnicalWords_1.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
         clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
-        preservedSequences.forEach((value, placeholder) => {
-            const tempMarker = `_TEMP_${placeholder}_`;
-            clean = clean.replace(placeholder, tempMarker);
-            clean = clean.replace(tempMarker, value);
-        });
         clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
         clean = clean.replace(/\s+/g, ' ').trim();
-        return clean;
+        return clean + seqSuffix;
     }
     extractYearFromTitle(title) {
         const m = title.match(/\b(19|20)\d{2}\b/);
@@ -418,13 +410,8 @@ class SimilarityCalculator {
         const clean = this.normalizeForComparison(baseTitle).trim() || baseTitle;
         return type === 'series' && season !== undefined ? `${clean} s${season.toString().padStart(2, '0')} dual OR dublado` : `${clean} dual OR dublado`;
     }
-    suggestSimpleSearchQuery(baseTitle, type, season) {
-        const clean = this.normalizeForComparison(baseTitle).trim() || baseTitle;
-        return type === 'series' && season !== undefined ? `${clean} s${season.toString().padStart(2, '0')} dual OR dublado` : `${clean} dual OR dublado`;
-    }
     getLanguageSearchTerms() {
-        return ['dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'português', 'português', 'brazilian', 'multi']
-            .filter(t => this.TECHNICAL_WORDS.includes(t));
+        return ['dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'português', 'brazilian', 'multi'];
     }
     getStats() {
         return {
@@ -436,3 +423,11 @@ class SimilarityCalculator {
     }
 }
 exports.SimilarityCalculator = SimilarityCalculator;
+SimilarityCalculator.ROMAN_MAP = {
+    i: '1', ii: '2', iii: '3', iv: '4', v: '5', vi: '6', vii: '7', viii: '8', ix: '9', x: '10',
+    xi: '11', xii: '12', xiii: '13', xiv: '14', xv: '15', xvi: '16', xvii: '17', xviii: '18', xix: '19', xx: '20'
+};
+SimilarityCalculator.SEQ_PATTERNS = [
+    /part[ée]?\s*(\d+)/i, /pt\.?\s*(\d+)/i, /volume\s*(\d+)/i, /vol\.?\s*(\d+)/i,
+    /filme\s*(\d+)/i, /movie\s*(\d+)/i, /edição\s*(\d+)/i, /edition\s*(\d+)/i, /seq(\d+)/i
+];

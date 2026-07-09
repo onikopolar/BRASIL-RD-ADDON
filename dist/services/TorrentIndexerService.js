@@ -17,13 +17,7 @@ class TorrentIndexerService {
         ];
         this.currentMirrorIndex = 0;
         this.logger = new logger_1.Logger('TorrentIndexer');
-        this.logger.info('Serviço Torrent Indexer inicializado', {
-            mirrors: this.mirrors.length,
-            supportedSites: [
-                'bludv', 'comando_torrents', 'torrent-dos-filmes',
-                'starck-filmes', 'rede_torrent', 'filme_torrent', 'vaca_torrent'
-            ]
-        });
+        this.logger.debug('TorrentIndexer ready');
     }
     async searchTorrents(query, indexer = 'search', category, season, limit = 20) {
         const startTime = Date.now();

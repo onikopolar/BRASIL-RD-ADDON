@@ -1,5 +1,5 @@
 export interface AppConfig {
-  realDebrid: {
+  torbox: {
     apiKey: string;
     baseUrl: string;
     timeout: number;
@@ -15,9 +15,9 @@ export interface AppConfig {
 }
 
 export const config: AppConfig = {
-  realDebrid: {
-    apiKey: process.env.REAL_DEBRID_API_KEY || '',
-    baseUrl: 'https://api.real-debrid.com/rest/1.0',
+  torbox: {
+    apiKey: process.env.TORBOX_API_KEY || '',
+    baseUrl: 'https://api.torbox.app/v1/api',
     timeout: 10000
   },
   stremio: {

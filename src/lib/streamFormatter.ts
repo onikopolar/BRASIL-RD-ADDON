@@ -10,12 +10,21 @@ export class StreamFormatter {
   private readonly qualityDetector: QualityDetector;
   private readonly metadataExtractor: MetadataExtractor;
 
+  private static instance: StreamFormatter;
+
+  public static getInstance(): StreamFormatter {
+    if (!StreamFormatter.instance) {
+      StreamFormatter.instance = new StreamFormatter();
+    }
+    return StreamFormatter.instance;
+  }
+
   constructor() {
     this.logger = new Logger('StreamFormatter');
-    this.qualityDetector = new QualityDetector();
-    this.metadataExtractor = new MetadataExtractor();
+    this.qualityDetector = QualityDetector.getInstance();
+    this.metadataExtractor = MetadataExtractor.getInstance();
     // Versionamento Semântico v2.0.0 - MAJOR: Formato de título corrigido igual Torrentio
-    this.logger.info('StreamFormatter v2.0.0 inicializado - Título usa formato Torrentio com emojis originais');
+    this.logger.debug('StreamFormatter ready');
   }
 
   // Formato corrigido: Primeira linha = título completo do torrent (igual Torrentio RD)
@@ -201,7 +210,7 @@ export class StreamFormatter {
       seeds,
       tamanho,
       idiomaDaDescricao,
-      'RealDebrid', // Tracker fixo para stream direto
+      'Torbox', // Tracker fixo para stream direto
       metadata,
       true // isDirect
     );
@@ -305,16 +314,16 @@ export class StreamFormatter {
       });
     }
 
-    // Stream no formato Stremio
+    // Stream lazy resolve — infoHash só se NÃO tiver URL (evita P2P no Stremio Web)
     const stream: Stream = {
       title: tituloFinal,
-      infoHash: magnetHash || undefined,
       fileIdx: fileIdx !== undefined ? fileIdx : 0
     };
 
-    // Adiciona URL se foi gerada com sucesso
     if (resolveUrl) {
       stream.url = resolveUrl;
+    } else {
+      stream.infoHash = magnetHash || undefined;
     }
 
     // Adiciona behaviorHints se fornecido

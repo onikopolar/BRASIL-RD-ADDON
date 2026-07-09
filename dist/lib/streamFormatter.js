@@ -6,11 +6,17 @@ const qualityDetector_1 = require("../lib/qualityDetector");
 const logger_1 = require("../utils/logger");
 const MetadataExtractor_1 = require("../lib/title-filter/MetadataExtractor");
 class StreamFormatter {
+    static getInstance() {
+        if (!StreamFormatter.instance) {
+            StreamFormatter.instance = new StreamFormatter();
+        }
+        return StreamFormatter.instance;
+    }
     constructor() {
         this.logger = new logger_1.Logger('StreamFormatter');
-        this.qualityDetector = new qualityDetector_1.QualityDetector();
-        this.metadataExtractor = new MetadataExtractor_1.MetadataExtractor();
-        this.logger.info('StreamFormatter v2.0.0 inicializado - Título usa formato Torrentio com emojis originais');
+        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
+        this.metadataExtractor = MetadataExtractor_1.MetadataExtractor.getInstance();
+        this.logger.debug('StreamFormatter ready');
     }
     formatTitleCorreto(torrentTitle, seeds, size, language, tracker, metadata, isDirect = false) {
         let result = torrentTitle.trim();
@@ -132,7 +138,7 @@ class StreamFormatter {
         const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
         const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
         const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
-        const tituloFinal = this.formatTitleCorreto(torrentTitle, seeds, tamanho, idiomaDaDescricao, 'RealDebrid', metadata, true);
+        const tituloFinal = this.formatTitleCorreto(torrentTitle, seeds, tamanho, idiomaDaDescricao, 'Torbox', metadata, true);
         const stream = {
             title: tituloFinal,
             infoHash: (0, magnetHelper_1.extractHashFromMagnet)(linkDireto) || undefined,
@@ -190,11 +196,13 @@ class StreamFormatter {
         }
         const stream = {
             title: tituloFinal,
-            infoHash: magnetHash || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0
         };
         if (resolveUrl) {
             stream.url = resolveUrl;
+        }
+        else {
+            stream.infoHash = magnetHash || undefined;
         }
         if (behaviorHints) {
             stream.behaviorHints = {

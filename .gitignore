@@ -1,0 +1,7 @@
+node_modules/
+dist/
+.env
+.cloudflared/
+*.log
+.DS_Store
+Thumbs.db

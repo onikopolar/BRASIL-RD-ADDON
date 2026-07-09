@@ -8,6 +8,12 @@ const logger_1 = require("../utils/logger");
 const axios_1 = __importDefault(require("axios"));
 const logger = new logger_1.Logger('TMDBScraper');
 class ImdbScraperService {
+    static getInstance() {
+        if (!ImdbScraperService.instance) {
+            ImdbScraperService.instance = new ImdbScraperService();
+        }
+        return ImdbScraperService.instance;
+    }
     constructor() {
         this.tmdbBaseUrl = 'https://api.themoviedb.org/3';
         this.language = 'pt-BR';
@@ -16,9 +22,7 @@ class ImdbScraperService {
         if (!this.tmdbApiKey) {
             logger.error('TMDB API KEY não configurada!');
         }
-        logger.info('TMDB Scraper v2.0.0 inicializado', {
-            feature: 'Português primeiro + cache otimizado'
-        });
+        logger.debug('TMDB Scraper ready');
     }
     async getTitlesFromImdbId(imdbId, season) {
         try {

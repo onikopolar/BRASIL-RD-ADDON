@@ -105,7 +105,7 @@ class MetricsService {
             this.register.registerMetric(this.clientsByOS);
             this.register.registerMetric(this.clientsByDevice);
             this.isInitialized = true;
-            this.logger.info('MetricsService v1.0.0 inicializado - Sistema de métricas ativado');
+            this.logger.debug('MetricsService ready');
         }
         catch (error) {
             this.logger.error('Erro ao inicializar métricas', {

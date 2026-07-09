@@ -5,7 +5,7 @@ exports.manifest = {
     id: 'org.brasilrd.addon',
     version: '1.0.1',
     name: 'Brasil RD',
-    description: 'Addon brasileiro com suporte completo ao Real-Debrid',
+    description: 'Addon brasileiro com suporte ao Torbox',
     logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
     background: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/background-1920x1080.jpg',
     contactEmail: '',
@@ -23,9 +23,9 @@ exports.manifest = {
         {
             key: 'apiKey',
             type: 'text',
-            title: 'Chave de API do Real-Debrid',
+            title: 'Chave de API do Torbox',
             required: true,
-            placeholder: 'Cole sua chave de API aqui'
+            placeholder: 'Cole sua chave de API do Torbox aqui'
         }
     ]
 };

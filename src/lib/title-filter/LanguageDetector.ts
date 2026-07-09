@@ -14,6 +14,15 @@ export class LanguageDetector {
   
   // Versionamento Semântico - MINOR: integração com TechnicalWords e melhor detecção
   private readonly VERSION = '2.3.0';
+
+  private static instance: LanguageDetector;
+
+  public static getInstance(): LanguageDetector {
+    if (!LanguageDetector.instance) {
+      LanguageDetector.instance = new LanguageDetector();
+    }
+    return LanguageDetector.instance;
+  }
   
   // Indicadores de português
   private readonly PORTUGUES_INDICATORS = [
@@ -81,110 +90,67 @@ export class LanguageDetector {
 
   constructor() {
     this.logger = new Logger('LanguageDetector');
-    this.logger.info(`LanguageDetector v${this.VERSION} iniciado`);
-    this.logger.debug(`Integrado com TechnicalWords - Detecção aprimorada de releases`);
   }
 
   // Método principal: detecta se conteúdo está em português
   isPortugueseContent(torrentTitle: string): boolean {
     const titleLower = torrentTitle.toLowerCase();
-    
-    this.logger.debug('Analisando idioma do título', {
-      title: torrentTitle.substring(0, 80),
-      versao: this.VERSION
-    });
 
     // 1. Verificação avançada de grupos internacionais
     const intlCheck = this.checkInternationalRelease(titleLower, torrentTitle);
     if (intlCheck.isInternational) {
-      this.logger.debug('Rejeitado: Release internacional detectado', {
-        titulo: torrentTitle.substring(0, 60),
-        indicadores: intlCheck.indicators,
-        motivo: intlCheck.reason
-      });
       return false;
     }
     
     // 2. Verificação de grupos brasileiros
     const brCheck = this.checkBrazilianRelease(titleLower, torrentTitle);
     if (brCheck.isBrazilian) {
-      this.logger.debug('Aceito: Release brasileiro detectado', {
-        titulo: torrentTitle.substring(0, 60),
-        indicadores: brCheck.indicators,
-        motivo: brCheck.reason
-      });
       return true;
     }
     
     // 3. Verifica dual áudio com português
     const hasPortugueseDualAudio = this.hasPortugueseDualAudio(titleLower);
     if (hasPortugueseDualAudio) {
-      this.logger.debug('Aceito: Dual áudio com português', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return true;
     }
     
     // 4. Verifica inglês puro (deve rejeitar)
     const isEnglishOnly = this.isEnglishOnlyContent(titleLower);
     if (isEnglishOnly) {
-      this.logger.debug('Rejeitado: Conteúdo apenas em inglês', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return false;
     }
     
     // 5. Verifica indicadores de português
     const hasPortugueseIndicators = this.hasPortugueseIndicators(titleLower);
     if (hasPortugueseIndicators) {
-      this.logger.debug('Aceito: Indicadores de português', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return true;
     }
     
     // 6. Verifica padrões BR (séries, temporadas)
     const hasBRPatterns = this.hasBRPatterns(titleLower);
     if (hasBRPatterns) {
-      this.logger.debug('Aceito: Padrão BR detectado', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return true;
     }
     
     // 7. Verifica palavras-chave relevantes
     const hasRelevantKeywords = this.hasRelevantKeywords(titleLower);
     if (hasRelevantKeywords) {
-      this.logger.debug('Aceito: Palavras-chave relevantes', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return true;
     }
     
     // 8. Títulos curtos: benefício da dúvida
     const isShortTitle = this.isShortTitle(torrentTitle);
     if (isShortTitle) {
-      this.logger.debug('Aceito: Título curto - benefício da dúvida', {
-        titulo: torrentTitle.substring(0, 60)
-      });
       return true;
     }
     
     // 9. Verificação final: padrão técnico internacional
     const isInternationalTechPattern = this.isInternationalTechnicalPattern(titleLower);
     if (isInternationalTechPattern) {
-      this.logger.debug('Rejeitado: Padrão técnico internacional sem indicadores PT', {
-        titulo: torrentTitle.substring(0, 60),
-        motivo: 'Formato típico de release internacional sem áudio PT'
-      });
       return false;
     }
     
     // 10. Rejeita por falta de indicadores claros
-    this.logger.debug('Rejeitado: Sem indicadores claros de português', {
-      titulo: torrentTitle.substring(0, 60),
-      motivo: 'Nenhum indicador de português encontrado após análise completa'
-    });
     return false;
   }
 

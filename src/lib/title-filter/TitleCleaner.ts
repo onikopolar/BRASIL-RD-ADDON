@@ -10,9 +10,18 @@ export class TitleCleaner {
   private readonly cleanTitleCache = new Map<string, TitleCacheEntry>();
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
 
+  private static instance: TitleCleaner;
+
+  public static getInstance(): TitleCleaner {
+    if (!TitleCleaner.instance) {
+      TitleCleaner.instance = new TitleCleaner();
+    }
+    return TitleCleaner.instance;
+  }
+
   constructor() {
     this.logger = new Logger('TitleCleaner');
-    this.logger.info('✅ TitleCleaner inicializado - Versão exata do original');
+    this.logger.debug('TitleCleaner ready');
   }
 
   /**

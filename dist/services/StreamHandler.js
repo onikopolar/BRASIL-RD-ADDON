@@ -5,7 +5,6 @@ const RealDebridService_1 = require("./RealDebridService");
 const CuratedMagnetService_1 = require("./CuratedMagnetService");
 const AutoMagnetService_1 = require("./AutoMagnetService");
 const CacheService_1 = require("./CacheService");
-const ImdbScraperService_1 = require("./ImdbScraperService");
 const logger_1 = require("../utils/logger");
 const sequelize_1 = require("sequelize");
 const models_1 = require("../database/models");
@@ -28,16 +27,15 @@ class StreamHandler {
             duplicatesRemoved: 0,
             servedInformativeStreams: 0
         };
-        this.rdService = new RealDebridService_1.RealDebridService(baseUrl);
+        this.torboxService = new RealDebridService_1.TorboxService(baseUrl);
         this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
         this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
         this.cacheService = new CacheService_1.CacheService();
-        this.imdbScraper = new ImdbScraperService_1.ImdbScraperService();
         this.logger = new logger_1.Logger('StreamHandler');
         this.staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
-        this.qualityDetector = new qualityDetector_1.QualityDetector();
-        this.titleFilter = new titleFilter_1.TitleFilter();
-        this.streamFormatter = new streamFormatter_1.StreamFormatter();
+        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
+        this.titleFilter = titleFilter_1.TitleFilter.getInstance();
+        this.streamFormatter = streamFormatter_1.StreamFormatter.getInstance();
         this.catalogProvider = new catalogProvider_1.CatalogProvider(this.magnetService);
     }
     static getInstance(baseUrl) {
@@ -54,7 +52,7 @@ class StreamHandler {
     }
     setStaticResponseBaseUrl(baseUrl) {
         this.staticResponseService.setBaseUrl(baseUrl);
-        this.rdService.setStaticResponseBaseUrl(baseUrl);
+        this.torboxService.setStaticResponseBaseUrl(baseUrl);
     }
     deduplicateStreamsByInfoHash(streams) {
         const seenCombinations = new Set();

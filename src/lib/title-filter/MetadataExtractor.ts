@@ -51,9 +51,18 @@ export class MetadataExtractor {
     { pattern: /\b(480p|sd|standard definition)\b/i, quality: 'SD' },
   ];
 
+  private static instance: MetadataExtractor;
+
+  public static getInstance(): MetadataExtractor {
+    if (!MetadataExtractor.instance) {
+      MetadataExtractor.instance = new MetadataExtractor();
+    }
+    return MetadataExtractor.instance;
+  }
+
   constructor() {
     this.logger = new Logger('MetadataExtractor');
-    this.logger.info('MetadataExtractor v1.4.0 inicializado');
+    this.logger.debug('MetadataExtractor ready');
   }
 
   extractSeriesMetadata(torrentTitle: string): SeriesMetadata {

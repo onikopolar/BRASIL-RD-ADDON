@@ -12,17 +12,14 @@ export class CuratedMagnetService {
   constructor() {
     this.logger = new Logger('CuratedMagnetService');
     this.episodeMatcher = new EpisodeMatcher();
-    this.logger.info('CuratedMagnetService v1.0.0 inicializado');
+    this.logger.debug('CuratedMagnetService ready');
     
     this.initializationPromise = this.initializeDefaultMagnets().catch(error =>
-      this.logger.error('Erro inicializando magnets padrão', { error: error.message })
+      this.logger.error('Erro inicializando magnets', { error: error.message })
     );
     
     this.initializationPromise.then(() => {
       this.isInitialized = true;
-      this.logger.info('CuratedMagnetService completamente inicializado', {
-        totalMagnets: this.getTotalMagnetsCount()
-      });
     });
   }
 
