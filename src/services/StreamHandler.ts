@@ -1,18 +1,18 @@
-import { TorboxService } from './RealDebridService';
-import { CuratedMagnetService } from './CuratedMagnetService';
-import { AutoMagnetService } from './AutoMagnetService';
-import { CacheService } from './CacheService';
-import { Logger } from '../utils/logger';
-import { Stream, StreamRequest, CuratedMagnet } from '../types/index';
+import { TorboxService } from './RealDebridService.js';
+import { CuratedMagnetService } from './CuratedMagnetService.js';
+import { AutoMagnetService } from './AutoMagnetService.js';
+import { CacheService } from './CacheService.js';
+import { Logger } from '../utils/logger.js';
+import { Stream, StreamRequest, CuratedMagnet } from '../types/index.js';
 import { Op } from 'sequelize';
-import { Torrent, File } from '../database/models';
-import { QualityDetector } from '../lib/qualityDetector';
-import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper';
-import { TitleFilter } from '../lib/titleFilter';
-import { StreamFormatter } from '../lib/streamFormatter';
-import { CatalogProvider } from '../providers/catalogProvider';
-import { StaticResponseService, StaticResponse } from './StaticResponseService';
-import { StreamStatusException } from './StreamStatusException';
+import { Torrent, File } from '../database/models.js';
+import { QualityDetector } from '../lib/qualityDetector.js';
+import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper.js';
+import { TitleFilter } from '../lib/titleFilter.js';
+import { StreamFormatter } from '../lib/streamFormatter.js';
+import { CatalogProvider } from '../providers/catalogProvider.js';
+import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
+import { StreamStatusException } from './StreamStatusException.js';
 
 interface StreamProcessingConfig {
   maxConcurrentTorrents: number;

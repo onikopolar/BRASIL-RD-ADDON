@@ -1,5 +1,5 @@
-import { Logger } from '../../utils/logger';
-import { SeriesMetadata, EnhancedSeriesMetadata } from './interfaces';
+import { Logger } from '../../utils/logger.js';
+import { SeriesMetadata, EnhancedSeriesMetadata } from './interfaces.js';
 
 export class MetadataExtractor {
   private readonly logger: Logger;

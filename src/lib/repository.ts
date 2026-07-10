@@ -1,5 +1,5 @@
 import { Op } from 'sequelize';
-import { Torrent, File, Subtitle } from '../database/models';
+import { Torrent, File, Subtitle } from '../database/models.js';
 
 export { Torrent, File, Subtitle };
 

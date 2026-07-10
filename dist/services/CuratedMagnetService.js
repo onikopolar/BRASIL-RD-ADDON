@@ -1,47 +1,14 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CuratedMagnetService = void 0;
-const logger_1 = require("../utils/logger");
-const episodeMatcher_1 = require("../lib/episodeMatcher");
+const logger_js_1 = require("../utils/logger.js");
+const episodeMatcher_js_1 = require("../lib/episodeMatcher.js");
 class CuratedMagnetService {
     constructor() {
         this.magnets = new Map();
         this.isInitialized = false;
-        this.logger = new logger_1.Logger('CuratedMagnetService');
-        this.episodeMatcher = new episodeMatcher_1.EpisodeMatcher();
+        this.logger = new logger_js_1.Logger('CuratedMagnetService');
+        this.episodeMatcher = new episodeMatcher_js_1.EpisodeMatcher();
         this.logger.debug('CuratedMagnetService ready');
         this.initializationPromise = this.initializeDefaultMagnets().catch(error => this.logger.error('Erro inicializando magnets', { error: error.message }));
         this.initializationPromise.then(() => {
@@ -67,8 +34,8 @@ class CuratedMagnetService {
     }
     async initializeDefaultMagnets() {
         try {
-            const fs = await Promise.resolve().then(() => __importStar(require('fs-extra')));
-            const path = await Promise.resolve().then(() => __importStar(require('path')));
+            const fs = await import('fs-extra');
+            const path = await import('path');
             const magnetsPath = path.join(process.cwd(), 'data/magnets.json');
             if (await fs.pathExists(magnetsPath)) {
                 const data = await fs.readJson(magnetsPath);

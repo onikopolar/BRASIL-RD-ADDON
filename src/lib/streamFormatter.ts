@@ -1,9 +1,9 @@
-import { Stream, StreamRequest } from '../types/index';
-import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper';
-import { QualityDetector } from '../lib/qualityDetector';
-import { Logger } from '../utils/logger';
-import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor';
-import { EnhancedSeriesMetadata } from '../lib/title-filter/interfaces';
+import { Stream, StreamRequest } from '../types/index.js';
+import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper.js';
+import { QualityDetector } from '../lib/qualityDetector.js';
+import { Logger } from '../utils/logger.js';
+import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor.js';
+import { EnhancedSeriesMetadata } from '../lib/title-filter/interfaces.js';
 
 export class StreamFormatter {
   private readonly logger: Logger;

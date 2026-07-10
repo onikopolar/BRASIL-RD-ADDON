@@ -1,4 +1,4 @@
-import { ScraperProvider } from './torrentTypes';
+import { ScraperProvider } from './torrentTypes.js';
 
 // Apenas scrapers ativos e verificados
 // WordPress API scraper (BLUDV) está em wordpressScraper.ts

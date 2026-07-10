@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StaticResponseService = exports.StaticResponse = void 0;
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 var StaticResponse;
 (function (StaticResponse) {
     StaticResponse["DOWNLOADING"] = "downloading";
@@ -17,7 +17,7 @@ var StaticResponse;
 })(StaticResponse || (exports.StaticResponse = StaticResponse = {}));
 class StaticResponseService {
     constructor(baseUrl) {
-        this.logger = new logger_1.Logger('StaticResponseService');
+        this.logger = new logger_js_1.Logger('StaticResponseService');
         this.baseUrl = baseUrl || this.getBaseUrl();
     }
     getBaseUrl() {

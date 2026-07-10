@@ -1,17 +1,17 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.AutoMagnetService = void 0;
-const repository_1 = require("../lib/repository");
-const RealDebridService_1 = require("./RealDebridService");
-const ImdbScraperService_1 = require("../services/ImdbScraperService");
-const logger_1 = require("../utils/logger");
-const titleFilter_1 = require("../lib/titleFilter");
-const qualityDetector_1 = require("../lib/qualityDetector");
-const logger = new logger_1.Logger('AutoMagnetService');
-const torboxService = new RealDebridService_1.TorboxService();
-const imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
-const titleFilter = titleFilter_1.TitleFilter.getInstance();
-const qualityDetector = qualityDetector_1.QualityDetector.getInstance();
+const repository_js_1 = require("../lib/repository.js");
+const RealDebridService_js_1 = require("./RealDebridService.js");
+const ImdbScraperService_js_1 = require("../services/ImdbScraperService.js");
+const logger_js_1 = require("../utils/logger.js");
+const titleFilter_js_1 = require("../lib/titleFilter.js");
+const qualityDetector_js_1 = require("../lib/qualityDetector.js");
+const logger = new logger_js_1.Logger('AutoMagnetService');
+const torboxService = new RealDebridService_js_1.TorboxService();
+const imdbScraper = ImdbScraperService_js_1.ImdbScraperService.getInstance();
+const titleFilter = titleFilter_js_1.TitleFilter.getInstance();
+const qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
 class AutoMagnetService {
     constructor() {
         this.validationCache = new Map();
@@ -416,7 +416,7 @@ class AutoMagnetService {
             if (magnetData.category === 'serie' && magnetData.imdbSeason !== undefined) {
                 let existingEntry;
                 if (magnetData.imdbEpisode === null) {
-                    existingEntry = await repository_1.File.findOne({
+                    existingEntry = await repository_js_1.File.findOne({
                         where: {
                             infoHash: magnetHash,
                             imdbId: magnetData.imdbId,
@@ -426,7 +426,7 @@ class AutoMagnetService {
                     });
                 }
                 else {
-                    existingEntry = await repository_1.File.findOne({
+                    existingEntry = await repository_js_1.File.findOne({
                         where: {
                             infoHash: magnetHash,
                             imdbId: magnetData.imdbId,
@@ -446,7 +446,7 @@ class AutoMagnetService {
                 }
             }
             else {
-                const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
+                const existingTorrent = await (0, repository_js_1.getTorrent)(magnetHash);
                 if (existingTorrent) {
                     logger.debug('Magnet já existe', {
                         title: magnetData.title.substring(0, 60),
@@ -463,9 +463,9 @@ class AutoMagnetService {
                 });
                 return false;
             }
-            const existingTorrent = await (0, repository_1.getTorrent)(magnetHash);
+            const existingTorrent = await (0, repository_js_1.getTorrent)(magnetHash);
             if (!existingTorrent) {
-                await (0, repository_1.createTorrent)({
+                await (0, repository_js_1.createTorrent)({
                     infoHash: magnetHash,
                     provider: 'brasil-rd',
                     magnetLink: magnetData.magnet,
@@ -481,7 +481,7 @@ class AutoMagnetService {
                     updatedAt: new Date()
                 });
             }
-            await (0, repository_1.createFile)({
+            await (0, repository_js_1.createFile)({
                 infoHash: magnetHash,
                 title: magnetData.title,
                 imdbId: magnetData.imdbId,

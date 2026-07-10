@@ -37,7 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TitleTranslator = void 0;
-const logger_1 = require("../../utils/logger");
+const logger_js_1 = require("../../utils/logger.js");
 const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 class TitleTranslator {
@@ -130,7 +130,7 @@ class TitleTranslator {
             ['aos', 'to the'],
             ['às', 'to the']
         ]);
-        this.logger = new logger_1.Logger('TitleTranslator');
+        this.logger = new logger_js_1.Logger('TitleTranslator');
     }
     async translateTitle(fullTitle) {
         this.logger.debug('Iniciando tradução de título', {

@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheManager = void 0;
-const logger_1 = require("../../utils/logger");
+const logger_js_1 = require("../../utils/logger.js");
 class CacheManager {
     static getInstance() {
         if (!CacheManager.instance) {
@@ -15,7 +15,7 @@ class CacheManager {
         this.processedTimestamps = new Map();
         this.cleanTitleCache = new Map();
         this.portugueseCheckCache = new Map();
-        this.logger = new logger_1.Logger('CacheManager');
+        this.logger = new logger_js_1.Logger('CacheManager');
         this.IMDB_CACHE_TTL = imdbCacheTTL;
         this.DEDUP_CACHE_TTL = dedupCacheTTL;
         this.TITLE_CACHE_TTL = titleCacheTTL;

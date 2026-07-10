@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.RdTorrentCacheService = void 0;
-const logger_1 = require("../utils/logger");
-const AdvancedCacheService_1 = require("./AdvancedCacheService");
-const MetricsService_1 = require("./MetricsService");
+const logger_js_1 = require("../utils/logger.js");
+const AdvancedCacheService_js_1 = require("./AdvancedCacheService.js");
+const MetricsService_js_1 = require("./MetricsService.js");
 class RdTorrentCacheService {
     constructor() {
         this.torrentCache = new Map();
@@ -11,7 +11,7 @@ class RdTorrentCacheService {
         this.TORRENT_CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
         this.STREAM_LINK_TTL = 24 * 60 * 60 * 1000;
         this.processingLocks = new Map();
-        this.logger = new logger_1.Logger('RdTorrentCacheService');
+        this.logger = new logger_js_1.Logger('RdTorrentCacheService');
         this.logger.debug('RdTorrentCacheService ready');
     }
     getTorrentCacheKey(magnetHash, apiKey) {
@@ -40,7 +40,7 @@ class RdTorrentCacheService {
         const processPromise = (async () => {
             try {
                 const advancedCacheKey = `torrent:${magnetHash}:${apiKey.substring(0, 8)}`;
-                const cachedFromAdvanced = await AdvancedCacheService_1.torrentCacheService.get(advancedCacheKey);
+                const cachedFromAdvanced = await AdvancedCacheService_js_1.torrentCacheService.get(advancedCacheKey);
                 if (cachedFromAdvanced) {
                     if (!this.isCacheExpired(cachedFromAdvanced.cachedAt, this.TORRENT_CACHE_TTL)) {
                         this.logger.debug('Cache avançado de torrent HIT', {
@@ -79,12 +79,12 @@ class RdTorrentCacheService {
                         cachedAt: Date.now(),
                         apiKeyPrefix: apiKey.substring(0, 8)
                     };
-                    await AdvancedCacheService_1.torrentCacheService.set(advancedCacheKey, cachedTorrent, {
+                    await AdvancedCacheService_js_1.torrentCacheService.set(advancedCacheKey, cachedTorrent, {
                         ttl: this.TORRENT_CACHE_TTL,
                         staleWhileRevalidate: 60 * 60 * 1000
                     });
                     this.torrentCache.set(cacheKey, cachedTorrent);
-                    MetricsService_1.metricsService.setCacheSize(this.torrentCache.size);
+                    MetricsService_js_1.metricsService.setCacheSize(this.torrentCache.size);
                     this.logger.info('Torrent salvo no cache avançado', {
                         magnetHash,
                         torrentId: tid,
@@ -114,7 +114,7 @@ class RdTorrentCacheService {
     async getStreamLink(torrentId, apiKey, season, episode, torboxService) {
         const cacheKey = this.getStreamLinkCacheKey(torrentId, season, episode);
         const advancedCacheKey = `stream:${torrentId}:${season || 'all'}:${episode || 'all'}`;
-        const cachedFromAdvanced = await AdvancedCacheService_1.streamCacheService.get(advancedCacheKey);
+        const cachedFromAdvanced = await AdvancedCacheService_js_1.streamCacheService.get(advancedCacheKey);
         if (cachedFromAdvanced) {
             if (!this.isCacheExpired(cachedFromAdvanced.cachedAt, this.STREAM_LINK_TTL)) {
                 this.logger.debug('Cache avançado de stream link HIT', {
@@ -153,12 +153,12 @@ class RdTorrentCacheService {
                 streamLink,
                 cachedAt: Date.now()
             };
-            await AdvancedCacheService_1.streamCacheService.set(advancedCacheKey, cachedStream, {
+            await AdvancedCacheService_js_1.streamCacheService.set(advancedCacheKey, cachedStream, {
                 ttl: this.STREAM_LINK_TTL,
                 staleWhileRevalidate: 30 * 60 * 1000
             });
             this.streamLinkCache.set(cacheKey, cachedStream);
-            MetricsService_1.metricsService.setCacheSize(this.streamLinkCache.size);
+            MetricsService_js_1.metricsService.setCacheSize(this.streamLinkCache.size);
             this.logger.info('Stream link salvo no cache avançado', {
                 torrentId,
                 season,
@@ -175,13 +175,13 @@ class RdTorrentCacheService {
         setImmediate(async () => {
             try {
                 if (key.startsWith('torrent:')) {
-                    await AdvancedCacheService_1.torrentCacheService.set(key, data, {
+                    await AdvancedCacheService_js_1.torrentCacheService.set(key, data, {
                         ttl: this.TORRENT_CACHE_TTL,
                         staleWhileRevalidate: 60 * 60 * 1000
                     });
                 }
                 else if (key.startsWith('stream:')) {
-                    await AdvancedCacheService_1.streamCacheService.set(key, data, {
+                    await AdvancedCacheService_js_1.streamCacheService.set(key, data, {
                         ttl: this.STREAM_LINK_TTL,
                         staleWhileRevalidate: 30 * 60 * 1000
                     });
@@ -216,13 +216,13 @@ class RdTorrentCacheService {
         const advancedCacheKey = `torrent:${magnetHash}:${apiKey.substring(0, 8)}`;
         const torrent = this.torrentCache.get(cacheKey);
         if (torrent) {
-            AdvancedCacheService_1.torrentCacheService.delete(advancedCacheKey);
+            AdvancedCacheService_js_1.torrentCacheService.delete(advancedCacheKey);
             this.torrentCache.delete(cacheKey);
             const streamKeyPrefix = `stream:${torrent.torrentId}:`;
             for (const [key] of this.streamLinkCache) {
                 if (key.startsWith(streamKeyPrefix)) {
                     this.streamLinkCache.delete(key);
-                    AdvancedCacheService_1.streamCacheService.delete(`stream:${torrent.torrentId}:${key.split(':').slice(2).join(':')}`);
+                    AdvancedCacheService_js_1.streamCacheService.delete(`stream:${torrent.torrentId}:${key.split(':').slice(2).join(':')}`);
                 }
             }
             this.logger.info('Torrent invalidado do cache avançado', {
@@ -252,7 +252,7 @@ class RdTorrentCacheService {
                 torrentsRemoved,
                 streamsRemoved
             });
-            MetricsService_1.metricsService.setCacheSize(this.torrentCache.size + this.streamLinkCache.size);
+            MetricsService_js_1.metricsService.setCacheSize(this.torrentCache.size + this.streamLinkCache.size);
         }
     }
     getStats() {

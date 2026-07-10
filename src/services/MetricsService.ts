@@ -1,6 +1,6 @@
 import client from 'prom-client';
 import { Request, Response } from 'express';
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 
 export class MetricsService {
   private logger: Logger;

@@ -1,10 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StreamFormatter = void 0;
-const magnetHelper_1 = require("../lib/magnetHelper");
-const qualityDetector_1 = require("../lib/qualityDetector");
-const logger_1 = require("../utils/logger");
-const MetadataExtractor_1 = require("../lib/title-filter/MetadataExtractor");
+const magnetHelper_js_1 = require("../lib/magnetHelper.js");
+const qualityDetector_js_1 = require("../lib/qualityDetector.js");
+const logger_js_1 = require("../utils/logger.js");
+const MetadataExtractor_js_1 = require("../lib/title-filter/MetadataExtractor.js");
 class StreamFormatter {
     static getInstance() {
         if (!StreamFormatter.instance) {
@@ -13,9 +13,9 @@ class StreamFormatter {
         return StreamFormatter.instance;
     }
     constructor() {
-        this.logger = new logger_1.Logger('StreamFormatter');
-        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
-        this.metadataExtractor = MetadataExtractor_1.MetadataExtractor.getInstance();
+        this.logger = new logger_js_1.Logger('StreamFormatter');
+        this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
+        this.metadataExtractor = MetadataExtractor_js_1.MetadataExtractor.getInstance();
         this.logger.debug('StreamFormatter ready');
     }
     formatTitleCorreto(torrentTitle, seeds, size, language, tracker, metadata, isDirect = false) {
@@ -134,7 +134,7 @@ class StreamFormatter {
         const stream = {
             name: `Brasil RD\n${qualidade}`,
             title: tituloFinal,
-            infoHash: (0, magnetHelper_1.extractHashFromMagnet)(linkDireto) || undefined,
+            infoHash: (0, magnetHelper_js_1.extractHashFromMagnet)(linkDireto) || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0,
             url: linkDireto
         };
@@ -163,7 +163,7 @@ class StreamFormatter {
             temporada: temporada,
             episodio: episodio
         });
-        const magnetHash = (0, magnetHelper_1.extractHashFromMagnet)(magnet);
+        const magnetHash = (0, magnetHelper_js_1.extractHashFromMagnet)(magnet);
         const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
         const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
         const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
@@ -174,7 +174,7 @@ class StreamFormatter {
         let resolveUrl = '';
         try {
             const filename = this.sanitizarNomeArquivo(tituloFinal.split('\n')[0] + '.mkv');
-            resolveUrl = (0, magnetHelper_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, tipo, temporada, episodio);
+            resolveUrl = (0, magnetHelper_js_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, tipo, temporada, episodio);
             this.logger.debug('URL_LAZY_GERADA', {
                 formato: 'torrentio_rd',
                 url_preview: resolveUrl.substring(0, 100),

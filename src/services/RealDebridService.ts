@@ -1,9 +1,9 @@
 import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
-import { config } from '../config/index';
-import { Logger } from '../utils/logger';
-import { TorboxTorrentInfo, TorboxFile } from '../types/index';
-import { StaticResponseService, StaticResponse } from './StaticResponseService';
-import { StreamStatusException } from './StreamStatusException';
+import { config } from '../config/index.js';
+import { Logger } from '../utils/logger.js';
+import { TorboxTorrentInfo, TorboxFile } from '../types/index.js';
+import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
+import { StreamStatusException } from './StreamStatusException.js';
 
 interface TorboxError {
   error?: string;

@@ -4,9 +4,9 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.ImdbScraperService = void 0;
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 const axios_1 = __importDefault(require("axios"));
-const logger = new logger_1.Logger('TMDBScraper');
+const logger = new logger_js_1.Logger('TMDBScraper');
 class ImdbScraperService {
     static getInstance() {
         if (!ImdbScraperService.instance) {
@@ -18,9 +18,9 @@ class ImdbScraperService {
         this.tmdbBaseUrl = 'https://api.themoviedb.org/3';
         this.language = 'pt-BR';
         this.cacheTTL = 5 * 60 * 1000;
-        this.tmdbApiKey = process.env.TMDB_API_KEY || '4bfe2bbccad24f1bb07507953a137ebd';
+        this.tmdbApiKey = process.env.TMDB_API_KEY || '';
         if (!this.tmdbApiKey) {
-            logger.error('TMDB API KEY não configurada!');
+            logger.warn('TMDB_API_KEY não configurada! Metadados em português não estarão disponíveis. Obtenha uma key gratuita em: https://www.themoviedb.org/settings/api');
         }
         logger.debug('TMDB Scraper ready');
     }

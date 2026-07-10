@@ -1,20 +1,20 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.StreamHandler = void 0;
-const RealDebridService_1 = require("./RealDebridService");
-const CuratedMagnetService_1 = require("./CuratedMagnetService");
-const AutoMagnetService_1 = require("./AutoMagnetService");
-const CacheService_1 = require("./CacheService");
-const logger_1 = require("../utils/logger");
+const RealDebridService_js_1 = require("./RealDebridService.js");
+const CuratedMagnetService_js_1 = require("./CuratedMagnetService.js");
+const AutoMagnetService_js_1 = require("./AutoMagnetService.js");
+const CacheService_js_1 = require("./CacheService.js");
+const logger_js_1 = require("../utils/logger.js");
 const sequelize_1 = require("sequelize");
-const models_1 = require("../database/models");
-const qualityDetector_1 = require("../lib/qualityDetector");
-const magnetHelper_1 = require("../lib/magnetHelper");
-const titleFilter_1 = require("../lib/titleFilter");
-const streamFormatter_1 = require("../lib/streamFormatter");
-const catalogProvider_1 = require("../providers/catalogProvider");
-const StaticResponseService_1 = require("./StaticResponseService");
-const StreamStatusException_1 = require("./StreamStatusException");
+const models_js_1 = require("../database/models.js");
+const qualityDetector_js_1 = require("../lib/qualityDetector.js");
+const magnetHelper_js_1 = require("../lib/magnetHelper.js");
+const titleFilter_js_1 = require("../lib/titleFilter.js");
+const streamFormatter_js_1 = require("../lib/streamFormatter.js");
+const catalogProvider_js_1 = require("../providers/catalogProvider.js");
+const StaticResponseService_js_1 = require("./StaticResponseService.js");
+const StreamStatusException_js_1 = require("./StreamStatusException.js");
 class StreamHandler {
     constructor(baseUrl) {
         this.inFlightScraping = new Set();
@@ -26,16 +26,16 @@ class StreamHandler {
             duplicatesRemoved: 0,
             servedInformativeStreams: 0
         };
-        this.torboxService = new RealDebridService_1.TorboxService(baseUrl);
-        this.magnetService = new CuratedMagnetService_1.CuratedMagnetService();
-        this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-        this.cacheService = new CacheService_1.CacheService();
-        this.logger = new logger_1.Logger('StreamHandler');
-        this.staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
-        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
-        this.titleFilter = titleFilter_1.TitleFilter.getInstance();
-        this.streamFormatter = streamFormatter_1.StreamFormatter.getInstance();
-        this.catalogProvider = new catalogProvider_1.CatalogProvider(this.magnetService);
+        this.torboxService = new RealDebridService_js_1.TorboxService(baseUrl);
+        this.magnetService = new CuratedMagnetService_js_1.CuratedMagnetService();
+        this.autoMagnetService = new AutoMagnetService_js_1.AutoMagnetService();
+        this.cacheService = new CacheService_js_1.CacheService();
+        this.logger = new logger_js_1.Logger('StreamHandler');
+        this.staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
+        this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
+        this.titleFilter = titleFilter_js_1.TitleFilter.getInstance();
+        this.streamFormatter = streamFormatter_js_1.StreamFormatter.getInstance();
+        this.catalogProvider = new catalogProvider_js_1.CatalogProvider(this.magnetService);
     }
     static getInstance(baseUrl) {
         if (!StreamHandler.instance) {
@@ -111,7 +111,7 @@ class StreamHandler {
                 return { streams: deduped };
             }
             catch (error) {
-                if (error instanceof StreamStatusException_1.StreamStatusException) {
+                if (error instanceof StreamStatusException_js_1.StreamStatusException) {
                     const informativeStream = this.createInformativeStreamFromException(error, requestId);
                     this.stats.servedInformativeStreams++;
                     return { streams: [informativeStream] };
@@ -127,12 +127,12 @@ class StreamHandler {
                 requestId,
                 error: error instanceof Error ? error.message : 'Erro desconhecido'
             });
-            if (error instanceof StreamStatusException_1.StreamStatusException) {
+            if (error instanceof StreamStatusException_js_1.StreamStatusException) {
                 const informativeStream = this.createInformativeStreamFromException(error, requestId);
                 this.stats.servedInformativeStreams++;
                 return { streams: [informativeStream] };
             }
-            const errorStream = this.staticResponseService.createInformativeStream(StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, requestId);
+            const errorStream = this.staticResponseService.createInformativeStream(StaticResponseService_js_1.StaticResponse.FAILED_UNEXPECTED, requestId);
             return { streams: [this.convertToStreamFormat(errorStream)] };
         }
     }
@@ -178,7 +178,7 @@ class StreamHandler {
     createInformativeStreamIfNoContent(request) {
         const imdbId = this.extractImdbIdFromRequest(request);
         if (imdbId || request.type === 'series') {
-            const informativeStream = this.staticResponseService.createInformativeStream(StaticResponseService_1.StaticResponse.DOWNLOADING, request.id);
+            const informativeStream = this.staticResponseService.createInformativeStream(StaticResponseService_js_1.StaticResponse.DOWNLOADING, request.id);
             return this.convertToStreamFormat(informativeStream);
         }
         return null;
@@ -235,36 +235,36 @@ class StreamHandler {
         }
     }
     async getImdbIdMovieEntries(imdbId) {
-        return models_1.File.findAll({
+        return models_js_1.File.findAll({
             where: { imdbId: { [sequelize_1.Op.eq]: imdbId } },
-            include: [{ model: models_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
+            include: [{ model: models_js_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
             limit: 20,
-            order: [[models_1.Torrent, 'seeders', 'DESC']]
+            order: [[models_js_1.Torrent, 'seeders', 'DESC']]
         });
     }
     async getImdbIdSeriesEntries(imdbId, season, episode) {
-        const specificEpisodeEntries = await models_1.File.findAll({
+        const specificEpisodeEntries = await models_js_1.File.findAll({
             where: {
                 imdbId: { [sequelize_1.Op.eq]: imdbId },
                 imdbSeason: { [sequelize_1.Op.eq]: season },
                 imdbEpisode: { [sequelize_1.Op.eq]: episode }
             },
-            include: [{ model: models_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
+            include: [{ model: models_js_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
             limit: 15,
-            order: [[models_1.Torrent, 'seeders', 'DESC']]
+            order: [[models_js_1.Torrent, 'seeders', 'DESC']]
         });
         if (specificEpisodeEntries.length > 0) {
             return specificEpisodeEntries;
         }
-        const completePackEntries = await models_1.File.findAll({
+        const completePackEntries = await models_js_1.File.findAll({
             where: {
                 imdbId: { [sequelize_1.Op.eq]: imdbId },
                 imdbSeason: { [sequelize_1.Op.eq]: season },
                 imdbEpisode: { [sequelize_1.Op.eq]: null }
             },
-            include: [{ model: models_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
+            include: [{ model: models_js_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
             limit: 15,
-            order: [[models_1.Torrent, 'seeders', 'DESC']]
+            order: [[models_js_1.Torrent, 'seeders', 'DESC']]
         });
         return completePackEntries;
     }
@@ -306,7 +306,7 @@ class StreamHandler {
                 status: 'available',
                 infoHash: magnetHash,
                 magnet: magnetLink,
-                url: (0, magnetHelper_1.generateLazyResolveUrl)(magnetLink, request.apiKey, filename, finalFileIndex, request.type, season, episode)
+                url: (0, magnetHelper_js_1.generateLazyResolveUrl)(magnetLink, request.apiKey, filename, finalFileIndex, request.type, season, episode)
             };
             return stream;
         }

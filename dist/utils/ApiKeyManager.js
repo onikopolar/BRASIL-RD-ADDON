@@ -1,14 +1,14 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.apiKeyManager = exports.ApiKeyManager = void 0;
-const logger_1 = require("./logger");
+const logger_js_1 = require("./logger.js");
 class ApiKeyManager {
     constructor() {
         this.sessions = new Map();
         this.cleanupInterval = 30 * 60 * 1000;
         this.maxSessionAge = 24 * 60 * 60 * 1000;
         this.maxSessions = 1000;
-        this.logger = new logger_1.Logger('ApiKeyManager');
+        this.logger = new logger_js_1.Logger('ApiKeyManager');
         this.startCleanupTimer();
         this.logger.info('ApiKeyManager initialized', {
             maxSessions: this.maxSessions,

@@ -1,4 +1,4 @@
-import { QualityPattern } from './torrentTypes';
+import { QualityPattern } from './torrentTypes.js';
 
 export const maxRetries = 3;
 export const retryDelay = 1500;

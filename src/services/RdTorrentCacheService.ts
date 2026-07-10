@@ -1,7 +1,7 @@
-import { TorboxService } from './RealDebridService';
-import { Logger } from '../utils/logger';
-import { torrentCacheService, streamCacheService } from './AdvancedCacheService';
-import { metricsService } from './MetricsService';
+import { TorboxService } from './RealDebridService.js';
+import { Logger } from '../utils/logger.js';
+import { torrentCacheService, streamCacheService } from './AdvancedCacheService.js';
+import { metricsService } from './MetricsService.js';
 
 export interface CachedTorrent {
   torrentId: string;

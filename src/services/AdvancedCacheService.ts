@@ -1,6 +1,6 @@
 import { Cacheable } from 'cacheable';
-import { Logger } from '../utils/logger';
-import { metricsService } from './MetricsService';
+import { Logger } from '../utils/logger.js';
+import { metricsService } from './MetricsService.js';
 
 export interface CacheEntry<T = any> {
   value: T;

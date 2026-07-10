@@ -1,4 +1,4 @@
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 import axios from 'axios';
 
 const logger = new Logger('TMDBScraper');
@@ -37,10 +37,10 @@ export class ImdbScraperService {
   }
 
   constructor() {
-    this.tmdbApiKey = process.env.TMDB_API_KEY || '4bfe2bbccad24f1bb07507953a137ebd';
+    this.tmdbApiKey = process.env.TMDB_API_KEY || '';
     
     if (!this.tmdbApiKey) {
-      logger.error('TMDB API KEY não configurada!');
+      logger.warn('TMDB_API_KEY não configurada! Metadados em português não estarão disponíveis. Obtenha uma key gratuita em: https://www.themoviedb.org/settings/api');
     }
     
     logger.debug('TMDB Scraper ready');

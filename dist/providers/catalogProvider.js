@@ -1,18 +1,18 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CatalogProvider = void 0;
-const qualityDetector_1 = require("../lib/qualityDetector");
-const streamFormatter_1 = require("../lib/streamFormatter");
-const magnetHelper_1 = require("../lib/magnetHelper");
-const logger_1 = require("../utils/logger");
-const MetadataExtractor_1 = require("../lib/title-filter/MetadataExtractor");
-const repository_1 = require("../lib/repository");
-const TorrentScraperService_1 = require("../services/scraper/TorrentScraperService");
-const ImdbScraperService_1 = require("../services/ImdbScraperService");
-const titleFilter_1 = require("../lib/titleFilter");
-const AutoMagnetService_1 = require("../services/AutoMagnetService");
-const MetricsService_1 = require("../services/MetricsService");
-const TorrentioService_1 = require("../services/TorrentioService");
+const qualityDetector_js_1 = require("../lib/qualityDetector.js");
+const streamFormatter_js_1 = require("../lib/streamFormatter.js");
+const magnetHelper_js_1 = require("../lib/magnetHelper.js");
+const logger_js_1 = require("../utils/logger.js");
+const MetadataExtractor_js_1 = require("../lib/title-filter/MetadataExtractor.js");
+const repository_js_1 = require("../lib/repository.js");
+const TorrentScraperService_js_1 = require("../services/scraper/TorrentScraperService.js");
+const ImdbScraperService_js_1 = require("../services/ImdbScraperService.js");
+const titleFilter_js_1 = require("../lib/titleFilter.js");
+const AutoMagnetService_js_1 = require("../services/AutoMagnetService.js");
+const MetricsService_js_1 = require("../services/MetricsService.js");
+const TorrentioService_js_1 = require("../services/TorrentioService.js");
 class CatalogProvider {
     constructor(magnetService) {
         this.magnetService = magnetService;
@@ -23,15 +23,15 @@ class CatalogProvider {
         this.inFlightScraping = new Set();
         this.tmdbDataCache = new Map();
         this.TMDB_CACHE_TTL = 5 * 60 * 1000;
-        this.logger = new logger_1.Logger('CatalogProvider');
-        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
-        this.streamFormatter = streamFormatter_1.StreamFormatter.getInstance();
-        this.metadataExtractor = MetadataExtractor_1.MetadataExtractor.getInstance();
-        this.torrentScraper = new TorrentScraperService_1.TorrentScraperService();
-        this.imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
-        this.titleFilter = titleFilter_1.TitleFilter.getInstance();
-        this.autoMagnetService = new AutoMagnetService_1.AutoMagnetService();
-        this.torrentioService = new TorrentioService_1.TorrentioService();
+        this.logger = new logger_js_1.Logger('CatalogProvider');
+        this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
+        this.streamFormatter = streamFormatter_js_1.StreamFormatter.getInstance();
+        this.metadataExtractor = MetadataExtractor_js_1.MetadataExtractor.getInstance();
+        this.torrentScraper = new TorrentScraperService_js_1.TorrentScraperService();
+        this.imdbScraper = ImdbScraperService_js_1.ImdbScraperService.getInstance();
+        this.titleFilter = titleFilter_js_1.TitleFilter.getInstance();
+        this.autoMagnetService = new AutoMagnetService_js_1.AutoMagnetService();
+        this.torrentioService = new TorrentioService_js_1.TorrentioService();
     }
     async getTmdbSearchData(imdbId, season) {
         const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
@@ -72,7 +72,7 @@ class CatalogProvider {
         const jsonStreams = await this.getStreamsFromJson(request, season, episode);
         allStreams.push(...jsonStreams);
         const uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
-        uniqueStreams.forEach(s => MetricsService_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+        uniqueStreams.forEach(s => MetricsService_js_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
         if (uniqueStreams.length === 0) {
             const shouldScrape = await this.shouldAttemptScraping(request);
             if (!shouldScrape) {
@@ -84,7 +84,7 @@ class CatalogProvider {
                 this.logger.debug(` Iniciando scraping para ${request.imdbId || request.id}`);
                 const scraped = await this.performIntelligentScraping(request, season, episode);
                 const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
-                scrapedUnique.forEach(s => MetricsService_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+                scrapedUnique.forEach(s => MetricsService_js_1.metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
                 this.saveToCache(cacheKey, scrapedUnique);
                 return scrapedUnique;
             }
@@ -235,17 +235,17 @@ class CatalogProvider {
     getFromCache(key) {
         const entry = this.streamCache.get(key);
         if (!entry) {
-            MetricsService_1.metricsService.recordCacheMiss();
+            MetricsService_js_1.metricsService.recordCacheMiss();
             return null;
         }
         const now = Date.now();
         const ttl = entry.isEmpty ? this.STREAM_EMPTY_TTL : this.STREAM_TTL;
         if (now - entry.timestamp > ttl) {
             this.streamCache.delete(key);
-            MetricsService_1.metricsService.recordCacheMiss();
+            MetricsService_js_1.metricsService.recordCacheMiss();
             return null;
         }
-        MetricsService_1.metricsService.recordCacheHit();
+        MetricsService_js_1.metricsService.recordCacheHit();
         return entry.streams;
     }
     saveToCache(key, streams) {
@@ -284,10 +284,10 @@ class CatalogProvider {
         const finalEpisode = episode ?? request.episode;
         let entries = [];
         if (request.type === 'movie') {
-            entries = await (0, repository_1.getImdbIdMovieEntries)(imdbId);
+            entries = await (0, repository_js_1.getImdbIdMovieEntries)(imdbId);
         }
         else if (request.type === 'series' && finalSeason !== undefined) {
-            entries = await (0, repository_1.getImdbIdSeriesEntries)(imdbId, finalSeason, finalEpisode);
+            entries = await (0, repository_js_1.getImdbIdSeriesEntries)(imdbId, finalSeason, finalEpisode);
         }
         if (!entries.length)
             return [];
@@ -300,7 +300,7 @@ class CatalogProvider {
         for (const entry of entries) {
             const torrent = entry.Torrent;
             const magnet = torrent.magnetLink || '';
-            const hash = (0, magnetHelper_1.extractHashFromMagnet)(magnet);
+            const hash = (0, magnetHelper_js_1.extractHashFromMagnet)(magnet);
             if (!hash)
                 continue;
             const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
@@ -398,7 +398,7 @@ class CatalogProvider {
         const seen = new Set();
         const unique = [];
         for (const t of torrents) {
-            const hash = (0, magnetHelper_1.extractHashFromMagnet)(t.magnet);
+            const hash = (0, magnetHelper_js_1.extractHashFromMagnet)(t.magnet);
             if (hash && seen.has(hash.toLowerCase()))
                 continue;
             if (hash)

@@ -6,46 +6,46 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupStaticRoutes = void 0;
 const express_1 = __importDefault(require("express"));
 const path_1 = __importDefault(require("path"));
-const logger_1 = require("../utils/logger");
-const StaticResponseService_1 = require("../services/StaticResponseService");
-const logger = new logger_1.Logger('StaticRoutes');
+const logger_js_1 = require("../utils/logger.js");
+const StaticResponseService_js_1 = require("../services/StaticResponseService.js");
+const logger = new logger_js_1.Logger('StaticRoutes');
 function getIconForResponse(response) {
     switch (response) {
-        case StaticResponseService_1.StaticResponse.DOWNLOADING:
+        case StaticResponseService_js_1.StaticResponse.DOWNLOADING:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD:
+        case StaticResponseService_js_1.StaticResponse.FAILED_DOWNLOAD:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_ACCESS:
+        case StaticResponseService_js_1.StaticResponse.FAILED_ACCESS:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_RAR:
+        case StaticResponseService_js_1.StaticResponse.FAILED_RAR:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_TOO_BIG:
+        case StaticResponseService_js_1.StaticResponse.FAILED_TOO_BIG:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_OPENING:
+        case StaticResponseService_js_1.StaticResponse.FAILED_OPENING:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED:
+        case StaticResponseService_js_1.StaticResponse.FAILED_UNEXPECTED:
             return '';
-        case StaticResponseService_1.StaticResponse.FAILED_INFRINGEMENT:
+        case StaticResponseService_js_1.StaticResponse.FAILED_INFRINGEMENT:
             return '';
-        case StaticResponseService_1.StaticResponse.LIMITS_EXCEEDED:
+        case StaticResponseService_js_1.StaticResponse.LIMITS_EXCEEDED:
             return '';
-        case StaticResponseService_1.StaticResponse.BLOCKED_ACCESS:
+        case StaticResponseService_js_1.StaticResponse.BLOCKED_ACCESS:
             return '';
         default:
             return '';
     }
 }
 const videoFileMap = {
-    [StaticResponseService_1.StaticResponse.DOWNLOADING]: 'downloading_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD]: 'download_failed_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_ACCESS]: 'failed_access_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_RAR]: 'failed_rar_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_TOO_BIG]: 'failed_too_big_v1.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_OPENING]: 'failed_opening_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED]: 'failed_unexpected_v2.mp4',
-    [StaticResponseService_1.StaticResponse.FAILED_INFRINGEMENT]: 'failed_infringement_v2.mp4',
-    [StaticResponseService_1.StaticResponse.LIMITS_EXCEEDED]: 'limits_exceeded_v1.mp4',
-    [StaticResponseService_1.StaticResponse.BLOCKED_ACCESS]: 'blocked_access_v1.mp4'
+    [StaticResponseService_js_1.StaticResponse.DOWNLOADING]: 'downloading_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_DOWNLOAD]: 'download_failed_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_ACCESS]: 'failed_access_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_RAR]: 'failed_rar_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_TOO_BIG]: 'failed_too_big_v1.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_OPENING]: 'failed_opening_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_UNEXPECTED]: 'failed_unexpected_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.FAILED_INFRINGEMENT]: 'failed_infringement_v2.mp4',
+    [StaticResponseService_js_1.StaticResponse.LIMITS_EXCEEDED]: 'limits_exceeded_v1.mp4',
+    [StaticResponseService_js_1.StaticResponse.BLOCKED_ACCESS]: 'blocked_access_v1.mp4'
 };
 const setupStaticRoutes = (app) => {
     const videosPath = path_1.default.join(__dirname, '..', 'videos');
@@ -54,7 +54,7 @@ const setupStaticRoutes = (app) => {
     app.get('/static/video/:response', (req, res) => {
         try {
             const responseName = req.params.response;
-            const validResponses = Object.values(StaticResponseService_1.StaticResponse);
+            const validResponses = Object.values(StaticResponseService_js_1.StaticResponse);
             if (!validResponses.includes(responseName)) {
                 return res.status(404).json({
                     error: 'Vídeo estático não encontrado',
@@ -62,7 +62,7 @@ const setupStaticRoutes = (app) => {
                 });
             }
             const baseUrl = `${req.protocol}://${req.get('host')}`;
-            const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+            const staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
             const responseInfo = staticResponseService.getResponseInfo(responseName);
             const videoFileName = videoFileMap[responseName];
             if (!videoFileName) {
@@ -89,7 +89,7 @@ const setupStaticRoutes = (app) => {
     app.get('/static/:response', (req, res) => {
         try {
             const responseName = req.params.response;
-            const validResponses = Object.values(StaticResponseService_1.StaticResponse);
+            const validResponses = Object.values(StaticResponseService_js_1.StaticResponse);
             if (!validResponses.includes(responseName)) {
                 return res.status(404).json({
                     error: 'Resposta estática não encontrada',
@@ -97,7 +97,7 @@ const setupStaticRoutes = (app) => {
                 });
             }
             const baseUrl = `${req.protocol}://${req.get('host')}`;
-            const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+            const staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
             const responseInfo = staticResponseService.getResponseInfo(responseName);
             const videoFileName = videoFileMap[responseName];
             logger.info('Servindo resposta estática', {
@@ -136,12 +136,12 @@ const setupStaticRoutes = (app) => {
     app.get('/static/html/:response', (req, res) => {
         try {
             const responseName = req.params.response;
-            const validResponses = Object.values(StaticResponseService_1.StaticResponse);
+            const validResponses = Object.values(StaticResponseService_js_1.StaticResponse);
             if (!validResponses.includes(responseName)) {
                 return res.status(404).send('Página estática não encontrada');
             }
             const baseUrl = `${req.protocol}://${req.get('host')}`;
-            const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+            const staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
             const responseInfo = staticResponseService.getResponseInfo(responseName);
             const videoFileName = videoFileMap[responseName];
             const videoUrl = videoFileName ? `/static/videos/${videoFileName}` : null;
@@ -303,8 +303,8 @@ const setupStaticRoutes = (app) => {
     app.get('/static', (req, res) => {
         try {
             const baseUrl = `${req.protocol}://${req.get('host')}`;
-            const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
-            const validResponses = Object.values(StaticResponseService_1.StaticResponse);
+            const staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
+            const validResponses = Object.values(StaticResponseService_js_1.StaticResponse);
             const responses = validResponses.map(response => {
                 const info = staticResponseService.getResponseInfo(response);
                 const videoFileName = videoFileMap[response];

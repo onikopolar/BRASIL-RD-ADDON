@@ -2,12 +2,12 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.metadataCacheService = exports.streamCacheService = exports.torrentCacheService = exports.AdvancedCacheService = void 0;
 const cacheable_1 = require("cacheable");
-const logger_1 = require("../utils/logger");
-const MetricsService_1 = require("./MetricsService");
+const logger_js_1 = require("../utils/logger.js");
+const MetricsService_js_1 = require("./MetricsService.js");
 class AdvancedCacheService {
     constructor(namespace = 'default', options = {}) {
         this.staleCache = new Map();
-        this.logger = new logger_1.Logger('AdvancedCacheService');
+        this.logger = new logger_js_1.Logger('AdvancedCacheService');
         this.namespace = namespace;
         const cacheableOptions = {
             ttl: options.maxAge || 3600000,
@@ -21,18 +21,18 @@ class AdvancedCacheService {
         try {
             const cached = await this.cache.get(fullKey);
             if (cached !== undefined) {
-                MetricsService_1.metricsService.recordCacheHit();
+                MetricsService_js_1.metricsService.recordCacheHit();
                 this.logger.debug('Cache hit', { namespace: this.namespace, key });
                 return cached;
             }
             const staleEntry = this.staleCache.get(fullKey);
             if (staleEntry && !this.isExpired(staleEntry, true)) {
-                MetricsService_1.metricsService.recordCacheHit();
+                MetricsService_js_1.metricsService.recordCacheHit();
                 this.logger.debug('Stale cache hit', { namespace: this.namespace, key });
                 this.revalidateInBackground(fullKey, key);
                 return staleEntry.value;
             }
-            MetricsService_1.metricsService.recordCacheMiss();
+            MetricsService_js_1.metricsService.recordCacheMiss();
             this.logger.debug('Cache miss', { namespace: this.namespace, key });
             return null;
         }
@@ -59,7 +59,7 @@ class AdvancedCacheService {
                 };
                 this.staleCache.set(fullKey, staleEntry);
             }
-            MetricsService_1.metricsService.setCacheSize(this.staleCache.size);
+            MetricsService_js_1.metricsService.setCacheSize(this.staleCache.size);
             this.logger.debug('Cache set', {
                 namespace: this.namespace,
                 key,
@@ -123,7 +123,7 @@ class AdvancedCacheService {
                 namespace: this.namespace,
                 removed
             });
-            MetricsService_1.metricsService.setCacheSize(this.staleCache.size);
+            MetricsService_js_1.metricsService.setCacheSize(this.staleCache.size);
         }
     }
     getStats() {

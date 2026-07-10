@@ -37,20 +37,20 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorrentScraperService = void 0;
-const logger_1 = require("../../utils/logger");
+const logger_js_1 = require("../../utils/logger.js");
 const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
-const scraperProviders_1 = require("./scraperProviders");
-const qualityDetector_1 = require("../../lib/qualityDetector");
-const ImdbScraperService_1 = require("../ImdbScraperService");
-const wordpressScraper_1 = require("./wordpressScraper");
-const logger = new logger_1.Logger('TorrentScraperService');
+const scraperProviders_js_1 = require("./scraperProviders.js");
+const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
+const ImdbScraperService_js_1 = require("../ImdbScraperService.js");
+const wordpressScraper_js_1 = require("./wordpressScraper.js");
+const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
         this.version = '6.2.0';
-        this.qualityDetector = qualityDetector_1.QualityDetector.getInstance();
-        this.tmdbScraper = tmdbScraper || ImdbScraperService_1.ImdbScraperService.getInstance();
-        this.wpScraper = new wordpressScraper_1.WordPressScraper();
+        this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
+        this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
+        this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
     }
     async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
         const startTime = Date.now();
@@ -61,7 +61,7 @@ class TorrentScraperService {
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
             const allResults = [];
-            const indexerPromise = scraperProviders_1.torrentIndexerConfig.enabled
+            const indexerPromise = scraperProviders_js_1.torrentIndexerConfig.enabled
                 ? this.searchTorrentIndexerWithQueries(searchQueries, type, targetSeason, targetYear, tmdbData)
                     .catch(() => [])
                 : Promise.resolve([]);
@@ -146,8 +146,8 @@ class TorrentScraperService {
                 params.season = targetSeason.toString();
             if (targetYear !== undefined)
                 params.year = targetYear.toString();
-            const response = await axios_1.default.get(`${scraperProviders_1.torrentIndexerConfig.baseUrl}/search`, {
-                timeout: scraperProviders_1.torrentIndexerConfig.timeout,
+            const response = await axios_1.default.get(`${scraperProviders_js_1.torrentIndexerConfig.baseUrl}/search`, {
+                timeout: scraperProviders_js_1.torrentIndexerConfig.timeout,
                 headers: { 'User-Agent': 'Brasil-RD-Addon/6.1.1', 'Accept': 'application/json' },
                 params
             });
@@ -174,7 +174,7 @@ class TorrentScraperService {
         return results;
     }
     async searchWebScrapers(query, type) {
-        const activeProviders = scraperProviders_1.scraperProviders
+        const activeProviders = scraperProviders_js_1.scraperProviders
             .filter(p => p.priority > 0)
             .sort((a, b) => b.priority - a.priority);
         if (activeProviders.length === 0)
@@ -432,7 +432,7 @@ class TorrentScraperService {
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: (scraperProviders_1.torrentIndexerConfig.enabled ? 1 : 0) + 1
+            provedoresAtivos: (scraperProviders_js_1.torrentIndexerConfig.enabled ? 1 : 0) + 1
         };
     }
 }

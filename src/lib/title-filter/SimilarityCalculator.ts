@@ -1,7 +1,7 @@
-import { Logger } from '../../utils/logger';
-import { SmartTitleMatch, SeriesConfusion } from './interfaces';
-import { ImdbScraperService } from '../../services/ImdbScraperService';
-import { TECHNICAL_WORDS, TECHNICAL_ACRONYMS } from './TechnicalWords';
+import { Logger } from '../../utils/logger.js';
+import { SmartTitleMatch, SeriesConfusion } from './interfaces.js';
+import { ImdbScraperService } from '../../services/ImdbScraperService.js';
+import { TECHNICAL_WORDS, TECHNICAL_ACRONYMS } from './TechnicalWords.js';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;

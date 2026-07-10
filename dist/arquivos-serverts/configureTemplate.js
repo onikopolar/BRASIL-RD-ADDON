@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.configureTemplate = void 0;
-const logger_1 = require("../utils/logger");
-const logger = new logger_1.Logger('ConfigureTemplate');
+const logger_js_1 = require("../utils/logger.js");
+const logger = new logger_js_1.Logger('ConfigureTemplate');
 const configureTemplate = (manifest) => {
     const background = manifest.background || 'https://dl.strem.io/addon-background.jpg';
     const logo = manifest.logo || 'https://dl.strem.io/addon-logo.png';

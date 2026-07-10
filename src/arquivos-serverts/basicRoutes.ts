@@ -1,5 +1,5 @@
-import { CacheService } from '../services/CacheService';
-import { Logger } from '../utils/logger';
+import { CacheService } from '../services/CacheService.js';
+import { Logger } from '../utils/logger.js';
 
 const logger = new Logger('Routes');
 const cacheService = new CacheService();

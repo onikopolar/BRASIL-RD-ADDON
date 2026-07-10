@@ -1,10 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupBasicRoutes = void 0;
-const CacheService_1 = require("../services/CacheService");
-const logger_1 = require("../utils/logger");
-const logger = new logger_1.Logger('Routes');
-const cacheService = new CacheService_1.CacheService();
+const CacheService_js_1 = require("../services/CacheService.js");
+const logger_js_1 = require("../utils/logger.js");
+const logger = new logger_js_1.Logger('Routes');
+const cacheService = new CacheService_js_1.CacheService();
 const setupBasicRoutes = (app, manifest) => {
     logger.info('BasicRoutes v2.1.0 configurado - Suporte Web Auth');
     app.get('/health', (req, res) => {
@@ -41,7 +41,7 @@ const setupBasicRoutes = (app, manifest) => {
         });
     });
     app.post('/api/auth', async (req, res) => {
-        const authLogger = new logger_1.Logger('AUTH');
+        const authLogger = new logger_js_1.Logger('AUTH');
         authLogger.info('═══════════════════════════════════════', {});
         authLogger.info(' SOLICITAÇÃO DE AUTENTICAÇÃO WEB', {
             requestId: req._ultraDebugId,

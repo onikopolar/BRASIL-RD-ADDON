@@ -1,17 +1,17 @@
-import { CuratedMagnetService } from '../services/CuratedMagnetService';
-import { QualityDetector } from '../lib/qualityDetector';
-import { StreamFormatter } from '../lib/streamFormatter';
-import { Stream } from '../types/index';
-import { extractHashFromMagnet } from '../lib/magnetHelper';
-import { Logger } from '../utils/logger';
-import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor';
-import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../lib/repository';
-import { TorrentScraperService } from '../services/scraper/TorrentScraperService';
-import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService';
-import { TitleFilter } from '../lib/titleFilter';
-import { AutoMagnetService } from '../services/AutoMagnetService';
-import { metricsService } from '../services/MetricsService';
-import { TorrentioService, TorrentioResult } from '../services/TorrentioService';
+import { CuratedMagnetService } from '../services/CuratedMagnetService.js';
+import { QualityDetector } from '../lib/qualityDetector.js';
+import { StreamFormatter } from '../lib/streamFormatter.js';
+import { Stream } from '../types/index.js';
+import { extractHashFromMagnet } from '../lib/magnetHelper.js';
+import { Logger } from '../utils/logger.js';
+import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor.js';
+import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../lib/repository.js';
+import { TorrentScraperService } from '../services/scraper/TorrentScraperService.js';
+import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
+import { TitleFilter } from '../lib/titleFilter.js';
+import { AutoMagnetService } from '../services/AutoMagnetService.js';
+import { metricsService } from '../services/MetricsService.js';
+import { TorrentioService, TorrentioResult } from '../services/TorrentioService.js';
 
 interface ScrapedTorrent {
   title: string;

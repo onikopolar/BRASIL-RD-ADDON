@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupTorrentioRoutes = void 0;
-const logger_1 = require("../utils/logger");
-const StreamHandler_1 = require("../services/StreamHandler");
-const logger = new logger_1.Logger('TorrentioRoutes');
+const logger_js_1 = require("../utils/logger.js");
+const StreamHandler_js_1 = require("../services/StreamHandler.js");
+const logger = new logger_js_1.Logger('TorrentioRoutes');
 const setupTorrentioRoutes = (app) => {
     app.get('/torbox=:apiKey/stream/:type/:id.json', async (req, res) => {
         try {
@@ -22,7 +22,7 @@ const setupTorrentioRoutes = (app) => {
                     maxResults: '25'
                 }
             };
-            const streamHandler = StreamHandler_1.StreamHandler.getInstance();
+            const streamHandler = StreamHandler_js_1.StreamHandler.getInstance();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             res.json(result);
         }
@@ -50,7 +50,7 @@ const setupTorrentioRoutes = (app) => {
                     maxResults: '25'
                 }
             };
-            const streamHandler = StreamHandler_1.StreamHandler.getInstance();
+            const streamHandler = StreamHandler_js_1.StreamHandler.getInstance();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             res.json(result);
         }

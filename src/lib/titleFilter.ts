@@ -1,5 +1,5 @@
-import { Logger } from '../utils/logger';
-import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService';
+import { Logger } from '../utils/logger.js';
+import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
 import {
   TitleCleaner,
   LanguageDetector,
@@ -10,7 +10,7 @@ import {
   TitleMatchResult,
   SeriesConfusion,
   SmartTitleMatch
-} from './title-filter';
+} from './title-filter/index.js';
 
 export class TitleFilter {
   private readonly logger: Logger;

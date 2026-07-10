@@ -1,11 +1,11 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheService = void 0;
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 class CacheService {
     constructor() {
         this.cache = new Map();
-        this.logger = new logger_1.Logger('CacheService');
+        this.logger = new logger_js_1.Logger('CacheService');
     }
     set(key, value, ttl = 3600000) {
         this.cache.set(key, {

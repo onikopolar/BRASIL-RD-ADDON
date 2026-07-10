@@ -2,7 +2,7 @@ module.exports = {
   apps: [{
     name: 'brasil-rd-addon',
     script: 'dist/server.js',
-    cwd: 'C:/Users/sangu/BRASIL-RD-ADDON',
+    cwd: __dirname,
     env: {
       NODE_ENV: 'production'
     },

@@ -1,3 +1,3 @@
-export * from './catalogProvider';
-export * from './scraperProvider';
-export * from './realdebridProvider';
+export * from './catalogProvider.js';
+export * from './scraperProvider.js';
+export * from './realdebridProvider.js';

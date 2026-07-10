@@ -5,12 +5,12 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorrentIndexerService = void 0;
 const axios_1 = __importDefault(require("axios"));
-const qualityDetector_1 = require("../../lib/qualityDetector");
+const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 class TorrentIndexerService {
     constructor() {
         this.baseUrl = 'https://torrent-indexer.darklyn.org';
         this.timeout = 15000;
-        this.qualityDetector = new qualityDetector_1.QualityDetector();
+        this.qualityDetector = new qualityDetector_js_1.QualityDetector();
     }
     async search(query, type, targetSeason) {
         if (!query || query.trim().length === 0) {

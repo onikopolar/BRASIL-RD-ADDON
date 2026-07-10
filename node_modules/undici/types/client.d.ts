@@ -1,4 +1,4 @@
-import { URL } from 'url'
+import { URL } from 'node:url'
 import Dispatcher from './dispatcher'
 import buildConnector from './connector'
 import TClientStats from './client-stats'
@@ -92,6 +92,23 @@ export declare namespace Client {
      * @default 100
      */
     maxConcurrentStreams?: number;
+    /**
+     * @description Sets the HTTP/2 stream-level flow-control window size (SETTINGS_INITIAL_WINDOW_SIZE).
+     * @default 262144
+     */
+    initialWindowSize?: number;
+    /**
+     * @description Sets the HTTP/2 connection-level flow-control window size (ClientHttp2Session.setLocalWindowSize).
+     * @default 524288
+     */
+    connectionWindowSize?: number;
+    /**
+     * @description Time interval between PING frames dispatch
+     * @default 60000
+     */
+    pingInterval?: number;
+    /** WebSocket-specific configuration options. */
+    webSocket?: WebSocketOptions;
   }
   export interface SocketInfo {
     localAddress?: string
@@ -102,6 +119,20 @@ export declare namespace Client {
     timeout?: number
     bytesWritten?: number
     bytesRead?: number
+  }
+  export interface WebSocketOptions {
+    /**
+     * Maximum number of fragments in a message. Set to 0 to disable the limit.
+     * @default 131072
+     */
+    maxFragments?: number;
+    /**
+     * Maximum allowed payload size in bytes for WebSocket messages.
+     * Applied to uncompressed messages, compressed frame payloads, and decompressed (permessage-deflate) messages.
+     * Set to 0 to disable the limit.
+     * @default 134217728 (128 MB)
+     */
+    maxPayloadSize?: number;
   }
 }
 

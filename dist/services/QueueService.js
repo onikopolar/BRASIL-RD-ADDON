@@ -6,10 +6,10 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.queueService = exports.QueueService = void 0;
 const p_limit_1 = __importDefault(require("p-limit"));
 const named_queue_1 = __importDefault(require("named-queue"));
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 class QueueService {
     constructor(config) {
-        this.logger = new logger_1.Logger('QueueService');
+        this.logger = new logger_js_1.Logger('QueueService');
         this.queues = new Map();
         this.namedQueues = new Map();
         this.defaultConcurrent = config?.defaultConcurrent || 5;

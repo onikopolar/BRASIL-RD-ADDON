@@ -1,10 +1,10 @@
-import { Logger } from '../../utils/logger';
-import { ImdbTitles } from '../../services/ImdbScraperService';
+import { Logger } from '../../utils/logger.js';
+import { ImdbTitles } from '../../services/ImdbScraperService.js';
 import {
   ImdbTitleCacheEntry,
   DeduplicationCacheEntry,
   SeriesConfusion
-} from './interfaces';
+} from './interfaces.js';
 
 export class CacheManager {
   private readonly logger: Logger;

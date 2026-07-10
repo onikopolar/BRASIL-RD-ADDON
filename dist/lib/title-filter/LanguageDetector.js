@@ -1,8 +1,8 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.LanguageDetector = void 0;
-const logger_1 = require("../../utils/logger");
-const TechnicalWords_1 = require("../../lib/title-filter/TechnicalWords");
+const logger_js_1 = require("../../utils/logger.js");
+const TechnicalWords_js_1 = require("../../lib/title-filter/TechnicalWords.js");
 class LanguageDetector {
     static getInstance() {
         if (!LanguageDetector.instance) {
@@ -42,7 +42,7 @@ class LanguageDetector {
             /\[eng[^\]]*\]/i,
         ];
         this.INTERNATIONAL_GROUPS = [
-            ...TechnicalWords_1.INTERNATIONAL_RELEASE_GROUPS,
+            ...TechnicalWords_js_1.INTERNATIONAL_RELEASE_GROUPS,
             'yts', 'rarbg', 'ettv', 'eztv', 'skgtv', 'rartv', 'turbotorrent'
         ];
         this.COMMON_TECH_TAGS = [
@@ -64,7 +64,7 @@ class LanguageDetector {
                 description: 'Breaking Bad'
             }
         ];
-        this.logger = new logger_1.Logger('LanguageDetector');
+        this.logger = new logger_js_1.Logger('LanguageDetector');
     }
     isPortugueseContent(torrentTitle) {
         const titleLower = torrentTitle.toLowerCase();
@@ -107,7 +107,7 @@ class LanguageDetector {
         return false;
     }
     checkInternationalRelease(titleLower, originalTitle) {
-        const intlResult = (0, TechnicalWords_1.containsInternationalIndicators)(originalTitle);
+        const intlResult = (0, TechnicalWords_js_1.containsInternationalIndicators)(originalTitle);
         if (intlResult.isInternational) {
             return {
                 isInternational: true,
@@ -135,11 +135,11 @@ class LanguageDetector {
         };
     }
     checkBrazilianRelease(titleLower, originalTitle) {
-        const brResult = (0, TechnicalWords_1.containsBrazilianIndicators)(originalTitle);
+        const brResult = (0, TechnicalWords_js_1.containsBrazilianIndicators)(originalTitle);
         if (brResult.isBrazilian) {
             return brResult;
         }
-        for (const group of TechnicalWords_1.BRAZILIAN_RELEASE_GROUPS) {
+        for (const group of TechnicalWords_js_1.BRAZILIAN_RELEASE_GROUPS) {
             if (titleLower.includes(group)) {
                 return {
                     isBrazilian: true,
@@ -238,7 +238,7 @@ class LanguageDetector {
         let technicalCount = 0;
         let contentWords = 0;
         for (const word of words) {
-            if ((0, TechnicalWords_1.isTechnicalWord)(word)) {
+            if ((0, TechnicalWords_js_1.isTechnicalWord)(word)) {
                 technicalCount++;
             }
             else if (word.length > 2 && !/^\d+p$/.test(word) && !/^[xs]\d+$/.test(word)) {
@@ -277,7 +277,7 @@ class LanguageDetector {
                 indicators.international.push(group);
             }
         }
-        for (const group of TechnicalWords_1.BRAZILIAN_RELEASE_GROUPS) {
+        for (const group of TechnicalWords_js_1.BRAZILIAN_RELEASE_GROUPS) {
             if (titleLower.includes(group)) {
                 indicators.brazilian.push(group);
             }

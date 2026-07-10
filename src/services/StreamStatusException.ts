@@ -3,7 +3,7 @@
  * Quando lançada, o StreamHandler deve criar um stream informativo
  */
 
-import { StaticResponse } from './StaticResponseService';
+import { StaticResponse } from './StaticResponseService.js';
 
 export class StreamStatusException extends Error {
   public readonly staticResponse: StaticResponse;

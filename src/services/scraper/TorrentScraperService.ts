@@ -1,11 +1,11 @@
-import { Logger } from '../../utils/logger';
+import { Logger } from '../../utils/logger.js';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import { TorrentResult } from './torrentTypes';
-import { torrentIndexerConfig, scraperProviders } from './scraperProviders';
-import { QualityDetector } from '../../lib/qualityDetector';
-import { ImdbScraperService } from '../ImdbScraperService';
-import { WordPressScraper } from './wordpressScraper';
+import { TorrentResult } from './torrentTypes.js';
+import { torrentIndexerConfig, scraperProviders } from './scraperProviders.js';
+import { QualityDetector } from '../../lib/qualityDetector.js';
+import { ImdbScraperService } from '../ImdbScraperService.js';
+import { WordPressScraper } from './wordpressScraper.js';
 
 const logger = new Logger('TorrentScraperService');
 

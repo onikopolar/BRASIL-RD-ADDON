@@ -5,3 +5,12 @@ dist/
 *.log
 .DS_Store
 Thumbs.db
+
+# Dados locais / cache
+data/
+logs/
+puppeteer-profile/
+screenshots/
+
+# Certificados SSL locais
+localhost.*

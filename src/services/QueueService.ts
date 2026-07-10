@@ -1,6 +1,6 @@
 import pLimit from 'p-limit';
 import NamedQueue from 'named-queue';
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 
 export interface QueueConfig {
   maxConcurrent: number;

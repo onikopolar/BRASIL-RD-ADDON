@@ -1,6 +1,6 @@
 import { Router } from 'express';
-import { Logger } from '../utils/logger';
-import { StreamHandler } from '../services/StreamHandler';
+import { Logger } from '../utils/logger.js';
+import { StreamHandler } from '../services/StreamHandler.js';
 
 const logger = new Logger('TorrentioRoutes');
 

@@ -1,10 +1,10 @@
-import { AutoMagnetService } from '../services/AutoMagnetService';
-import { TorboxService } from '../services/RealDebridService';
-import { RdTorrentCacheService } from '../services/RdTorrentCacheService';
-import { CacheService } from '../services/CacheService';
-import { StaticResponseService, StaticResponse } from '../services/StaticResponseService';
-import { Logger } from '../utils/logger';
-import { getStatusMessage } from './statusHelpers';
+import { AutoMagnetService } from '../services/AutoMagnetService.js';
+import { TorboxService } from '../services/RealDebridService.js';
+import { RdTorrentCacheService } from '../services/RdTorrentCacheService.js';
+import { CacheService } from '../services/CacheService.js';
+import { StaticResponseService, StaticResponse } from '../services/StaticResponseService.js';
+import { Logger } from '../utils/logger.js';
+import { getStatusMessage } from './statusHelpers.js';
 
 const logger = new Logger('ResolveRoutes');
 const autoMagnetService = new AutoMagnetService();

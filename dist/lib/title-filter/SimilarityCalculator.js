@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.SimilarityCalculator = void 0;
-const logger_1 = require("../../utils/logger");
-const ImdbScraperService_1 = require("../../services/ImdbScraperService");
-const TechnicalWords_1 = require("./TechnicalWords");
+const logger_js_1 = require("../../utils/logger.js");
+const ImdbScraperService_js_1 = require("../../services/ImdbScraperService.js");
+const TechnicalWords_js_1 = require("./TechnicalWords.js");
 class SimilarityCalculator {
     static getInstance() {
         if (!SimilarityCalculator.instance) {
@@ -15,8 +15,8 @@ class SimilarityCalculator {
         this.tmdbCache = new Map();
         this.cacheTTL = 5 * 60 * 1000;
         this.VERSAO = '23.6.1';
-        this.logger = new logger_1.Logger('SimilarityCalculator');
-        this.tmdbScraper = useTmdbScraper ? ImdbScraperService_1.ImdbScraperService.getInstance() : null;
+        this.logger = new logger_js_1.Logger('SimilarityCalculator');
+        this.tmdbScraper = useTmdbScraper ? ImdbScraperService_js_1.ImdbScraperService.getInstance() : null;
         this.confusingSeries = [
             { original: 'american horror story', derivative: 'american horror stories', minSimilarity: 0.85 },
             { original: 'stranger things', derivative: 'stranger things stories', minSimilarity: 0.85 }
@@ -364,9 +364,9 @@ class SimilarityCalculator {
             }
         }
         clean = clean.replace(/[\/\.\-_:]/g, ' ');
-        TechnicalWords_1.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term))
+        TechnicalWords_js_1.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term))
             clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
-        TechnicalWords_1.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
+        TechnicalWords_js_1.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
         clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
         clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
         clean = clean.replace(/\s+/g, ' ').trim();

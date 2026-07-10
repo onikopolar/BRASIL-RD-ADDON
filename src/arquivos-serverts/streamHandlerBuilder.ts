@@ -1,7 +1,7 @@
 import { addonBuilder, getRouter } from 'stremio-addon-sdk';
-import { StreamHandler } from '../services/StreamHandler';
-import { Logger } from '../utils/logger';
-import { StreamRequest } from '../types';
+import { StreamHandler } from '../services/StreamHandler.js';
+import { Logger } from '../utils/logger.js';
+import { StreamRequest } from '../types/index.js';
 
 const logger = new Logger('StreamHandlerBuilder');
 

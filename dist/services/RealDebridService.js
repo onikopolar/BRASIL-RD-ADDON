@@ -5,10 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorboxService = void 0;
 const axios_1 = __importDefault(require("axios"));
-const index_1 = require("../config/index");
-const logger_1 = require("../utils/logger");
-const StaticResponseService_1 = require("./StaticResponseService");
-const StreamStatusException_1 = require("./StreamStatusException");
+const index_js_1 = require("../config/index.js");
+const logger_js_1 = require("../utils/logger.js");
+const StaticResponseService_js_1 = require("./StaticResponseService.js");
+const StreamStatusException_js_1 = require("./StreamStatusException.js");
 class TorboxService {
     constructor(baseUrl) {
         this.maxRetries = 3;
@@ -17,8 +17,8 @@ class TorboxService {
             '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
             '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
         ];
-        this.logger = new logger_1.Logger('TorboxService');
-        this.staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
+        this.logger = new logger_js_1.Logger('TorboxService');
+        this.staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
     }
     setStaticResponseBaseUrl(baseUrl) {
         this.staticResponseService.setBaseUrl(baseUrl);
@@ -28,8 +28,8 @@ class TorboxService {
             throw new Error('Torbox API Key is required');
         }
         const client = axios_1.default.create({
-            baseURL: index_1.config.torbox.baseUrl,
-            timeout: index_1.config.torbox.timeout || 30000,
+            baseURL: index_js_1.config.torbox.baseUrl,
+            timeout: index_js_1.config.torbox.timeout || 30000,
             headers: {
                 'Authorization': `Bearer ${apiKey}`,
                 'Content-Type': 'application/json'
@@ -40,7 +40,7 @@ class TorboxService {
             const status = error.response?.status;
             const errorMessage = errorData?.detail || errorData?.error || error.message;
             if (status === 503) {
-                throw new StreamStatusException_1.StreamStatusException(StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD, 'error', undefined, 'Torbox indisponível no momento');
+                throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.FAILED_DOWNLOAD, 'error', undefined, 'Torbox indisponível no momento');
             }
             if (status === 401 || status === 403) {
                 throw new Error('Torbox authentication failed: Invalid or expired API token');
@@ -66,7 +66,7 @@ class TorboxService {
             throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             this.logger.error('Falha ao adicionar magnet ao Torbox', {
                 error: error instanceof Error ? error.message : 'Erro',
@@ -92,7 +92,7 @@ class TorboxService {
             throw new Error('Torrent não encontrado no Torbox');
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             this.logger.error('Falha ao obter info do torrent', { torrentId });
             throw error;
@@ -111,19 +111,19 @@ class TorboxService {
             const info = await this.getTorrentInfo(torrentId, apiKey);
             const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
             if (staticResponse) {
-                throw new StreamStatusException_1.StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
+                throw new StreamStatusException_js_1.StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
             }
             if (!this.isReadyStatus(info.download_state)) {
-                throw new StreamStatusException_1.StreamStatusException(StaticResponseService_1.StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
+                throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
             }
             const file = (info.files || []).find(f => f.id === fileId);
             if (!file) {
-                throw new StreamStatusException_1.StreamStatusException(StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, info.download_state, undefined, 'Arquivo não encontrado');
+                throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.FAILED_UNEXPECTED, info.download_state, undefined, 'Arquivo não encontrado');
             }
             return this.buildStreamPermalink(torrentId, fileId, apiKey);
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             this.logger.error('Falha ao obter stream para arquivo', { torrentId, fileId });
             return null;
@@ -135,10 +135,10 @@ class TorboxService {
             const info = await this.getTorrentInfo(torrentId, apiKey);
             const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
             if (staticResponse) {
-                throw new StreamStatusException_1.StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
+                throw new StreamStatusException_js_1.StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
             }
             if (!this.isReadyStatus(info.download_state)) {
-                throw new StreamStatusException_1.StreamStatusException(StaticResponseService_1.StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
+                throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
             }
             const files = info.files || [];
             let bestFile = null;
@@ -159,12 +159,12 @@ class TorboxService {
                 }
             }
             if (!bestFile) {
-                throw new StreamStatusException_1.StreamStatusException(StaticResponseService_1.StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
+                throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
             }
             return this.buildStreamPermalink(torrentId, bestFile.id, apiKey);
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             this.logger.error('Falha ao obter stream', { torrentId });
             return null;
@@ -183,7 +183,7 @@ class TorboxService {
             return { url: null, status: info.download_state, progress: Math.round(info.progress * 100) };
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException) {
+            if (error instanceof StreamStatusException_js_1.StreamStatusException) {
                 return { url: null, status: 'downloading', staticResponse: error.staticResponse, progress: error.progress };
             }
             return { url: null, status: 'error' };
@@ -203,7 +203,7 @@ class TorboxService {
             return t || null;
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             this.logger.error('Falha ao buscar torrent existente', { magnetHash });
             return null;
@@ -223,7 +223,7 @@ class TorboxService {
             return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
         }
         catch (error) {
-            if (error instanceof StreamStatusException_1.StreamStatusException)
+            if (error instanceof StreamStatusException_js_1.StreamStatusException)
                 throw error;
             return { added: false, ready: false, status: 'error' };
         }
@@ -241,7 +241,7 @@ class TorboxService {
             }
             catch (error) {
                 lastError = error;
-                if (error instanceof StreamStatusException_1.StreamStatusException)
+                if (error instanceof StreamStatusException_js_1.StreamStatusException)
                     throw error;
                 if (this.isRetryableError(error) && attempt < this.maxRetries) {
                     const delay = this.baseDelay * Math.pow(2, attempt - 1);

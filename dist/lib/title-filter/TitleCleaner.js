@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TitleCleaner = void 0;
-const logger_1 = require("../../utils/logger");
+const logger_js_1 = require("../../utils/logger.js");
 class TitleCleaner {
     static getInstance() {
         if (!TitleCleaner.instance) {
@@ -12,7 +12,7 @@ class TitleCleaner {
     constructor() {
         this.cleanTitleCache = new Map();
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
-        this.logger = new logger_1.Logger('TitleCleaner');
+        this.logger = new logger_js_1.Logger('TitleCleaner');
         this.logger.debug('TitleCleaner ready');
     }
     cleanupOldCaches() {

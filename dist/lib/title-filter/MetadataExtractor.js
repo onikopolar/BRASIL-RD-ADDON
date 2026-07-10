@@ -1,7 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetadataExtractor = void 0;
-const logger_1 = require("../../utils/logger");
+const logger_js_1 = require("../../utils/logger.js");
 class MetadataExtractor {
     static getInstance() {
         if (!MetadataExtractor.instance) {
@@ -51,7 +51,7 @@ class MetadataExtractor {
             { pattern: /\b(720p|hd|high definition)\b/i, quality: '720p' },
             { pattern: /\b(480p|sd|standard definition)\b/i, quality: 'SD' },
         ];
-        this.logger = new logger_1.Logger('MetadataExtractor');
+        this.logger = new logger_js_1.Logger('MetadataExtractor');
         this.logger.debug('MetadataExtractor ready');
     }
     extractSeriesMetadata(torrentTitle) {

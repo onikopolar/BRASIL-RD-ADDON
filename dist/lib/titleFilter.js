@@ -1,9 +1,9 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TitleFilter = void 0;
-const logger_1 = require("../utils/logger");
-const ImdbScraperService_1 = require("../services/ImdbScraperService");
-const title_filter_1 = require("./title-filter");
+const logger_js_1 = require("../utils/logger.js");
+const ImdbScraperService_js_1 = require("../services/ImdbScraperService.js");
+const index_js_1 = require("./title-filter/index.js");
 class TitleFilter {
     static getInstance() {
         if (!TitleFilter.instance) {
@@ -17,13 +17,13 @@ class TitleFilter {
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
         this.VERSION = '2.6.1';
         this.cleanupCounter = 0;
-        this.logger = new logger_1.Logger('TitleFilter');
-        this.imdbScraper = ImdbScraperService_1.ImdbScraperService.getInstance();
-        this.titleCleaner = title_filter_1.TitleCleaner.getInstance();
-        this.languageDetector = title_filter_1.LanguageDetector.getInstance();
-        this.similarityCalculator = title_filter_1.SimilarityCalculator.getInstance();
-        this.metadataExtractor = title_filter_1.MetadataExtractor.getInstance();
-        this.cacheManager = title_filter_1.CacheManager.getInstance();
+        this.logger = new logger_js_1.Logger('TitleFilter');
+        this.imdbScraper = ImdbScraperService_js_1.ImdbScraperService.getInstance();
+        this.titleCleaner = index_js_1.TitleCleaner.getInstance();
+        this.languageDetector = index_js_1.LanguageDetector.getInstance();
+        this.similarityCalculator = index_js_1.SimilarityCalculator.getInstance();
+        this.metadataExtractor = index_js_1.MetadataExtractor.getInstance();
+        this.cacheManager = index_js_1.CacheManager.getInstance();
     }
     cleanupOldCaches() {
         this.cacheManager.cleanupOldCaches(this.IMDB_CACHE_TTL, this.DEDUP_CACHE_TTL, this.TITLE_CACHE_TTL);

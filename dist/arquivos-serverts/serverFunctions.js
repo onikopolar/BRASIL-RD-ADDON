@@ -8,8 +8,8 @@ exports.logServerStart = logServerStart;
 exports.createServer = createServer;
 const https_1 = __importDefault(require("https"));
 const fs_1 = __importDefault(require("fs"));
-const logger_1 = require("../utils/logger");
-const logger = new logger_1.Logger('Server');
+const logger_js_1 = require("../utils/logger.js");
+const logger = new logger_js_1.Logger('Server');
 function getSSLOptions() {
     try {
         const privateKeyPath = process.env.SSL_PRIVATE_KEY;

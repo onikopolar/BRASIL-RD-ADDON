@@ -1,4 +1,4 @@
-import { Logger } from '../../utils/logger';
+import { Logger } from '../../utils/logger.js';
 import { 
   TECHNICAL_WORDS,
   INTERNATIONAL_RELEASE_GROUPS,
@@ -7,7 +7,7 @@ import {
   containsInternationalIndicators,
   containsBrazilianIndicators,
   isTechnicalWord
-} from '../../lib/title-filter/TechnicalWords';
+} from '../../lib/title-filter/TechnicalWords.js';
 
 export class LanguageDetector {
   private readonly logger: Logger;

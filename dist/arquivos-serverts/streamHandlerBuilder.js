@@ -2,13 +2,13 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.getStremioRouter = exports.createStremioBuilder = void 0;
 const stremio_addon_sdk_1 = require("stremio-addon-sdk");
-const StreamHandler_1 = require("../services/StreamHandler");
-const logger_1 = require("../utils/logger");
-const logger = new logger_1.Logger('StreamHandlerBuilder');
+const StreamHandler_js_1 = require("../services/StreamHandler.js");
+const logger_js_1 = require("../utils/logger.js");
+const logger = new logger_js_1.Logger('StreamHandlerBuilder');
 const createStremioBuilder = (manifest) => {
     const builder = new stremio_addon_sdk_1.addonBuilder(manifest);
     builder.defineStreamHandler(async (args) => {
-        const sdkLogger = new logger_1.Logger('SDK-STREAM');
+        const sdkLogger = new logger_js_1.Logger('SDK-STREAM');
         sdkLogger.info('═══════════════════════════════════════', {});
         sdkLogger.info(' STREMIO SDK chamou defineStreamHandler', {
             type: args.type,
@@ -89,7 +89,7 @@ const createStremioBuilder = (manifest) => {
             }
         };
         try {
-            const streamHandler = StreamHandler_1.StreamHandler.getInstance();
+            const streamHandler = StreamHandler_js_1.StreamHandler.getInstance();
             const result = await streamHandler.handleStreamRequest(streamRequest);
             sdkLogger.info(' SDK STREAM HANDLER retornou', {
                 totalStreams: result.streams?.length || 0,

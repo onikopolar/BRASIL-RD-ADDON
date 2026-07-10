@@ -1,13 +1,13 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.sessionManager = exports.SessionManager = void 0;
-const logger_1 = require("./logger");
+const logger_js_1 = require("./logger.js");
 class SessionManager {
     constructor() {
         this.sessions = new Map();
         this.sessionCookieName = 'brasilrd_session';
         this.sessionMaxAge = 30 * 24 * 60 * 60 * 1000;
-        this.logger = new logger_1.Logger('SessionManager');
+        this.logger = new logger_js_1.Logger('SessionManager');
         this.logger.info('SessionManager initialized');
     }
     getOrCreateSession(req, apiKey) {

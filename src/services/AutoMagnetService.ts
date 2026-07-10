@@ -1,9 +1,9 @@
-import { getTorrent, createTorrent, createFile, File } from '../lib/repository';
-import { TorboxService } from './RealDebridService';
-import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService';
-import { Logger } from '../utils/logger';
-import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../lib/titleFilter';
-import { QualityDetector } from '../lib/qualityDetector';
+import { getTorrent, createTorrent, createFile, File } from '../lib/repository.js';
+import { TorboxService } from './RealDebridService.js';
+import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
+import { Logger } from '../utils/logger.js';
+import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../lib/titleFilter.js';
+import { QualityDetector } from '../lib/qualityDetector.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();

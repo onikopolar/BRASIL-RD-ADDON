@@ -1,4 +1,4 @@
-import { ImdbTitles } from '../../services/ImdbScraperService';
+import { ImdbTitles } from '../../services/ImdbScraperService.js';
 
 export interface SeriesMetadata {
   season?: number;

@@ -1,6 +1,6 @@
 import axios from 'axios';
-import { TorrentResult, TorrentIndexerResult } from './torrentTypes';
-import { QualityDetector } from '../../lib/qualityDetector';
+import { TorrentResult, TorrentIndexerResult } from './torrentTypes.js';
+import { QualityDetector } from '../../lib/qualityDetector.js';
 
 export class TorrentIndexerService {
     private readonly baseUrl = 'https://torrent-indexer.darklyn.org';

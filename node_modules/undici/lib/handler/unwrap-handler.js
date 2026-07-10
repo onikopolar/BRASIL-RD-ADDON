@@ -13,6 +13,9 @@ class UnwrapController {
 
   [kResume] = null
 
+  rawHeaders = null
+  rawTrailers = null
+
   constructor (abort) {
     this.#abort = abort
   }
@@ -67,12 +70,18 @@ module.exports = class UnwrapHandler {
     this.#handler.onRequestStart?.(this.#controller, context)
   }
 
+  onResponseStarted () {
+    return this.#handler.onResponseStarted?.()
+  }
+
   onUpgrade (statusCode, rawHeaders, socket) {
+    this.#controller.rawHeaders = rawHeaders
     this.#handler.onRequestUpgrade?.(this.#controller, statusCode, parseHeaders(rawHeaders), socket)
   }
 
   onHeaders (statusCode, rawHeaders, resume, statusMessage) {
     this.#controller[kResume] = resume
+    this.#controller.rawHeaders = rawHeaders
     this.#handler.onResponseStart?.(this.#controller, statusCode, parseHeaders(rawHeaders), statusMessage)
     return !this.#controller.paused
   }
@@ -83,6 +92,7 @@ module.exports = class UnwrapHandler {
   }
 
   onComplete (rawTrailers) {
+    this.#controller.rawTrailers = rawTrailers
     this.#handler.onResponseEnd?.(this.#controller, parseHeaders(rawTrailers))
   }
 

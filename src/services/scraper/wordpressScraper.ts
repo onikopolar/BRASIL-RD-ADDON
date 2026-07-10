@@ -4,10 +4,10 @@ import * as tunnel from 'tunnel';
 import dns from 'dns';
 import https from 'https';
 import tls from 'tls';
-import { Logger } from '../../utils/logger';
-import { TorrentResult } from './torrentTypes';
-import { QualityDetector } from '../../lib/qualityDetector';
-import { allowedQualities } from './scraperConfigs';
+import { Logger } from '../../utils/logger.js';
+import { TorrentResult } from './torrentTypes.js';
+import { QualityDetector } from '../../lib/qualityDetector.js';
+import { allowedQualities } from './scraperConfigs.js';
 
 const logger = new Logger('WordPressScraper');
 

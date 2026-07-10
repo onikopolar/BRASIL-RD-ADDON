@@ -1,5 +1,5 @@
 import { Request, Response, NextFunction } from 'express';
-import { Logger } from '../utils/logger';
+import { Logger } from '../utils/logger.js';
 import crypto from 'crypto';
 
 const logger = new Logger('ULTRA-DEBUG');

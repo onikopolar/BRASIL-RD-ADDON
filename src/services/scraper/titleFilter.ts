@@ -1,4 +1,4 @@
-import { TorrentResult } from './torrentTypes';
+import { TorrentResult } from './torrentTypes.js';
 
 export class TitleFilter {
     private readonly promotionalKeywords = [

@@ -1,6 +1,6 @@
-import { Logger } from '../utils/logger';
-import { CuratedMagnet, StreamRequest } from '../types/index';
-import { EpisodeMatcher } from '../lib/episodeMatcher';
+import { Logger } from '../utils/logger.js';
+import { CuratedMagnet, StreamRequest } from '../types/index.js';
+import { EpisodeMatcher } from '../lib/episodeMatcher.js';
 
 export class CuratedMagnetService {
   private magnets: Map<string, CuratedMagnet[]> = new Map();

@@ -38,12 +38,28 @@ const SessionCache = class WeakSessionCache {
       return
     }
 
+    if (this._sessionCache.has(sessionKey)) {
+      this._sessionCache.delete(sessionKey)
+    } else if (this._sessionCache.size >= this._maxCachedSessions) {
+      for (const [key, ref] of this._sessionCache) {
+        if (ref.deref() === undefined) {
+          this._sessionCache.delete(key)
+          return
+        }
+      }
+
+      const oldest = this._sessionCache.keys().next()
+      if (!oldest.done) {
+        this._sessionCache.delete(oldest.value)
+      }
+    }
+
     this._sessionCache.set(sessionKey, new WeakRef(session))
     this._sessionRegistry.register(session, sessionKey)
   }
 }
 
-function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, session: customSession, ...opts }) {
+function buildConnector ({ allowH2, useH2c, maxCachedSessions, socketPath, timeout, session: customSession, ...opts }) {
   if (maxCachedSessions != null && (!Number.isInteger(maxCachedSessions) || maxCachedSessions < 0)) {
     throw new InvalidArgumentError('maxCachedSessions must be a positive integer or zero')
   }
@@ -96,6 +112,9 @@ function buildConnector ({ allowH2, maxCachedSessions, socketPath, timeout, sess
         port,
         host: hostname
       })
+      if (useH2c === true) {
+        socket.alpnProtocol = 'h2'
+      }
     }
 
     // Set TCP keep alive options on the socket here instead of in connect() for the case of assigning the socket

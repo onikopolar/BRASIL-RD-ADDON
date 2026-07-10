@@ -5,10 +5,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.metricsService = exports.MetricsService = void 0;
 const prom_client_1 = __importDefault(require("prom-client"));
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 class MetricsService {
     constructor() {
-        this.logger = new logger_1.Logger('MetricsService');
+        this.logger = new logger_js_1.Logger('MetricsService');
         this.register = new prom_client_1.default.Registry();
         this.isInitialized = false;
         prom_client_1.default.collectDefaultMetrics({ register: this.register });

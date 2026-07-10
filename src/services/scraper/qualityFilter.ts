@@ -1,4 +1,4 @@
-import { TorrentResult } from './torrentTypes';
+import { TorrentResult } from './torrentTypes.js';
 export class QualityFilter {
     private readonly allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
     

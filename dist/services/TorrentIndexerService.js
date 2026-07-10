@@ -4,7 +4,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorrentIndexerService = void 0;
-const logger_1 = require("../utils/logger");
+const logger_js_1 = require("../utils/logger.js");
 const axios_1 = __importDefault(require("axios"));
 class TorrentIndexerService {
     constructor() {
@@ -16,7 +16,7 @@ class TorrentIndexerService {
             'https://torrent-indexer.us-sc1.darklyn.org'
         ];
         this.currentMirrorIndex = 0;
-        this.logger = new logger_1.Logger('TorrentIndexer');
+        this.logger = new logger_js_1.Logger('TorrentIndexer');
         this.logger.debug('TorrentIndexer ready');
     }
     async searchTorrents(query, indexer = 'search', category, season, limit = 20) {
