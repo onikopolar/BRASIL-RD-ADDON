@@ -87,7 +87,7 @@ export class WordPressScraper {
       this.searchSite(site, query, type).then(r => {
         return r;
       }).catch(err => {
-        logger.warn(`❌ WP ${site.name} FALHOU`, { query: query.substring(0, 60), error: err.code || err.message });
+        logger.warn(` WP ${site.name} FALHOU`, { query: query.substring(0, 60), error: err.code || err.message });
         return [] as TorrentResult[];
       })
     );

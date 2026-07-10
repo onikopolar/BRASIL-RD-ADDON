@@ -12,27 +12,27 @@ const logger = new logger_1.Logger('StaticRoutes');
 function getIconForResponse(response) {
     switch (response) {
         case StaticResponseService_1.StaticResponse.DOWNLOADING:
-            return '⏳';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD:
-            return '❌';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_ACCESS:
-            return '🔑';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_RAR:
-            return '📦';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_TOO_BIG:
-            return '📏';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_OPENING:
-            return '🔧';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED:
-            return '⚠️';
+            return '';
         case StaticResponseService_1.StaticResponse.FAILED_INFRINGEMENT:
-            return '🚫';
+            return '';
         case StaticResponseService_1.StaticResponse.LIMITS_EXCEEDED:
-            return '⏱️';
+            return '';
         case StaticResponseService_1.StaticResponse.BLOCKED_ACCESS:
-            return '🚫';
+            return '';
         default:
-            return 'ℹ️';
+            return '';
     }
 }
 const videoFileMap = {

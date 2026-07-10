@@ -27,10 +27,12 @@ export class StreamFormatter {
     this.logger.debug('StreamFormatter ready');
   }
 
-  // Formato corrigido: Primeira linha = título completo do torrent (igual Torrentio RD)
-  // Segunda linha = nossos emojis originais
+  // Formato Torrentio-style com nossos emojis (identidade Brasil RD)
+  // Linha 1: titulo completo do torrent
+  // Linha 2: 🔗 seeds 💾 tamanho ⚙️ tracker (sem |, igual Torrentio)
+  // Linha 3: 🌐 idioma + metadados + ⏳/🚀
   private formatTitleCorreto(
-    torrentTitle: string, // Título COMPLETO do torrent (não modificado)
+    torrentTitle: string,
     seeds?: number,
     size?: string,
     language?: string,
@@ -38,74 +40,58 @@ export class StreamFormatter {
     metadata?: EnhancedSeriesMetadata,
     isDirect: boolean = false
   ): string {
-    // PRIMEIRA LINHA: Título completo do torrent (igual Torrentio RD faz)
-    // Mantém EXATAMENTE como o torrent se chama
+    // PRIMEIRA LINHA: Titulo completo do torrent
     let result = torrentTitle.trim();
     
-    // SEGUNDA LINHA: Nossos emojis originais (mantidos)
+    // SEGUNDA LINHA: seeds, tamanho, tracker (estilo Torrentio, sem |)
     let segundaLinha = '';
     
-    // 🔗 seeds (nosso emoji oficial)
+    // 🔗 seeds
     if (seeds !== undefined && seeds > 0) {
       segundaLinha += `🔗 ${seeds}`;
     } else {
       segundaLinha += `🔗 0`;
     }
     
-    // 💾 tamanho (nosso emoji oficial)
+    // 💾 tamanho
     if (size) {
-      segundaLinha += ` | 💾 ${size}`;
+      segundaLinha += ` 💾 ${size}`;
     }
     
-    // 🌐 idioma (nosso emoji oficial)
-    const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
-    segundaLinha += ` | 🌐 ${idiomaFormatado}`;
-    
-    // ⚙️ tracker (nosso emoji oficial)
+    // ⚙️ tracker
     if (tracker) {
-      segundaLinha += ` | ⚙️ ${tracker}`;
+      segundaLinha += ` ⚙️ ${tracker}`;
     }
     
-    // Adiciona segunda linha com \n
     if (segundaLinha) {
       result += '\n' + segundaLinha;
     }
     
-    // TERCEIRA LINHA: Metadados especiais (máximo 3 emojis, nossos originais)
-    let terceiraLinha = '';
-    const emojisMetadados: string[] = [];
+    // TERCEIRA LINHA: 🌐 idioma + metadados + status (estilo Torrentio)
+    const terceiraParts: string[] = [];
     
+    // 🌐 idioma na terceira linha (como Torrentio poe bandeiras)
+    const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
+    terceiraParts.push(`🌐 ${idiomaFormatado}`);
+    
+    // Metadados
     if (metadata) {
-      if (metadata.isCompleteSeason) {
-        emojisMetadados.push('📦'); // Pacote completo
-      }
-      if (metadata.isPackage) {
-        emojisMetadados.push('🎬'); // Pacote de episódios
-      }
-      if (metadata.hasMultiEpisode) {
-        emojisMetadados.push('👥'); // Múltiplos episódios
-      }
-      if (metadata.source && metadata.source !== 'unknown') {
-        emojisMetadados.push('🎞️'); // Fonte (BluRay, WEB-DL, etc)
-      }
-      if (metadata.codec && metadata.codec !== 'unknown') {
-        emojisMetadados.push('🔧'); // Codec (H264, H265, etc)
-      }
+      if (metadata.isCompleteSeason) terceiraParts.push('📦');
+      if (metadata.isPackage) terceiraParts.push('🎬');
+      if (metadata.hasMultiEpisode) terceiraParts.push('👥');
+      if (metadata.source && metadata.source !== 'unknown') terceiraParts.push('🎞️');
+      if (metadata.codec && metadata.codec !== 'unknown') terceiraParts.push('🔧');
     }
     
+    // Status (⏳ lazy ou 🚀 direto)
     if (isDirect) {
-      emojisMetadados.push('🚀'); // Stream direto do Real-Debrid
+      terceiraParts.push('🚀');
     } else {
-      emojisMetadados.push('⏳'); // Stream lazy (aguardando)
+      terceiraParts.push('⏳');
     }
     
-    // Limita a 3 emojis como fazemos normalmente
-    const emojisLimitados = emojisMetadados.slice(0, 3);
-    terceiraLinha = emojisLimitados.join(' ');
-    
-    // Adiciona terceira linha com \n
-    if (terceiraLinha) {
-      result += '\n' + terceiraLinha;
+    if (terceiraParts.length > 0) {
+      result += '\n' + terceiraParts.join(' ');
     }
     
     return result;
@@ -217,6 +203,7 @@ export class StreamFormatter {
 
     // Stream no formato Stremio
     const stream: Stream = {
+      name: `Brasil RD\n${qualidade}`,
       title: tituloFinal, // Título com 2-3 linhas e \n
       infoHash: extractHashFromMagnet(linkDireto) || undefined,
       fileIdx: fileIdx !== undefined ? fileIdx : 0,
@@ -316,6 +303,7 @@ export class StreamFormatter {
 
     // Stream lazy resolve — infoHash só se NÃO tiver URL (evita P2P no Stremio Web)
     const stream: Stream = {
+      name: `Brasil RD\n${qualidade}`,
       title: tituloFinal,
       fileIdx: fileIdx !== undefined ? fileIdx : 0
     };
@@ -644,6 +632,7 @@ export class StreamFormatter {
   ordenarStreamsPorQualidade(streams: Stream[]): Stream[] {
     const prioridadeQualidade: Record<string, number> = {
       '2160p': 100,
+      '4K': 100,
       '1080p': 80,
       '720p': 60,
       'HD': 40,
@@ -651,30 +640,53 @@ export class StreamFormatter {
     };
 
     return streams.sort((a, b) => {
-      const scoreA = this.calcularScoreQualidade(a.title || '');
-      const scoreB = this.calcularScoreQualidade(b.title || '');
+      // Usa streamQuality do behaviorHints (qualidade correta de cada stream individual)
+      const scoreA = this.calcularScoreQualidade(a);
+      const scoreB = this.calcularScoreQualidade(b);
       
       if (scoreB !== scoreA) {
-        return scoreB - scoreA;
+        return scoreB - scoreA;  // Maior score primeiro
       }
+      
+      // Mesma qualidade: ordena por seeds (extrai da 2a linha do titulo)
+      const seedsA = this.extrairSeedsDoTitulo(a.title);
+      const seedsB = this.extrairSeedsDoTitulo(b.title);
+      if (seedsB !== seedsA) return seedsB - seedsA;
       
       return (a.title || '').localeCompare(b.title || '');
     });
   }
 
-  // Calcula score de qualidade
-  private calcularScoreQualidade(nome: string | undefined): number {
-    if (!nome) return 0;
-    
-    const qualidade = this.qualityDetector.extractBestQuality(nome);
+  // Extrai seeds da linha 2 do titulo (formato: "🔗 42 ...")
+  private extrairSeedsDoTitulo(title?: string): number {
+    if (!title) return 0;
+    const lines = title.split('\n');
+    if (lines.length >= 2) {
+      const match = lines[1].match(/🔗\s*(\d+)/);
+      if (match) return parseInt(match[1]);
+    }
+    return 0;
+  }
+
+  // Calcula score de qualidade usando behaviorHints.streamQuality (mais preciso)
+  private calcularScoreQualidade(stream: Stream): number {
     const prioridadeQualidade: Record<string, number> = {
       '2160p': 100,
+      '4K': 100,
       '1080p': 80,
       '720p': 60,
       'HD': 40,
       'SD': 20
     };
     
+    // Priority 1: behaviorHints.streamQuality (setado corretamente por stream)
+    const bhQuality = stream.behaviorHints?.streamQuality;
+    if (bhQuality && prioridadeQualidade[bhQuality] !== undefined) {
+      return prioridadeQualidade[bhQuality];
+    }
+    
+    // Fallback: extrai do titulo
+    const qualidade = this.qualityDetector.extractBestQuality(stream.title || '');
     return prioridadeQualidade[qualidade] || 0;
   }
 
@@ -752,14 +764,14 @@ export class StreamFormatter {
   // Informações do formatter atualizado
   getStats() {
     return {
-      versao: '2.0.0',
-      feature: 'Formato de título corrigido igual Torrentio RD',
-      linha1: 'Título COMPLETO do torrent (igual Torrentio RD)',
-      linha2: '🔗 seeds | 💾 tamanho | 🌐 idioma | ⚙️ tracker (nossos emojis)',
-      linha3: '📦 🎬 👥 🎞️ 🔧 🚀 ⏳ (máximo 3 emojis)',
-      emojis_originais: '🔗 💾 🌐 ⚙️ 📦 🎬 👥 🎞️ 🔧 🚀 ⏳',
-      compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%',
-      correcao: 'Título agora usa formato igual Torrentio RD'
+      versao: '2.1.0',
+      feature: 'Formato Torrentio-style com identidade Brasil RD',
+      linha1: 'Titulo completo do torrent',
+      linha2: '🔗 seeds 💾 tamanho ⚙️ tracker (sem |, estilo Torrentio)',
+      linha3: '🌐 idioma + metadados + ⏳/🚀 status',
+      name: 'Brasil RD\\n{qualidade} (como Torrentio)',
+      emojis_originais: '🔗 💾 ⚙️ 🌐 ⏳ 🚀',
+      compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%'
     };
   }
 }

@@ -126,11 +126,12 @@ class StaticResponseService {
     }
     createInformativeStream(response, requestId) {
         const info = this.getResponseInfo(response);
+        const absoluteUrl = info.url.startsWith('http') ? info.url : this.baseUrl + info.url;
         return {
             title: info.title,
             name: `Brasil RD - ${info.name}`,
             description: `${info.description}${requestId ? `\nID: ${requestId}` : ''}`,
-            url: info.url,
+            url: absoluteUrl,
             behaviorHints: {
                 notWebReady: false
             }
@@ -138,6 +139,7 @@ class StaticResponseService {
     }
     createInformativeStreamWithStatus(response, rdStatus, progress, requestId) {
         const info = this.getResponseInfo(response);
+        const absoluteUrl = info.url.startsWith('http') ? info.url : this.baseUrl + info.url;
         let description = info.description;
         if (rdStatus)
             description += `\nStatus Torbox: ${rdStatus}`;
@@ -149,7 +151,7 @@ class StaticResponseService {
             title: info.title,
             name: `Brasil RD - ${info.name}`,
             description: description,
-            url: info.url,
+            url: absoluteUrl,
             behaviorHints: {
                 notWebReady: false
             }

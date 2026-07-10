@@ -118,7 +118,7 @@ export class TitleTranslator {
     
     // Se conseguimos traduzir TUDO com o dicionário, retorna
     if (dictionaryTranslation && this.isFullyTranslated(normalizedTitle, dictionaryTranslation)) {
-      this.logger.debug('✅ Tradução completa via dicionário', {
+      this.logger.debug(' Tradução completa via dicionário', {
         original: normalizedTitle.substring(0, 60),
         translated: dictionaryTranslation.substring(0, 60)
       });
@@ -149,7 +149,7 @@ export class TitleTranslator {
       if (translatedText && translatedText.length > 0) {
         const googleTranslation = this.cleanTranslatedText(translatedText);
         
-        this.logger.debug('🌐 Tradução via Google Translate', {
+        this.logger.debug(' Tradução via Google Translate', {
           original: normalizedTitle.substring(0, 60),
           google: googleTranslation.substring(0, 60)
         });
@@ -325,7 +325,7 @@ export class TitleTranslator {
     const value = english.toLowerCase().trim();
     this.knownTranslations.set(key, value);
     
-    this.logger.debug('➕ Tradução adicionada ao dicionário', {
+    this.logger.debug(' Tradução adicionada ao dicionário', {
       portuguese: key,
       english: value
     });

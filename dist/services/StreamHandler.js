@@ -17,8 +17,7 @@ const StaticResponseService_1 = require("./StaticResponseService");
 const StreamStatusException_1 = require("./StreamStatusException");
 class StreamHandler {
     constructor(baseUrl) {
-        this.scrapingCache = new Map();
-        this.scrapingCacheTTL = 6 * 60 * 60 * 1000;
+        this.inFlightScraping = new Set();
         this.stats = {
             totalRequests: 0,
             servedFromDatabase: 0,
@@ -69,7 +68,9 @@ class StreamHandler {
                     quality = qualityMatch[1].toLowerCase();
                 }
             }
-            const uniqueKey = infoHash ? `${infoHash}_${quality}` : (stream.title || `stream_${Math.random()}`);
+            const uniqueKey = infoHash
+                ? `${infoHash}_${quality}`
+                : `${stream.title || 'stream'}_${quality}_${stream.fileIdx ?? 0}`;
             if (seenCombinations.has(uniqueKey)) {
                 this.stats.duplicatesRemoved++;
                 continue;
@@ -102,9 +103,9 @@ class StreamHandler {
                 return { streams: informativeStream ? [informativeStream] : [] };
             }
             try {
+                this.markScrapingStart(request);
                 const scrapedStreams = await this.performScrapingThroughCatalog(request);
                 const deduped = this.deduplicateStreamsByInfoHash(scrapedStreams);
-                await this.updateScrapingCache(request, deduped.length > 0);
                 if (deduped.length > 0)
                     this.stats.servedFromScraping++;
                 return { streams: deduped };
@@ -116,6 +117,9 @@ class StreamHandler {
                     return { streams: [informativeStream] };
                 }
                 throw error;
+            }
+            finally {
+                this.markScrapingEnd(request);
             }
         }
         catch (error) {
@@ -326,29 +330,21 @@ class StreamHandler {
     async shouldAttemptScraping(request) {
         const imdbId = this.extractImdbIdFromRequest(request);
         const requestKey = `${imdbId || request.id}:${request.type}`;
-        const cacheEntry = this.scrapingCache.get(requestKey);
-        if (!cacheEntry)
-            return true;
-        const timeSinceLastAttempt = Date.now() - cacheEntry.lastAttempt.getTime();
-        if (!cacheEntry.successful && timeSinceLastAttempt < this.scrapingCacheTTL / 2)
+        if (this.inFlightScraping.has(requestKey)) {
+            this.logger.debug(' Scraping já em andamento, aguardando...', { requestKey });
             return false;
-        if (timeSinceLastAttempt < 5 * 60 * 1000)
-            return false;
+        }
         return true;
     }
-    async updateScrapingCache(request, successful) {
+    markScrapingStart(request) {
         const imdbId = this.extractImdbIdFromRequest(request);
         const requestKey = `${imdbId || request.id}:${request.type}`;
-        this.scrapingCache.set(requestKey, { lastAttempt: new Date(), successful });
-        this.cleanupOldCache();
+        this.inFlightScraping.add(requestKey);
     }
-    cleanupOldCache() {
-        const now = Date.now();
-        for (const [key, entry] of this.scrapingCache.entries()) {
-            if (now - entry.lastAttempt.getTime() > this.scrapingCacheTTL * 2) {
-                this.scrapingCache.delete(key);
-            }
-        }
+    markScrapingEnd(request) {
+        const imdbId = this.extractImdbIdFromRequest(request);
+        const requestKey = `${imdbId || request.id}:${request.type}`;
+        this.inFlightScraping.delete(requestKey);
     }
     extractImdbIdFromRequest(request) {
         if (request.imdbId)
@@ -368,7 +364,7 @@ class StreamHandler {
     }
     clearCache() {
         this.cacheService.clear();
-        this.scrapingCache.clear();
+        this.inFlightScraping.clear();
         this.catalogProvider.clearTmdbCache();
     }
     invalidateRelatedCache(imdbId) {
@@ -388,7 +384,7 @@ class StreamHandler {
             servedFromScraping: this.stats.servedFromScraping,
             servedInformativeStreams: this.stats.servedInformativeStreams,
             duplicatesRemoved: this.stats.duplicatesRemoved,
-            scrapingCacheSize: this.scrapingCache.size
+            inFlightScraping: this.inFlightScraping.size
         };
     }
 }

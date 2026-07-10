@@ -51,14 +51,14 @@ export class TitleCleaner {
     // Verifica cache (igual ao original)
     const cachedEntry = this.cleanTitleCache.get(cacheKey);
     if (cachedEntry) {
-      this.logger.debug('📦 Clean title em cache', {
+      this.logger.debug(' Clean title em cache', {
         original: fullTitle.substring(0, 60),
         cleaned: cachedEntry.cleaned.substring(0, 60)
       });
       return cachedEntry.cleaned;
     }
 
-    this.logger.debug('🧹 Extraindo título limpo', { original: fullTitle });
+    this.logger.debug(' Extraindo título limpo', { original: fullTitle });
 
     // === PASSO 1: Limpeza básica (IGUAL AO ORIGINAL) ===
     let cleaned = fullTitle
@@ -136,7 +136,7 @@ export class TitleCleaner {
     
     if (cleanedWords.length < originalWords.length * 0.3 && cleanedWords.length > 0) {
       // Fallback: limpeza ultra leve (somente o mais óbvio)
-      this.logger.debug('⚠️ Limpeza muito agressiva, usando fallback', {
+      this.logger.debug(' Limpeza muito agressiva, usando fallback', {
         original: fullTitle.substring(0, 80),
         cleaned: cleaned.substring(0, 80),
         originalWords: originalWords.length,
@@ -158,7 +158,7 @@ export class TitleCleaner {
         timestamp: Date.now()
       });
       
-      this.logger.debug('✅ Título limpo extraído (fallback)', {
+      this.logger.debug(' Título limpo extraído (fallback)', {
         original: fullTitle.substring(0, 80),
         cleaned: fallback.substring(0, 80),
         hasSeasonInfo: hasSeasonInfo
@@ -167,7 +167,7 @@ export class TitleCleaner {
       return fallback;
     }
 
-    this.logger.debug('✅ Título limpo extraído', {
+    this.logger.debug(' Título limpo extraído', {
       original: fullTitle.substring(0, 80),
       cleaned: cleaned.substring(0, 80),
       hasSeasonInfo: hasSeasonInfo
@@ -222,7 +222,7 @@ export class TitleCleaner {
         const nextWord = titleWords[imdbWords.length];
         const isSequence = /^\d+$/.test(nextWord);
         if (isSequence) {
-          this.logger.debug('⚠️ Detectada sequência numerada', {
+          this.logger.debug(' Detectada sequência numerada', {
             title: torrentTitle,
             imdbTitle: imdbTitle,
             nextWord: nextWord
@@ -253,7 +253,7 @@ export class TitleCleaner {
    */
   clearCache(): void {
     this.cleanTitleCache.clear();
-    this.logger.info('🗑️ Cache do TitleCleaner limpo');
+    this.logger.info(' Cache do TitleCleaner limpo');
   }
 
   /**

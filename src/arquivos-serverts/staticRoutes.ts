@@ -9,27 +9,27 @@ const logger = new Logger('StaticRoutes');
 function getIconForResponse(response: StaticResponse): string {
     switch (response) {
         case StaticResponse.DOWNLOADING:
-            return '⏳';
+            return '';
         case StaticResponse.FAILED_DOWNLOAD:
-            return '❌';
+            return '';
         case StaticResponse.FAILED_ACCESS:
-            return '🔑';
+            return '';
         case StaticResponse.FAILED_RAR:
-            return '📦';
+            return '';
         case StaticResponse.FAILED_TOO_BIG:
-            return '📏';
+            return '';
         case StaticResponse.FAILED_OPENING:
-            return '🔧';
+            return '';
         case StaticResponse.FAILED_UNEXPECTED:
-            return '⚠️';
+            return '';
         case StaticResponse.FAILED_INFRINGEMENT:
-            return '🚫';
+            return '';
         case StaticResponse.LIMITS_EXCEEDED:
-            return '⏱️';
+            return '';
         case StaticResponse.BLOCKED_ACCESS:
-            return '🚫';
+            return '';
         default:
-            return 'ℹ️';
+            return '';
     }
 }
 
@@ -141,7 +141,7 @@ export const setupStaticRoutes = (app: express.Application) => {
                 video: {
                     available: !!videoFileName,
                     filename: videoFileName,
-                    url: responseInfo.url, // ✅ URL absoluta do StaticResponseService
+                    url: responseInfo.url, //  URL absoluta do StaticResponseService
                     local_path: videoFileName ? path.join(videosPath, videoFileName) : null,
                     direct_url: `/static/video/${responseName}` // URL relativa para redirecionamento
                 },
@@ -359,7 +359,7 @@ export const setupStaticRoutes = (app: express.Application) => {
                     video: {
                         available: !!videoFileName,
                         filename: videoFileName,
-                        url: info.url, // ✅ URL absoluta do StaticResponseService
+                        url: info.url, //  URL absoluta do StaticResponseService
                         direct_url: `/static/video/${response}`
                     },
                     endpoints: {

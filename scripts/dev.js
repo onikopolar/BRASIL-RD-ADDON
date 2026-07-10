@@ -58,7 +58,7 @@ if (TOKEN) {
     });
   }, 2000);
 } else {
-  console.log('💡 Dica: Adicione CLOUDFLARED_TOKEN no .env para ativar o túnel.');
+  console.log(' Dica: Adicione CLOUDFLARED_TOKEN no .env para ativar o túnel.');
   console.log('');
 }
 

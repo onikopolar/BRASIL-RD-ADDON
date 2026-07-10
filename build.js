@@ -118,7 +118,17 @@ function buildTypeScript() {
 
     console.log('\nBuild concluído com sucesso!');
     console.log('Arquivos compilados disponíveis em: dist/');
-    console.log('Vídeos disponíveis em: /videos/');
+    
+    // Copiar pasta videos para dist/ (vídeos informativos: baixando, erro, etc)
+    const srcVideos = path.join(__dirname, 'src', 'videos');
+    const distVideos = path.join(__dirname, 'dist', 'videos');
+    if (fs.existsSync(srcVideos)) {
+        fsExtra.copySync(srcVideos, distVideos, { overwrite: true });
+        const videoFiles = fs.readdirSync(srcVideos).filter(f => f.endsWith('.mp4'));
+        console.log(`Videos copiados para dist/videos/: ${videoFiles.length} arquivos`);
+    } else {
+        console.log('Aviso: pasta src/videos/ nao encontrada');
+    }
 }
 
 buildTypeScript();

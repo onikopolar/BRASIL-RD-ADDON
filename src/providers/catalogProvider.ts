@@ -11,6 +11,7 @@ import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService';
 import { TitleFilter } from '../lib/titleFilter';
 import { AutoMagnetService } from '../services/AutoMagnetService';
 import { metricsService } from '../services/MetricsService';
+import { TorrentioService, TorrentioResult } from '../services/TorrentioService';
 
 interface ScrapedTorrent {
   title: string;
@@ -40,14 +41,15 @@ export class CatalogProvider {
   private readonly imdbScraper: ImdbScraperService;
   private readonly titleFilter: TitleFilter;
   private readonly autoMagnetService: AutoMagnetService;
+  private readonly torrentioService: TorrentioService;
 
   private readonly streamCache = new Map<string, { streams: Stream[]; timestamp: number; isEmpty: boolean }>();
   private readonly STREAM_TTL = 24 * 60 * 60 * 1000;
   private readonly STREAM_EMPTY_TTL = 10 * 1000; // Ajustado para 10s (evita falso vazio)
   private readonly CACHE_KEY_SEPARATOR = '|';
 
-  private scrapingCache = new Map<string, { lastAttempt: Date; successful: boolean }>();
-  private readonly scrapingCacheTTL = 6 * 60 * 60 * 1000;
+  // Apenas evita scraping simultâneo para o mesmo conteúdo (sem cooldown)
+  private readonly inFlightScraping: Set<string> = new Set();
 
   private tmdbDataCache = new Map<string, { data: TmdbSearchData; timestamp: number }>();
   private readonly TMDB_CACHE_TTL = 5 * 60 * 1000;
@@ -61,6 +63,7 @@ export class CatalogProvider {
     this.imdbScraper = ImdbScraperService.getInstance();
     this.titleFilter = TitleFilter.getInstance();
     this.autoMagnetService = new AutoMagnetService();
+    this.torrentioService = new TorrentioService();
   }
 
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
@@ -118,13 +121,17 @@ export class CatalogProvider {
         return [];
       }
 
-      this.logger.debug(`🚀 Iniciando scraping para ${request.imdbId || request.id}`);
-      const scraped = await this.performIntelligentScraping(request, season, episode);
-      const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
-      scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
-      await this.updateScrapingCache(request, scrapedUnique.length > 0);
-      this.saveToCache(cacheKey, scrapedUnique);
-      return scrapedUnique;
+      this.markScrapingStart(request);
+      try {
+        this.logger.debug(` Iniciando scraping para ${request.imdbId || request.id}`);
+        const scraped = await this.performIntelligentScraping(request, season, episode);
+        const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
+        scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+        this.saveToCache(cacheKey, scrapedUnique);
+        return scrapedUnique;
+      } finally {
+        this.markScrapingEnd(request);
+      }
     }
 
     this.saveToCache(cacheKey, uniqueStreams);
@@ -167,13 +174,52 @@ export class CatalogProvider {
       (await this.getTmdbSearchData(imdbId!, finalSeason)).imdbTitles
     );
 
+    //  FALLBACK: Se scrapers não acharam nada válido, tenta Torrentio
+    if (valid.length === 0) {
+      this.logger.debug(' Scrapers não acharam torrents PT-BR, tentando Torrentio como fallback...', { imdbId });
+      const torrentioResults = await this.torrentioService.search(
+        type as 'movie' | 'series', imdbId!, finalSeason, finalEpisode
+      );
+
+      if (torrentioResults.length > 0) {
+        this.logger.info(` Torrentio fallback: ${torrentioResults.length} torrents PT-BR encontrados`, { imdbId });
+
+        // Converter TorrentioResult para ScrapedTorrent (formato interno)
+        const scrapedFromTorrentio: ScrapedTorrent[] = torrentioResults.map(tr => ({
+          title: tr.title,
+          magnet: tr.magnet,
+          seeders: tr.seeders,
+          leechers: 0,
+          size: tr.size,
+          quality: tr.quality,
+          provider: `Torrentio/${tr.provider}`,
+          language: tr.language,
+          type: tr.type
+        }));
+
+        // Validar com TitleFilter (revalidar pra segurança)
+        const torrentioValidation = await this.filterAndValidateTorrents(
+          scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode,
+          (await this.getTmdbSearchData(imdbId!, finalSeason)).imdbTitles
+        );
+
+        if (torrentioValidation.valid.length > 0) {
+          valid.push(...torrentioValidation.valid);
+        } else {
+          this.logger.debug(' Torrentio: resultados rejeitados pelo TitleFilter', { imdbId, count: torrentioResults.length });
+        }
+      } else {
+        this.logger.debug(' Torrentio: nenhum resultado PT-BR', { imdbId });
+      }
+    }
+
     if (valid.length === 0) return [];
 
     // Fallback para packs
     const hasExactEpisode = finalEpisode !== undefined && valid.some(t =>
       /s\d+e\d+/i.test(t.title) && this.extractEpisodeNumber(t.title) === finalEpisode
     );
-    const hasCompletePack = valid.some(t => /temporada completa|season pack|pack/i.test(t.title));
+    const hasCompletePack = valid.some(t => /\b(?:temporada completa|season pack|complete pack)\b/i.test(t.title));
 
     let episodeToSave: number | null | undefined = finalEpisode;
     if (!hasExactEpisode && hasCompletePack && finalSeason) {
@@ -211,8 +257,8 @@ export class CatalogProvider {
         if (matchResult.matches) {
           valid.push(torrent);
         } else {
-          // se falhou mas é pack, aceita como fallback
-          if (season && /temporada completa|season pack|pack/i.test(torrent.title)) {
+          // se falhou mas é pack completo, aceita como fallback
+          if (season && /\b(?:temporada completa|season pack|complete pack)\b/i.test(torrent.title)) {
             valid.push(torrent);
           } else {
             invalid.push(torrent);
@@ -306,22 +352,29 @@ export class CatalogProvider {
     }
   }
 
+  /**
+   * Permite scraping SEMPRE, a menos que já exista um scraping em andamento
+   * para o mesmo conteúdo (evita requisições simultâneas duplicadas).
+   */
   private async shouldAttemptScraping(request: any): Promise<boolean> {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
-    const entry = this.scrapingCache.get(key);
-    if (!entry) return true;
-    const elapsed = Date.now() - entry.lastAttempt.getTime();
-    if (!entry.successful && elapsed < this.scrapingCacheTTL / 2) return false;
-    if (elapsed < 5 * 60 * 1000) return false;
+    if (this.inFlightScraping.has(key)) {
+      this.logger.debug(' Scraping já em andamento, aguardando...', { key });
+      return false;
+    }
     return true;
   }
 
-  private async updateScrapingCache(request: any, successful: boolean): Promise<void> {
+  /** Marca início do scraping para evitar duplicação simultânea */
+  private markScrapingStart(request: any): void {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
-    this.scrapingCache.set(key, { lastAttempt: new Date(), successful });
-    for (const [k, v] of this.scrapingCache.entries()) {
-      if (Date.now() - v.lastAttempt.getTime() > this.scrapingCacheTTL * 2) this.scrapingCache.delete(k);
-    }
+    this.inFlightScraping.add(key);
+  }
+
+  /** Marca fim do scraping (sucesso ou falha) */
+  private markScrapingEnd(request: any): void {
+    const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
+    this.inFlightScraping.delete(key);
   }
 
   private async getStreamsFromDatabase(request: any, season?: number, episode?: number): Promise<Stream[]> {
@@ -468,7 +521,7 @@ export class CatalogProvider {
   getStats() {
     return {
       cacheSize: this.streamCache.size,
-      scrapingCacheSize: this.scrapingCache.size,
+      inFlightScraping: this.inFlightScraping.size,
       tmdbCacheSize: this.tmdbDataCache.size
     };
   }

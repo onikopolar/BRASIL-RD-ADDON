@@ -2,7 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../utils/logger';
 import crypto from 'crypto';
 
-const logger = new Logger('🔍ULTRA-DEBUG');
+const logger = new Logger('ULTRA-DEBUG');
 
 // Máscara valores sensíveis (API keys, tokens)
 function maskSensitive(obj: any, depth: number = 0): any {
@@ -81,7 +81,7 @@ export const ultraDebugMiddleware = () => {
                 body: req.body && Object.keys(req.body).length > 0 ? maskSensitive(req.body) : undefined,
             };
 
-            logger.info(`▶️ REQUEST #${requestId} ${req.method} ${req.path}`, entryLog);
+            logger.info(`▶ REQUEST #${requestId} ${req.method} ${req.path}`, entryLog);
         }
 
         // ═══════════════════════════════════════════
@@ -97,7 +97,7 @@ export const ultraDebugMiddleware = () => {
             if (!shouldSkip) {
                 const bodyStr = JSON.stringify(body);
                 const truncated = bodyStr.length > 500 ? bodyStr.substring(0, 500) + `... [TRUNCATED ${bodyStr.length} chars]` : bodyStr;
-                logger.info(`◀️ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) JSON`, {
+                logger.info(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) JSON`, {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
@@ -120,7 +120,7 @@ export const ultraDebugMiddleware = () => {
             if (!shouldSkip) {
                 const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
                 const truncated = bodyStr.length > 300 ? bodyStr.substring(0, 300) + `... [${bodyStr.length} chars]` : bodyStr;
-                logger.info(`◀️ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) SEND`, {
+                logger.info(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) SEND`, {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
@@ -144,7 +144,7 @@ export const ultraDebugMiddleware = () => {
                 redirectUrl = url;
             }
             if (!shouldSkip) {
-                logger.info(`◀️ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${redirectUrl}`, {
+                logger.info(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${redirectUrl}`, {
                     requestId,
                     statusCode,
                     responseTimeMs: responseTime,
@@ -167,10 +167,10 @@ export const ultraDebugMiddleware = () => {
 // ═══════════════════════════════════════════
 export const manifestDebugMiddleware = () => {
     return (req: any, res: any, next: NextFunction) => {
-        const loggerManifest = new Logger('📋MANIFEST-DEBUG');
+        const loggerManifest = new Logger('MANIFEST-DEBUG');
 
         loggerManifest.info('═══════════════════════════════════════', {});
-        loggerManifest.info('🏷️ MANIFEST SOLICITADO', {
+        loggerManifest.info(' MANIFEST SOLICITADO', {
             requestId: req._ultraDebugId,
             method: req.method,
             fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
@@ -186,8 +186,8 @@ export const manifestDebugMiddleware = () => {
             query: req.query,
             clientInfo: (req as any)._clientInfo,
         });
-        loggerManifest.info('📋 CONFIGURATION REQUIRED:', false);
-        loggerManifest.info('📋 COMPORTAMENTO: Addon será detectado automaticamente pelo Stremio Web (configurationRequired: false)');
+        loggerManifest.info(' CONFIGURATION REQUIRED:', false);
+        loggerManifest.info(' COMPORTAMENTO: Addon será detectado automaticamente pelo Stremio Web (configurationRequired: false)');
         loggerManifest.info('═══════════════════════════════════════', {});
 
         next();
@@ -199,10 +199,10 @@ export const manifestDebugMiddleware = () => {
 // ═══════════════════════════════════════════
 export const configureDebugMiddleware = () => {
     return (req: any, res: any, next: NextFunction) => {
-        const loggerCfg = new Logger('⚙️CONFIGURE-DEBUG');
+        const loggerCfg = new Logger('CONFIGURE-DEBUG');
 
         loggerCfg.info('═══════════════════════════════════════', {});
-        loggerCfg.info('⚙️ PÁGINA DE CONFIGURAÇÃO SOLICITADA', {
+        loggerCfg.info(' PÁGINA DE CONFIGURAÇÃO SOLICITADA', {
             requestId: req._ultraDebugId,
             method: req.method,
             fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
@@ -213,8 +213,8 @@ export const configureDebugMiddleware = () => {
                 'user-agent': req.headers['user-agent']?.substring(0, 100),
             },
         });
-        loggerCfg.info('📝 A página configure gera link stremio:// com a API Key do usuário');
-        loggerCfg.info('📝 Sistema Torrentio-style: torbox=API_KEY na URL');
+        loggerCfg.info(' A página configure gera link stremio:// com a API Key do usuário');
+        loggerCfg.info(' Sistema Torrentio-style: torbox=API_KEY na URL');
         loggerCfg.info('═══════════════════════════════════════', {});
 
         next();

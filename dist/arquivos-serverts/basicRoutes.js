@@ -41,9 +41,9 @@ const setupBasicRoutes = (app, manifest) => {
         });
     });
     app.post('/api/auth', async (req, res) => {
-        const authLogger = new logger_1.Logger('🔐AUTH');
+        const authLogger = new logger_1.Logger('AUTH');
         authLogger.info('═══════════════════════════════════════', {});
-        authLogger.info('🔐 SOLICITAÇÃO DE AUTENTICAÇÃO WEB', {
+        authLogger.info(' SOLICITAÇÃO DE AUTENTICAÇÃO WEB', {
             requestId: req._ultraDebugId,
             ip: req.ip,
             hasBody: !!req.body,
@@ -55,7 +55,7 @@ const setupBasicRoutes = (app, manifest) => {
         try {
             const { apiKey } = req.body;
             if (!apiKey || typeof apiKey !== 'string') {
-                authLogger.warn('❌ AUTENTICAÇÃO REJEITADA - API Key inválida', {
+                authLogger.warn(' AUTENTICAÇÃO REJEITADA - API Key inválida', {
                     requestId: req._ultraDebugId,
                     ip: req.ip,
                     apiKeyPresent: !!apiKey,
@@ -67,19 +67,19 @@ const setupBasicRoutes = (app, manifest) => {
                     error: 'API Key é obrigatória e deve ser uma string'
                 });
             }
-            authLogger.info('🔑 API Key recebida para validação', {
+            authLogger.info(' API Key recebida para validação', {
                 requestId: req._ultraDebugId,
                 apiKeyLength: apiKey.length,
                 apiKeyPreview: apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4),
             });
-            authLogger.debug('🌐 Enviando validação para api.torbox.app...', {
+            authLogger.debug(' Enviando validação para api.torbox.app...', {
                 requestId: req._ultraDebugId,
                 endpoint: 'https://api.torbox.app/v1/api/user/me',
             });
             const tbResponse = await fetch('https://api.torbox.app/v1/api/user/me', {
                 headers: { 'Authorization': `Bearer ${apiKey}` }
             });
-            authLogger.info('📥 Resposta do Torbox recebida', {
+            authLogger.info(' Resposta do Torbox recebida', {
                 requestId: req._ultraDebugId,
                 status: tbResponse.status,
                 ok: tbResponse.ok,
@@ -92,7 +92,7 @@ const setupBasicRoutes = (app, manifest) => {
                     torboxErrorBody = torboxErrorBody.substring(0, 200);
                 }
                 catch { }
-                authLogger.warn('❌ AUTENTICAÇÃO REJEITADA PELO TORBOX', {
+                authLogger.warn(' AUTENTICAÇÃO REJEITADA PELO TORBOX', {
                     requestId: req._ultraDebugId,
                     ip: req.ip,
                     torboxStatus: tbResponse.status,
@@ -110,7 +110,7 @@ const setupBasicRoutes = (app, manifest) => {
             }
             const timestamp = Date.now();
             const token = Buffer.from(`${timestamp}:${apiKey.substring(0, 10)}:${req.ip}`).toString('base64');
-            authLogger.info('✅ AUTENTICAÇÃO WEB BEM-SUCEDIDA!', {
+            authLogger.info(' AUTENTICAÇÃO WEB BEM-SUCEDIDA!', {
                 requestId: req._ultraDebugId,
                 ip: req.ip,
                 tokenPreview: token.substring(0, 20) + '...',
@@ -127,7 +127,7 @@ const setupBasicRoutes = (app, manifest) => {
         }
         catch (error) {
             const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
-            authLogger.error('💥 ERRO FATAL na autenticação Web', {
+            authLogger.error(' ERRO FATAL na autenticação Web', {
                 requestId: req._ultraDebugId,
                 ip: req.ip,
                 error: errorMsg,

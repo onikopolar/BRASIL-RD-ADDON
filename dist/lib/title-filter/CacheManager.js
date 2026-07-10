@@ -46,7 +46,7 @@ class CacheManager {
             }
         }
         if (cleanedCount > 0 && Math.random() < 0.01) {
-            this.logger.debug('🗑️ Cache limpo (limpeza automática)', {
+            this.logger.debug(' Cache limpo (limpeza automática)', {
                 itensRemovidos: cleanedCount,
                 cacheIMDB: this.imdbTitleCache.size,
                 cacheProcessados: this.processedTimestamps.size
@@ -73,7 +73,7 @@ class CacheManager {
             if (seen.has(key)) {
                 duplicatesRemoved++;
                 if (logger) {
-                    logger.debug('🗑️ Torrent duplicado removido', {
+                    logger.debug(' Torrent duplicado removido', {
                         title: title.substring(0, 60),
                         infoHash: infoHash?.substring(0, 8) || 'N/A'
                     });
@@ -84,7 +84,7 @@ class CacheManager {
             uniqueTorrents.push(torrent);
         }
         if (duplicatesRemoved > 0 && logger) {
-            logger.info('✅ Deduplicação concluída', {
+            logger.info(' Deduplicação concluída', {
                 totalAntes: torrents.length,
                 totalDepois: uniqueTorrents.length,
                 duplicatasRemovidas: duplicatesRemoved
@@ -118,7 +118,7 @@ class CacheManager {
         const cacheKey = `clean:${fullTitle}`;
         const cached = this.cleanTitleCache.get(cacheKey);
         if (cached) {
-            this.logger.debug('📦 Clean title em cache', {
+            this.logger.debug(' Clean title em cache', {
                 original: fullTitle.substring(0, 60),
                 cleaned: cached.substring(0, 60)
             });
@@ -134,9 +134,9 @@ class CacheManager {
         const titleCacheKey = torrentTitle.toLowerCase();
         const cached = this.portugueseCheckCache.get(titleCacheKey);
         if (cached !== undefined) {
-            this.logger.debug('📦 Resultado em cache', {
+            this.logger.debug(' Resultado em cache', {
                 title: torrentTitle.substring(0, 60),
-                result: cached ? '✅ Português' : '❌ Não português'
+                result: cached ? ' Português' : ' Não português'
             });
             return cached;
         }
@@ -179,7 +179,7 @@ class CacheManager {
         this.processedTimestamps.clear();
         this.cleanTitleCache.clear();
         this.portugueseCheckCache.clear();
-        this.logger.info('🗑️ Todos os caches do CacheManager foram limpos');
+        this.logger.info(' Todos os caches do CacheManager foram limpos');
     }
     getCacheStats() {
         const stats = {
@@ -189,11 +189,11 @@ class CacheManager {
             cleanTitleCacheSize: this.cleanTitleCache.size,
             portugueseCheckCacheSize: this.portugueseCheckCache.size
         };
-        this.logger.debug('📊 Estatísticas de cache', stats);
+        this.logger.debug(' Estatísticas de cache', stats);
         return stats;
     }
     setupProcessedCache(cleanupChance = 0.01) {
-        this.logger.debug('⚙️ Cache de processamento configurado', {
+        this.logger.debug(' Cache de processamento configurado', {
             cleanupChance,
             ttlIMDB: `${this.IMDB_CACHE_TTL / 60000}min`,
             ttlProcessados: `${this.TITLE_CACHE_TTL / 60000}min`
@@ -222,7 +222,7 @@ class CacheManager {
             this.cleanTitleCache.size +
             this.portugueseCheckCache.size;
         const removed = initialTotal - finalTotal;
-        this.logger.info('🧹 Limpeza forçada de caches', {
+        this.logger.info(' Limpeza forçada de caches', {
             removidos: removed,
             restantes: finalTotal
         });
@@ -283,7 +283,7 @@ class CacheManager {
                 break;
         }
         if (removed) {
-            this.logger.debug('🔧 Entrada removida manualmente do cache', { cacheType, key });
+            this.logger.debug(' Entrada removida manualmente do cache', { cacheType, key });
         }
         return removed;
     }

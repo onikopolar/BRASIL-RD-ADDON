@@ -9,9 +9,9 @@ export const createStremioBuilder = (manifest: any) => {
     const builder = new addonBuilder(manifest as any);
 
     builder.defineStreamHandler(async (args: any) => {
-        const sdkLogger = new Logger('🎬SDK-STREAM');
+        const sdkLogger = new Logger('SDK-STREAM');
         sdkLogger.info('═══════════════════════════════════════', {});
-        sdkLogger.info('📥 STREMIO SDK chamou defineStreamHandler', {
+        sdkLogger.info(' STREMIO SDK chamou defineStreamHandler', {
             type: args.type,
             id: args.id,
             title: args.title,
@@ -62,7 +62,7 @@ export const createStremioBuilder = (manifest: any) => {
             apiKeySource = 'extra.rd_key';
         }
 
-        sdkLogger.info('🔑 API Key source', {
+        sdkLogger.info(' API Key source', {
             source: apiKeySource,
             found: !!apiKey,
             apiKeyLength: apiKey?.length || 0,
@@ -70,7 +70,7 @@ export const createStremioBuilder = (manifest: any) => {
         });
 
         if (!apiKey) {
-            sdkLogger.warn('⚠️ NENHUMA API Key encontrada - retornando streams vazio', {
+            sdkLogger.warn(' NENHUMA API Key encontrada - retornando streams vazio', {
                 reason: 'Usuário pode não ter configurado a API Key no Stremio',
                 availableConfigKeys: args.config ? Object.keys(args.config) : [],
             });
@@ -93,7 +93,7 @@ export const createStremioBuilder = (manifest: any) => {
         try {
             const streamHandler = StreamHandler.getInstance();
             const result = await streamHandler.handleStreamRequest(streamRequest);
-            sdkLogger.info('✅ SDK STREAM HANDLER retornou', {
+            sdkLogger.info(' SDK STREAM HANDLER retornou', {
                 totalStreams: result.streams?.length || 0,
                 streamPreviews: result.streams?.slice(0, 3).map((s: any) => ({
                     title: s.title?.substring(0, 50),
@@ -102,7 +102,7 @@ export const createStremioBuilder = (manifest: any) => {
             });
             return result;
         } catch (error) {
-            sdkLogger.error('❌ ERRO FATAL no SDK StreamHandler', {
+            sdkLogger.error(' ERRO FATAL no SDK StreamHandler', {
                 error: error instanceof Error ? error.message : 'Erro desconhecido',
                 stack: error instanceof Error ? error.stack?.substring(0, 500) : undefined,
                 type: streamRequest.type,

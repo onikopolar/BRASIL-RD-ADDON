@@ -139,7 +139,7 @@ class TitleTranslator {
         const normalizedTitle = this.normalizeTitle(fullTitle);
         const dictionaryTranslation = this.translateWithDictionary(normalizedTitle);
         if (dictionaryTranslation && this.isFullyTranslated(normalizedTitle, dictionaryTranslation)) {
-            this.logger.debug('✅ Tradução completa via dicionário', {
+            this.logger.debug(' Tradução completa via dicionário', {
                 original: normalizedTitle.substring(0, 60),
                 translated: dictionaryTranslation.substring(0, 60)
             });
@@ -164,7 +164,7 @@ class TitleTranslator {
             const translatedText = $('.result-container').text().trim();
             if (translatedText && translatedText.length > 0) {
                 const googleTranslation = this.cleanTranslatedText(translatedText);
-                this.logger.debug('🌐 Tradução via Google Translate', {
+                this.logger.debug(' Tradução via Google Translate', {
                     original: normalizedTitle.substring(0, 60),
                     google: googleTranslation.substring(0, 60)
                 });
@@ -277,7 +277,7 @@ class TitleTranslator {
         const key = this.normalizeTitle(portuguese);
         const value = english.toLowerCase().trim();
         this.knownTranslations.set(key, value);
-        this.logger.debug('➕ Tradução adicionada ao dicionário', {
+        this.logger.debug(' Tradução adicionada ao dicionário', {
             portuguese: key,
             english: value
         });

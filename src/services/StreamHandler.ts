@@ -39,8 +39,8 @@ export class StreamHandler {
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
 
-  private readonly scrapingCache: Map<string, { lastAttempt: Date; successful: boolean }> = new Map();
-  private readonly scrapingCacheTTL = 6 * 60 * 60 * 1000; // 6 horas
+  // Apenas evita scraping simultâneo para o mesmo conteúdo (sem cooldown)
+  private readonly inFlightScraping: Set<string> = new Set();
 
   // Estatísticas globais
   private stats = {
@@ -110,7 +110,11 @@ export class StreamHandler {
         }
       }
 
-      const uniqueKey = infoHash ? `${infoHash}_${quality}` : (stream.title || `stream_${Math.random()}`);
+      // Usa infoHash + qualidade como chave. Se nao tem infoHash, usa titulo + qualidade
+      // (evita que streams 1080p e 720p do mesmo torrent sejam tratados como duplicatas)
+      const uniqueKey = infoHash
+        ? `${infoHash}_${quality}`
+        : `${stream.title || 'stream'}_${quality}_${stream.fileIdx ?? 0}`;
       if (seenCombinations.has(uniqueKey)) {
         this.stats.duplicatesRemoved++;
         continue;
@@ -151,9 +155,9 @@ export class StreamHandler {
       }
 
       try {
+        this.markScrapingStart(request);
         const scrapedStreams = await this.performScrapingThroughCatalog(request);
         const deduped = this.deduplicateStreamsByInfoHash(scrapedStreams);
-        await this.updateScrapingCache(request, deduped.length > 0);
         if (deduped.length > 0) this.stats.servedFromScraping++;
         return { streams: deduped };
       } catch (error) {
@@ -163,6 +167,8 @@ export class StreamHandler {
           return { streams: [informativeStream] };
         }
         throw error;
+      } finally {
+        this.markScrapingEnd(request);
       }
     } catch (error) {
       this.logger.error('Falha no processamento', {
@@ -410,32 +416,35 @@ export class StreamHandler {
     }
   }
 
+  /**
+   * Permite scraping SEMPRE, a menos que já exista um scraping em andamento
+   * para o mesmo conteúdo (evita requisições simultâneas duplicadas).
+   */
   private async shouldAttemptScraping(request: StreamRequest): Promise<boolean> {
     const imdbId = this.extractImdbIdFromRequest(request);
     const requestKey = `${imdbId || request.id}:${request.type}`;
-    const cacheEntry = this.scrapingCache.get(requestKey);
-    if (!cacheEntry) return true;
 
-    const timeSinceLastAttempt = Date.now() - cacheEntry.lastAttempt.getTime();
-    if (!cacheEntry.successful && timeSinceLastAttempt < this.scrapingCacheTTL / 2) return false;
-    if (timeSinceLastAttempt < 5 * 60 * 1000) return false;
+    // Se já tem scraping em andamento, não inicia outro
+    if (this.inFlightScraping.has(requestKey)) {
+      this.logger.debug(' Scraping já em andamento, aguardando...', { requestKey });
+      return false;
+    }
+
     return true;
   }
 
-  private async updateScrapingCache(request: StreamRequest, successful: boolean): Promise<void> {
+  /** Marca início do scraping para evitar duplicação simultânea */
+  private markScrapingStart(request: StreamRequest): void {
     const imdbId = this.extractImdbIdFromRequest(request);
     const requestKey = `${imdbId || request.id}:${request.type}`;
-    this.scrapingCache.set(requestKey, { lastAttempt: new Date(), successful });
-    this.cleanupOldCache();
+    this.inFlightScraping.add(requestKey);
   }
 
-  private cleanupOldCache(): void {
-    const now = Date.now();
-    for (const [key, entry] of this.scrapingCache.entries()) {
-      if (now - entry.lastAttempt.getTime() > this.scrapingCacheTTL * 2) {
-        this.scrapingCache.delete(key);
-      }
-    }
+  /** Marca fim do scraping (sucesso ou falha) */
+  private markScrapingEnd(request: StreamRequest): void {
+    const imdbId = this.extractImdbIdFromRequest(request);
+    const requestKey = `${imdbId || request.id}:${request.type}`;
+    this.inFlightScraping.delete(requestKey);
   }
 
   private extractImdbIdFromRequest(request: StreamRequest): string | null {
@@ -457,7 +466,7 @@ export class StreamHandler {
 
   public clearCache(): void {
     this.cacheService.clear();
-    this.scrapingCache.clear();
+    this.inFlightScraping.clear();
     this.catalogProvider.clearTmdbCache();
   }
 
@@ -478,7 +487,7 @@ export class StreamHandler {
       servedFromScraping: this.stats.servedFromScraping,
       servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
-      scrapingCacheSize: this.scrapingCache.size
+      inFlightScraping: this.inFlightScraping.size
     };
   }
 }

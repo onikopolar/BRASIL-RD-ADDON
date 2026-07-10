@@ -37,7 +37,7 @@ const TOKEN = process.env.CLOUDFLARED_TOKEN || CLOUDFLARED_TOKEN;
 // ── Inicia o servidor Node ──────────────────────────────────────────
 console.log('');
 console.log('═══════════════════════════════════════════════');
-console.log('  🚀 BRASIL RD ADDON - Modo Dev + Tunnel');
+console.log('   BRASIL RD ADDON - Modo Dev + Tunnel');
 console.log('═══════════════════════════════════════════════');
 console.log('');
 
@@ -74,7 +74,7 @@ serverProc.on('exit', (code) => {
 function startTunnel() {
   if (!TOKEN) {
     console.log('');
-    console.log('⚠️  CLOUDFLARED_TOKEN não encontrado no .env');
+    console.log('  CLOUDFLARED_TOKEN não encontrado no .env');
     console.log('   O servidor está rodando SEM o túnel Cloudflare.');
     console.log('   Adicione CLOUDFLARED_TOKEN=seu-token ao .env para ativar.');
     console.log('');
@@ -82,7 +82,7 @@ function startTunnel() {
   }
 
   console.log('');
-  console.log('🌍 Iniciando Cloudflare Tunnel...');
+  console.log(' Iniciando Cloudflare Tunnel...');
   console.log('');
 
   const cloudflaredCmd = process.platform === 'win32' ? 'cloudflared.exe' : 'cloudflared';
@@ -122,7 +122,7 @@ function startTunnel() {
 
 // Cleanup ao encerrar
 process.on('SIGINT', () => {
-  console.log('\n🛑 Encerrando...');
+  console.log('\n Encerrando...');
   serverProc.kill();
   process.exit(0);
 });

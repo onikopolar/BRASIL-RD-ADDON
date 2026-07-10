@@ -73,6 +73,13 @@ async function processMagnetWithTorbox(magnet, apiKey, season, episode, type = '
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+        if (/already queued|already exists|already added/i.test(errorMessage)) {
+            return {
+                success: true,
+                status: 'queued',
+                message: 'Torrent ja esta na fila do Torbox'
+            };
+        }
         return {
             success: false,
             status: 'error',
@@ -90,6 +97,9 @@ const setupResolveRoutes = (app) => {
         const season = req.query.season ? parseInt(req.query.season) : undefined;
         const episode = req.query.episode ? parseInt(req.query.episode) : undefined;
         const type = req.query.type || (season !== undefined ? 'series' : 'movie');
+        const protocol = req.get('x-forwarded-proto') || 'https';
+        const host = req.get('host') || 'localhost:7000';
+        const baseUrl = `${protocol}://${host}`;
         resolveLogger.info('═══════════════════════════════════════', {});
         resolveLogger.info('🔄 RESOLVE INICIADO', {
             requestId: req._ultraDebugId,
@@ -142,28 +152,26 @@ const setupResolveRoutes = (app) => {
                     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
                     return res.redirect(302, tbResult.streamLink);
                 }
-                if (['downloading', 'stalled', 'metaDL', 'queued'].some(s => tbResult.status?.toLowerCase().includes(s))) {
-                    const baseUrl = 'http://localhost:7000';
+                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'uploading', 'checking'];
+                const statusLower = tbResult.status?.toLowerCase() || '';
+                if (progressStatuses.some(s => statusLower.includes(s))) {
                     const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                     const response = staticResponseService.getResponseForTorboxStatus(tbResult.status) || StaticResponseService_1.StaticResponse.DOWNLOADING;
                     streamResponse = createStreamFromStaticResponse(staticResponseService, response, `resolve-${Date.now()}`, season, episode);
                     streamResponse.description += `\nStatus: ${tbResult.status}`;
                 }
-                else if (['error', 'dead', 'missingFiles'].some(s => tbResult.status?.toLowerCase().includes(s))) {
-                    const baseUrl = 'http://localhost:7000';
+                else if (['error', 'dead', 'missingfiles'].some(s => statusLower.includes(s))) {
                     const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                     streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_DOWNLOAD, `resolve-${Date.now()}`, season, episode);
                     streamResponse.description += `\nDetalhes: ${tbResult.message || tbResult.status}`;
                 }
                 else {
-                    const baseUrl = 'http://localhost:7000';
                     const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                     streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, `resolve-${Date.now()}`, season, episode);
                     streamResponse.description += `\nStatus desconhecido: ${tbResult.status}`;
                 }
             }
             else {
-                const baseUrl = 'http://localhost:7000';
                 const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                 const errorMessage = tbResult.message || 'Falha no Torbox';
                 let staticResponse = StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED;
@@ -190,7 +198,6 @@ const setupResolveRoutes = (app) => {
             }
         }
         catch (error) {
-            const baseUrl = 'http://localhost:7000';
             const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
             const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
             logger.error('Exceção inesperada', { error: errorMessage, infoHash });
@@ -198,7 +205,6 @@ const setupResolveRoutes = (app) => {
             streamResponse.description += `\nErro: ${errorMessage}`;
         }
         if (!streamResponse) {
-            const baseUrl = 'http://localhost:7000';
             const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, `resolve-fallback-${Date.now()}`, season, episode);
         }
@@ -209,6 +215,9 @@ const setupResolveRoutes = (app) => {
         const season = req.query.season ? parseInt(req.query.season) : undefined;
         const episode = req.query.episode ? parseInt(req.query.episode) : undefined;
         const type = req.query.type || (season !== undefined ? 'series' : 'movie');
+        const protocol = req.get('x-forwarded-proto') || 'https';
+        const host = req.get('host') || 'localhost:7000';
+        const baseUrl = `${protocol}://${host}`;
         let streamResponse = null;
         try {
             const magnet = Buffer.from(req.params.magnet, 'base64').toString();
@@ -221,7 +230,6 @@ const setupResolveRoutes = (app) => {
                     res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
                     return res.redirect(302, tbResult.streamLink);
                 }
-                const baseUrl = 'http://localhost:7000';
                 const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                 let staticResponse = StaticResponseService_1.StaticResponse.DOWNLOADING;
                 if (tbResult.status === 'error' || tbResult.status === 'dead')
@@ -230,7 +238,6 @@ const setupResolveRoutes = (app) => {
                 streamResponse.description += `\nStatus: ${tbResult.status}`;
             }
             else {
-                const baseUrl = 'http://localhost:7000';
                 const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
                 const errorMessage = tbResult.message || 'Falha no Torbox';
                 let staticResponse = StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED;
@@ -252,14 +259,12 @@ const setupResolveRoutes = (app) => {
             }
         }
         catch (error) {
-            const baseUrl = 'http://localhost:7000';
             const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
             const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, `resolve-${Date.now()}`, season, episode);
             streamResponse.description += `\nErro: ${errorMessage}`;
         }
         if (!streamResponse) {
-            const baseUrl = 'http://localhost:7000';
             const staticResponseService = new StaticResponseService_1.StaticResponseService(baseUrl);
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponseService_1.StaticResponse.FAILED_UNEXPECTED, `resolve-fallback-${Date.now()}`, season, episode);
         }

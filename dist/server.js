@@ -113,8 +113,8 @@ app.use((req, res, next) => {
     next();
 });
 app.get('/configure', (0, ultraDebug_1.configureDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_1.Logger('⚙️CONFIGURE');
-    ultraLogger.info('🔧 Servindo página de configuração HTML', {
+    const ultraLogger = new logger_1.Logger('CONFIGURE');
+    ultraLogger.info(' Servindo página de configuração HTML', {
         requestId: req._ultraDebugId,
         manifestVersion: manifest_1.manifest.version,
         manifestId: manifest_1.manifest.id,
@@ -126,9 +126,9 @@ app.get('/configure', (0, ultraDebug_1.configureDebugMiddleware)(), (req, res) =
     res.end((0, configureTemplate_1.configureTemplate)(manifest_1.manifest));
 });
 app.get('/torbox=:apiKey/manifest.json', rateLimit_1.torrentioRateLimiter, (0, ultraDebug_1.manifestDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_1.Logger('📋TORBOX-MANIFEST');
+    const ultraLogger = new logger_1.Logger('TORBOX-MANIFEST');
     const apiKey = req.params.apiKey;
-    ultraLogger.info('🔑 MANIFEST via TORBOX solicitado', {
+    ultraLogger.info(' MANIFEST via TORBOX solicitado', {
         requestId: req._ultraDebugId,
         apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
         apiKeyLength: apiKey?.length || 0,
@@ -143,9 +143,9 @@ app.get('/torbox=:apiKey/manifest.json', rateLimit_1.torrentioRateLimiter, (0, u
     res.json(manifest_1.manifest);
 });
 app.get('/realdebrid=:apiKey/manifest.json', rateLimit_1.torrentioRateLimiter, (0, ultraDebug_1.manifestDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_1.Logger('📋RD-MANIFEST');
+    const ultraLogger = new logger_1.Logger('RD-MANIFEST');
     const apiKey = req.params.apiKey;
-    ultraLogger.info('🔑 MANIFEST via REALDEBRID solicitado', {
+    ultraLogger.info(' MANIFEST via REALDEBRID solicitado', {
         requestId: req._ultraDebugId,
         apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
         apiKeyLength: apiKey?.length || 0,
@@ -157,12 +157,12 @@ app.get('/realdebrid=:apiKey/manifest.json', rateLimit_1.torrentioRateLimiter, (
     res.json(manifest_1.manifest);
 });
 app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_1.torrentioRateLimiter, async (req, res) => {
-    const ultraLogger = new logger_1.Logger('🎬STREAM-TORBOX');
+    const ultraLogger = new logger_1.Logger('STREAM-TORBOX');
     const { apiKey, type, id } = req.params;
     const decodedId = decodeURIComponent(id);
     const requestId = req._ultraDebugId || 'no-id';
     ultraLogger.info('═══════════════════════════════════════', {});
-    ultraLogger.info('🎬 STREAM SOLICITADO (Torbox route)', {
+    ultraLogger.info(' STREAM SOLICITADO (Torbox route)', {
         requestId,
         type,
         id: decodedId,
@@ -179,7 +179,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_1.torrentioRateLimite
     res.setHeader('Access-Control-Expose-Headers', 'Content-Type, Content-Length');
     try {
         if (!apiKey || apiKey.length < 10) {
-            ultraLogger.warn('⚠️ API Key inválida ou ausente para stream', {
+            ultraLogger.warn(' API Key inválida ou ausente para stream', {
                 requestId,
                 apiKeyLength: apiKey?.length || 0,
                 reason: !apiKey ? 'API Key ausente' : 'API Key muito curta (< 10 chars)',
@@ -188,6 +188,11 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_1.torrentioRateLimite
         }
         const { StreamHandler } = await Promise.resolve().then(() => __importStar(require('./services/StreamHandler')));
         const streamHandler = StreamHandler.getInstance();
+        const protocol = req.get('x-forwarded-proto') || 'https';
+        const host = req.get('host');
+        if (host) {
+            streamHandler.setStaticResponseBaseUrl(`${protocol}://${host}`);
+        }
         const streamRequest = {
             type: type,
             id: decodedId,
@@ -200,7 +205,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_1.torrentioRateLimite
             }
         };
         const result = await streamHandler.handleStreamRequest(streamRequest);
-        ultraLogger.info('✅ STREAM RESULT retornado', {
+        ultraLogger.info(' STREAM RESULT retornado', {
             requestId,
             totalStreams: result.streams?.length || 0,
             streamPreviews: result.streams?.slice(0, 5).map((s) => ({
@@ -230,7 +235,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_1.torrentioRateLimite
     }
     catch (error) {
         const errorMsg = error instanceof Error ? error.message : 'Erro desconhecido';
-        ultraLogger.error('❌ ERRO FATAL na rota Torrentio Stream', {
+        ultraLogger.error(' ERRO FATAL na rota Torrentio Stream', {
             requestId,
             error: errorMsg,
             stack: error instanceof Error ? error.stack?.substring(0, 500) : undefined,
@@ -251,7 +256,7 @@ app.use((req, res, next) => {
     const sdkPaths = ['/manifest.json', '/stream/', '/configure'];
     const isSdkPath = sdkPaths.some(p => req.path === p || req.path.startsWith(p));
     if (isSdkPath) {
-        sdkLogger.info('🔌 Rota caiu no Stremio SDK Router', {
+        sdkLogger.info(' Rota caiu no Stremio SDK Router', {
             requestId: req._ultraDebugId,
             method: req.method,
             path: req.path,
@@ -274,9 +279,9 @@ async function startServer() {
         const stremioRouter = (0, streamHandlerBuilder_1.getStremioRouter)(builder);
         app.use((req, res, next) => {
             if (req.path === '/manifest.json' || req.path === '/manifest') {
-                const manifestLogger = new logger_1.Logger('📋MANIFEST-SDK');
+                const manifestLogger = new logger_1.Logger('MANIFEST-SDK');
                 manifestLogger.info('═══════════════════════════════════════', {});
-                manifestLogger.info('📋 STREMIO PEDIU MANIFEST (via SDK router)', {
+                manifestLogger.info(' STREMIO PEDIU MANIFEST (via SDK router)', {
                     requestId: req._ultraDebugId,
                     method: req.method,
                     host: req.get('host'),
@@ -286,7 +291,7 @@ async function startServer() {
                     protocol: req.protocol,
                     fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
                 });
-                manifestLogger.info('📋 Respondendo com manifest:', {
+                manifestLogger.info(' Respondendo com manifest:', {
                     id: manifest_1.manifest.id,
                     version: manifest_1.manifest.version,
                     name: manifest_1.manifest.name,

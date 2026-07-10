@@ -28,45 +28,37 @@ class StreamFormatter {
             segundaLinha += `🔗 0`;
         }
         if (size) {
-            segundaLinha += ` | 💾 ${size}`;
+            segundaLinha += ` 💾 ${size}`;
         }
-        const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
-        segundaLinha += ` | 🌐 ${idiomaFormatado}`;
         if (tracker) {
-            segundaLinha += ` | ⚙️ ${tracker}`;
+            segundaLinha += ` ⚙️ ${tracker}`;
         }
         if (segundaLinha) {
             result += '\n' + segundaLinha;
         }
-        let terceiraLinha = '';
-        const emojisMetadados = [];
+        const terceiraParts = [];
+        const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
+        terceiraParts.push(`🌐 ${idiomaFormatado}`);
         if (metadata) {
-            if (metadata.isCompleteSeason) {
-                emojisMetadados.push('📦');
-            }
-            if (metadata.isPackage) {
-                emojisMetadados.push('🎬');
-            }
-            if (metadata.hasMultiEpisode) {
-                emojisMetadados.push('👥');
-            }
-            if (metadata.source && metadata.source !== 'unknown') {
-                emojisMetadados.push('🎞️');
-            }
-            if (metadata.codec && metadata.codec !== 'unknown') {
-                emojisMetadados.push('🔧');
-            }
+            if (metadata.isCompleteSeason)
+                terceiraParts.push('📦');
+            if (metadata.isPackage)
+                terceiraParts.push('🎬');
+            if (metadata.hasMultiEpisode)
+                terceiraParts.push('👥');
+            if (metadata.source && metadata.source !== 'unknown')
+                terceiraParts.push('🎞️');
+            if (metadata.codec && metadata.codec !== 'unknown')
+                terceiraParts.push('🔧');
         }
         if (isDirect) {
-            emojisMetadados.push('🚀');
+            terceiraParts.push('🚀');
         }
         else {
-            emojisMetadados.push('⏳');
+            terceiraParts.push('⏳');
         }
-        const emojisLimitados = emojisMetadados.slice(0, 3);
-        terceiraLinha = emojisLimitados.join(' ');
-        if (terceiraLinha) {
-            result += '\n' + terceiraLinha;
+        if (terceiraParts.length > 0) {
+            result += '\n' + terceiraParts.join(' ');
         }
         return result;
     }
@@ -140,6 +132,7 @@ class StreamFormatter {
         const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
         const tituloFinal = this.formatTitleCorreto(torrentTitle, seeds, tamanho, idiomaDaDescricao, 'Torbox', metadata, true);
         const stream = {
+            name: `Brasil RD\n${qualidade}`,
             title: tituloFinal,
             infoHash: (0, magnetHelper_1.extractHashFromMagnet)(linkDireto) || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0,
@@ -195,6 +188,7 @@ class StreamFormatter {
             });
         }
         const stream = {
+            name: `Brasil RD\n${qualidade}`,
             title: tituloFinal,
             fileIdx: fileIdx !== undefined ? fileIdx : 0
         };
@@ -407,31 +401,50 @@ class StreamFormatter {
     ordenarStreamsPorQualidade(streams) {
         const prioridadeQualidade = {
             '2160p': 100,
+            '4K': 100,
             '1080p': 80,
             '720p': 60,
             'HD': 40,
             'SD': 20
         };
         return streams.sort((a, b) => {
-            const scoreA = this.calcularScoreQualidade(a.title || '');
-            const scoreB = this.calcularScoreQualidade(b.title || '');
+            const scoreA = this.calcularScoreQualidade(a);
+            const scoreB = this.calcularScoreQualidade(b);
             if (scoreB !== scoreA) {
                 return scoreB - scoreA;
             }
+            const seedsA = this.extrairSeedsDoTitulo(a.title);
+            const seedsB = this.extrairSeedsDoTitulo(b.title);
+            if (seedsB !== seedsA)
+                return seedsB - seedsA;
             return (a.title || '').localeCompare(b.title || '');
         });
     }
-    calcularScoreQualidade(nome) {
-        if (!nome)
+    extrairSeedsDoTitulo(title) {
+        if (!title)
             return 0;
-        const qualidade = this.qualityDetector.extractBestQuality(nome);
+        const lines = title.split('\n');
+        if (lines.length >= 2) {
+            const match = lines[1].match(/🔗\s*(\d+)/);
+            if (match)
+                return parseInt(match[1]);
+        }
+        return 0;
+    }
+    calcularScoreQualidade(stream) {
         const prioridadeQualidade = {
             '2160p': 100,
+            '4K': 100,
             '1080p': 80,
             '720p': 60,
             'HD': 40,
             'SD': 20
         };
+        const bhQuality = stream.behaviorHints?.streamQuality;
+        if (bhQuality && prioridadeQualidade[bhQuality] !== undefined) {
+            return prioridadeQualidade[bhQuality];
+        }
+        const qualidade = this.qualityDetector.extractBestQuality(stream.title || '');
         return prioridadeQualidade[qualidade] || 0;
     }
     sanitizarNomeArquivo(nomeArquivo) {
@@ -453,14 +466,14 @@ class StreamFormatter {
     }
     getStats() {
         return {
-            versao: '2.0.0',
-            feature: 'Formato de título corrigido igual Torrentio RD',
-            linha1: 'Título COMPLETO do torrent (igual Torrentio RD)',
-            linha2: '🔗 seeds | 💾 tamanho | 🌐 idioma | ⚙️ tracker (nossos emojis)',
-            linha3: '📦 🎬 👥 🎞️ 🔧 🚀 ⏳ (máximo 3 emojis)',
-            emojis_originais: '🔗 💾 🌐 ⚙️ 📦 🎬 👥 🎞️ 🔧 🚀 ⏳',
-            compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%',
-            correcao: 'Título agora usa formato igual Torrentio RD'
+            versao: '2.1.0',
+            feature: 'Formato Torrentio-style com identidade Brasil RD',
+            linha1: 'Titulo completo do torrent',
+            linha2: '🔗 seeds 💾 tamanho ⚙️ tracker (sem |, estilo Torrentio)',
+            linha3: '🌐 idioma + metadados + ⏳/🚀 status',
+            name: 'Brasil RD\\n{qualidade} (como Torrentio)',
+            emojis_originais: '🔗 💾 ⚙️ 🌐 ⏳ 🚀',
+            compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%'
         };
     }
 }
