@@ -1,4 +1,3 @@
-// Força DNS público para bypass de bloqueios de operadora
 import dns from 'dns';
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
@@ -241,9 +240,7 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-// ═══════════════════════════════════════════
 // LOGGER para rotas do Stremio SDK
-// ═══════════════════════════════════════════
 app.use((req: any, res: any, next: any) => {
     const sdkLogger = new Logger('SDK-Router');
     // Só loga rotas que o SDK vai processar (manifest, stream, configure)
@@ -276,9 +273,7 @@ async function startServer() {
         const builder = createStremioBuilder(manifest);
         const stremioRouter = getStremioRouter(builder);
 
-        // ═══════════════════════════════════════════
         // INTERCEPTOR para /manifest.json do SDK
-        // ═══════════════════════════════════════════
         app.use((req: any, res: any, next: any) => {
             if (req.path === '/manifest.json' || req.path === '/manifest') {
                 const manifestLogger = new Logger('MANIFEST-SDK');

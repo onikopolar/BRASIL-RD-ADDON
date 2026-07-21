@@ -25,9 +25,7 @@ export class ApiKeyManager {
         });
     }
 
-    /**
-     * Registra uma sessão de usuário com sua API key
-     */
+     //Registra uma sessão de usuário com sua API key
     registerSession(sessionId: string, apiKey: string, addonUrl: string): void {
         const now = Date.now();
         
@@ -54,9 +52,7 @@ export class ApiKeyManager {
         }
     }
 
-    /**
-     * Obtém a API key para uma requisição específica
-     */
+    //Obtém a API key para uma requisição específica
     getApiKeyForRequest(args: any): string | null {
         const sessionId = this.extractSessionId(args);
         if (!sessionId) {
@@ -82,9 +78,7 @@ export class ApiKeyManager {
         return session.apiKey;
     }
 
-    /**
-     * Extrai session ID dos argumentos do Stremio
-     */
+     // Extrai session ID dos argumentos do Stremio
     private extractSessionId(args: any): string | null {
         // Método 1: Do addonUrl (se disponível)
         if (args.extra?.addonUrl) {

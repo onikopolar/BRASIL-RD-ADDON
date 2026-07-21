@@ -7,6 +7,8 @@ module.exports = {
       NODE_ENV: 'production'
     },
     autorestart: true,
+    watch: ['dist'],
+    watch_delay: 1000,
     max_restarts: 10,
     restart_delay: 5000,
     // Logs
