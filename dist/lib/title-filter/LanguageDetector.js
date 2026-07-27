@@ -106,6 +106,47 @@ class LanguageDetector {
         }
         return false;
     }
+    checkWithTmdb(torrentTitle, ptTitle, enTitle) {
+        if (!ptTitle || ptTitle === enTitle) {
+            return { isPortuguese: true, reason: 'TMDB sem título PT distinto (benefício da dúvida)' };
+        }
+        const normalize = (s) => s.toLowerCase()
+            .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+            .replace(/[^\w\s]/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .split(' ')
+            .filter(w => w.length > 0);
+        const torrentWords = normalize(torrentTitle);
+        const ptWords = new Set(normalize(ptTitle));
+        const enWords = new Set(normalize(enTitle));
+        const PT_INDICATORS = new Set([
+            'dublado', 'dublada', 'dublagem', 'dual', 'legendado', 'legendada',
+            'legenda', 'nacional', 'pt', 'ptbr', 'pt-br', 'portugues', 'português',
+            'brasileiro', 'brazilian', 'br', 'audio', 'áudio'
+        ]);
+        let foundPt = false;
+        let foundEn = false;
+        for (let i = 0; i < torrentWords.length; i++) {
+            const word = torrentWords[i];
+            if (ptWords.has(word)) {
+                foundPt = true;
+            }
+            if (enWords.has(word) && !ptWords.has(word)) {
+                foundEn = true;
+            }
+            if (PT_INDICATORS.has(word)) {
+                foundPt = true;
+            }
+        }
+        if (foundPt) {
+            return { isPortuguese: true, reason: foundEn ? 'Indicadores PT presentes (com nome EN)' : 'Título PT do TMDB detectado' };
+        }
+        if (foundEn) {
+            return { isPortuguese: false, reason: `Título em inglês sem indicadores PT: "${torrentTitle}"` };
+        }
+        return { isPortuguese: true, reason: 'Nenhuma palavra bateu TMDB (benefício da dúvida)' };
+    }
     checkInternationalRelease(titleLower, originalTitle) {
         const intlResult = (0, TechnicalWords_js_1.containsInternationalIndicators)(originalTitle);
         if (intlResult.isInternational) {

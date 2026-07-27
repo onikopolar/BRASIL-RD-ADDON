@@ -154,6 +154,68 @@ export class LanguageDetector {
     return false;
   }
 
+  /**
+   * Verifica idioma comparando palavra por palavra com os títulos TMDB.
+   * Muito mais preciso que heurísticas puras.
+   * 
+   * Ex: torrent="Interstellar Dublado 1080p", PT="Interestelar", EN="Interstellar"
+   *   "interstellar" → bate EN, não PT, não é indicador → foundEn
+   *   "dublado"     → é indicador PT conhecido → foundPt ✅ ACEITA
+   */
+  checkWithTmdb(
+    torrentTitle: string,
+    ptTitle: string | null,
+    enTitle: string
+  ): { isPortuguese: boolean; reason: string } {
+    if (!ptTitle || ptTitle === enTitle) {
+      return { isPortuguese: true, reason: 'TMDB sem título PT distinto (benefício da dúvida)' };
+    }
+
+    const normalize = (s: string) => s.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .split(' ')
+      .filter(w => w.length > 0);
+
+    const torrentWords = normalize(torrentTitle);
+    const ptWords = new Set(normalize(ptTitle));
+    const enWords = new Set(normalize(enTitle));
+
+    // Indicadores conhecidos de conteúdo PT-BR
+    const PT_INDICATORS = new Set([
+      'dublado', 'dublada', 'dublagem', 'dual', 'legendado', 'legendada',
+      'legenda', 'nacional', 'pt', 'ptbr', 'pt-br', 'portugues', 'português',
+      'brasileiro', 'brazilian', 'br', 'audio', 'áudio'
+    ]);
+
+    let foundPt = false;
+    let foundEn = false;
+
+    for (let i = 0; i < torrentWords.length; i++) {
+      const word = torrentWords[i];
+
+      if (ptWords.has(word)) {
+        foundPt = true;
+      }
+      if (enWords.has(word) && !ptWords.has(word)) {
+        foundEn = true;
+      }
+      if (PT_INDICATORS.has(word)) {
+        foundPt = true;
+      }
+    }
+
+    if (foundPt) {
+      return { isPortuguese: true, reason: foundEn ? 'Indicadores PT presentes (com nome EN)' : 'Título PT do TMDB detectado' };
+    }
+    if (foundEn) {
+      return { isPortuguese: false, reason: `Título em inglês sem indicadores PT: "${torrentTitle}"` };
+    }
+    return { isPortuguese: true, reason: 'Nenhuma palavra bateu TMDB (benefício da dúvida)' };
+  }
+
   // Verificação avançada de releases internacionais
   private checkInternationalRelease(titleLower: string, originalTitle: string): {
     isInternational: boolean;

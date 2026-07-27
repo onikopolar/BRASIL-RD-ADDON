@@ -221,42 +221,7 @@ class TitleFilter {
         }
     }
     checkLanguageWithTmdb(torrentTitle, imdbTitles) {
-        const torrentNorm = this.normalizeForComparison(torrentTitle);
-        const ptTitle = imdbTitles.portugueseTitle;
-        const enTitle = imdbTitles.originalTitle;
-        if (!ptTitle || ptTitle === enTitle) {
-            return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'TMDB sem título PT distinto' };
-        }
-        const ptNorm = this.normalizeForComparison(ptTitle);
-        const enNorm = this.normalizeForComparison(enTitle);
-        if (torrentNorm.includes(ptNorm) || ptNorm.includes(torrentNorm)) {
-            return { isPortuguese: true, reason: 'Título corresponde ao PT do TMDB' };
-        }
-        if ((torrentNorm.includes(enNorm) || enNorm.includes(torrentNorm)) && !torrentNorm.includes(ptNorm)) {
-            return { isPortuguese: false, reason: `Título em inglês: "${torrentTitle}" vs PT="${ptTitle}"` };
-        }
-        return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'Título ambíguo, usando heurística' };
-    }
-    doTitlesMatchSync(torrentTitle, imdbTitle, targetSeason, targetEpisode) {
-        if (!this.isPortugueseContent(torrentTitle))
-            return false;
-        const smartMatch = this.similarityCalculator.smartTitleContainsCheckSync(torrentTitle, imdbTitle);
-        const confusion = this.similarityCalculator.detectConfusingSeries(torrentTitle, imdbTitle);
-        const threshold = confusion.isConfusing ? Math.max(0.4, confusion.minSimilarity) : 0.4;
-        if (smartMatch.matches && smartMatch.similarity >= threshold) {
-            if (targetSeason !== undefined) {
-                const meta = this.extractSeriesMetadata(torrentTitle);
-                if (meta.season && meta.season !== targetSeason)
-                    return false;
-                if (targetEpisode !== undefined) {
-                    const compat = this.isEpisodeCompatible(torrentTitle, meta.episode, targetEpisode, targetSeason);
-                    if (!compat.compatible)
-                        return false;
-                }
-            }
-            return true;
-        }
-        return false;
+        return this.languageDetector.checkWithTmdb(torrentTitle, imdbTitles.portugueseTitle, imdbTitles.originalTitle);
     }
     async applyTitleFilter(torrents, imdbId, requestId, targetSeason, targetEpisode) {
         const uniqueTorrents = this.deduplicateTorrents(torrents);
@@ -290,55 +255,14 @@ class TitleFilter {
         }
         return included;
     }
-    applyTitleFilterSync(torrents, imdbTitle, requestId, targetSeason, targetEpisode) {
-        const uniqueTorrents = this.deduplicateTorrents(torrents);
-        const included = [];
-        for (const torrent of uniqueTorrents) {
-            if (!this.isPortugueseContent(torrent.title))
-                continue;
-            if (this.doTitlesMatchSync(torrent.title, imdbTitle, targetSeason, targetEpisode)) {
-                included.push(torrent);
-            }
-        }
-        return included;
-    }
     async testTitleMatch(torrentTitle, imdbId, targetSeason, targetEpisode) {
         return this.doTitlesMatch(torrentTitle, imdbId, targetSeason, targetEpisode);
-    }
-    testTitleMatchSync(torrentTitle, imdbTitle, targetSeason, targetEpisode) {
-        const isPortuguese = this.isPortugueseContent(torrentTitle);
-        const normTorrent = this.normalizeForComparison(torrentTitle);
-        const normImdb = this.normalizeForComparison(imdbTitle);
-        const metadata = this.extractSeriesMetadata(torrentTitle);
-        const contains = normTorrent.includes(normImdb);
-        const contained = normImdb.includes(normTorrent);
-        const similarity = this.similarityCalculator.calculateWordSimilarity(normTorrent, normImdb);
-        const confusion = this.similarityCalculator.detectConfusingSeries(torrentTitle, imdbTitle);
-        const threshold = confusion.isConfusing ? Math.max(0.4, confusion.minSimilarity) : 0.4;
-        let matches = isPortuguese && (contains || contained || similarity >= threshold);
-        let episodeCompat;
-        if (targetSeason !== undefined) {
-            if (metadata.season && metadata.season !== targetSeason)
-                matches = false;
-            if (targetEpisode !== undefined) {
-                episodeCompat = this.isEpisodeCompatible(torrentTitle, metadata.episode, targetEpisode, targetSeason);
-                if (!episodeCompat.compatible)
-                    matches = false;
-            }
-        }
-        return { matches, normalizedTorrent: normTorrent, normalizedImdb: normImdb, contains, contained, similarity, metadata, isPortuguese, episodeCompatibility: episodeCompat };
     }
     clearAllCaches() {
         this.cacheManager.clearAllCaches();
     }
     getCacheStats() {
         return this.cacheManager.getCacheStats();
-    }
-    addConfusingSeries(original, derivative, minSimilarity = 0.8) {
-        this.similarityCalculator.addConfusingSeries(original, derivative, minSimilarity);
-    }
-    listConfusingSeries() {
-        return this.similarityCalculator.listConfusingSeries();
     }
     getSimilarityCalculatorStats() {
         return this.similarityCalculator.getStats();
@@ -347,10 +271,8 @@ class TitleFilter {
         const simStats = this.similarityCalculator.getStats();
         return {
             titleFilterVersion: this.VERSION,
-            similarityCalculatorVersion: simStats.versão,
-            thresholdMovies: simStats.limiarFilmes,
-            thresholdSeries: simStats.limiarSéries,
-            melhorias: simStats.melhorias
+            algoritmo: simStats.algoritmo,
+            regras: simStats.regras
         };
     }
 }

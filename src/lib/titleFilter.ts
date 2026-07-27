@@ -8,7 +8,6 @@ import {
   CacheManager,
   SeriesMetadata,
   TitleMatchResult,
-  SeriesConfusion,
   SmartTitleMatch
 } from './title-filter/index.js';
 
@@ -264,58 +263,17 @@ export class TitleFilter {
   }
 
   /**
-   * Verifica se o título do torrent está em português comparando com os
-   * títulos do TMDB (PT vs EN). Muito mais preciso que heurísticas de idioma.
-   * Ex: torrent="Interstellar", TMDB PT="Interestelar", TMDB EN="Interstellar"
-   *     → torrent é o título EN → NÃO é português → rejeitar.
+   * Verifica idioma via LanguageDetector.checkWithTmdb (palavra por palavra).
    */
   private checkLanguageWithTmdb(
     torrentTitle: string,
     imdbTitles: { portugueseTitle: string | null; originalTitle: string }
   ): { isPortuguese: boolean; reason: string } {
-    const torrentNorm = this.normalizeForComparison(torrentTitle);
-    const ptTitle = imdbTitles.portugueseTitle;
-    const enTitle = imdbTitles.originalTitle;
-
-    // Se não tem título PT no TMDB, usa heurística como fallback
-    if (!ptTitle || ptTitle === enTitle) {
-      return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'TMDB sem título PT distinto' };
-    }
-
-    const ptNorm = this.normalizeForComparison(ptTitle);
-    const enNorm = this.normalizeForComparison(enTitle);
-
-    // Torrent contém o título PT? → é PT!
-    if (torrentNorm.includes(ptNorm) || ptNorm.includes(torrentNorm)) {
-      return { isPortuguese: true, reason: 'Título corresponde ao PT do TMDB' };
-    }
-
-    // Torrent contém o título EN mas NÃO o PT? → é EN!
-    if ((torrentNorm.includes(enNorm) || enNorm.includes(torrentNorm)) && !torrentNorm.includes(ptNorm)) {
-      return { isPortuguese: false, reason: `Título em inglês: "${torrentTitle}" vs PT="${ptTitle}"` };
-    }
-
-    // Ambíguo: usa heurística como fallback
-    return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'Título ambíguo, usando heurística' };
-  }
-
-  doTitlesMatchSync(torrentTitle: string, imdbTitle: string, targetSeason?: number, targetEpisode?: number): boolean {
-    if (!this.isPortugueseContent(torrentTitle)) return false;
-    const smartMatch = this.similarityCalculator.smartTitleContainsCheckSync(torrentTitle, imdbTitle);
-    const confusion = this.similarityCalculator.detectConfusingSeries(torrentTitle, imdbTitle);
-    const threshold = confusion.isConfusing ? Math.max(0.4, confusion.minSimilarity) : 0.4;
-    if (smartMatch.matches && smartMatch.similarity >= threshold) {
-      if (targetSeason !== undefined) {
-        const meta = this.extractSeriesMetadata(torrentTitle);
-        if (meta.season && meta.season !== targetSeason) return false;
-        if (targetEpisode !== undefined) {
-          const compat = this.isEpisodeCompatible(torrentTitle, meta.episode, targetEpisode, targetSeason);
-          if (!compat.compatible) return false;
-        }
-      }
-      return true;
-    }
-    return false;
+    return this.languageDetector.checkWithTmdb(
+      torrentTitle,
+      imdbTitles.portugueseTitle,
+      imdbTitles.originalTitle
+    );
   }
 
   async applyTitleFilter(torrents: any[], imdbId: string, requestId: string, targetSeason?: number, targetEpisode?: number): Promise<any[]> {
@@ -348,42 +306,8 @@ export class TitleFilter {
     return included;
   }
 
-  applyTitleFilterSync(torrents: any[], imdbTitle: string, requestId: string, targetSeason?: number, targetEpisode?: number): any[] {
-    const uniqueTorrents = this.deduplicateTorrents(torrents);
-    const included: any[] = [];
-    for (const torrent of uniqueTorrents) {
-      if (!this.isPortugueseContent(torrent.title)) continue;
-      if (this.doTitlesMatchSync(torrent.title, imdbTitle, targetSeason, targetEpisode)) {
-        included.push(torrent);
-      }
-    }
-    return included;
-  }
-
   async testTitleMatch(torrentTitle: string, imdbId: string, targetSeason?: number, targetEpisode?: number): Promise<TitleMatchResult> {
     return this.doTitlesMatch(torrentTitle, imdbId, targetSeason, targetEpisode);
-  }
-
-  testTitleMatchSync(torrentTitle: string, imdbTitle: string, targetSeason?: number, targetEpisode?: number) {
-    const isPortuguese = this.isPortugueseContent(torrentTitle);
-    const normTorrent = this.normalizeForComparison(torrentTitle);
-    const normImdb = this.normalizeForComparison(imdbTitle);
-    const metadata = this.extractSeriesMetadata(torrentTitle);
-    const contains = normTorrent.includes(normImdb);
-    const contained = normImdb.includes(normTorrent);
-    const similarity = this.similarityCalculator.calculateWordSimilarity(normTorrent, normImdb);
-    const confusion = this.similarityCalculator.detectConfusingSeries(torrentTitle, imdbTitle);
-    const threshold = confusion.isConfusing ? Math.max(0.4, confusion.minSimilarity) : 0.4;
-    let matches = isPortuguese && (contains || contained || similarity >= threshold);
-    let episodeCompat: { compatible: boolean; reason: string } | undefined;
-    if (targetSeason !== undefined) {
-      if (metadata.season && metadata.season !== targetSeason) matches = false;
-      if (targetEpisode !== undefined) {
-        episodeCompat = this.isEpisodeCompatible(torrentTitle, metadata.episode, targetEpisode, targetSeason);
-        if (!episodeCompat.compatible) matches = false;
-      }
-    }
-    return { matches, normalizedTorrent: normTorrent, normalizedImdb: normImdb, contains, contained, similarity, metadata, isPortuguese, episodeCompatibility: episodeCompat };
   }
 
   clearAllCaches(): void {
@@ -394,14 +318,6 @@ export class TitleFilter {
     return this.cacheManager.getCacheStats();
   }
 
-  addConfusingSeries(original: string, derivative: string, minSimilarity = 0.8) {
-    this.similarityCalculator.addConfusingSeries(original, derivative, minSimilarity);
-  }
-
-  listConfusingSeries(): SeriesConfusion[] {
-    return this.similarityCalculator.listConfusingSeries();
-  }
-
   getSimilarityCalculatorStats() {
     return this.similarityCalculator.getStats();
   }
@@ -410,12 +326,10 @@ export class TitleFilter {
     const simStats = this.similarityCalculator.getStats();
     return {
       titleFilterVersion: this.VERSION,
-      similarityCalculatorVersion: simStats.versão,
-      thresholdMovies: simStats.limiarFilmes,
-      thresholdSeries: simStats.limiarSéries,
-      melhorias: simStats.melhorias
+      algoritmo: simStats.algoritmo,
+      regras: simStats.regras
     };
   }
 }
 
-export { SeriesMetadata, TitleMatchResult, SeriesConfusion };
+export { SeriesMetadata, TitleMatchResult };
