@@ -162,27 +162,22 @@ class CatalogProvider {
     async filterAndValidateTorrents(torrents, imdbId, request, season, episode, imdbTitles = null) {
         if (!imdbId)
             return { valid: torrents, invalid: [] };
+        const results = await Promise.allSettled(torrents.map(t => this.titleFilter.doTitlesMatch(t.title, imdbId, season, episode)));
         const valid = [];
         const invalid = [];
-        for (const torrent of torrents) {
-            try {
-                const matchResult = await this.titleFilter.doTitlesMatch(torrent.title, imdbId, season, episode);
-                if (matchResult.matches) {
-                    valid.push(torrent);
-                }
-                else {
-                    if (season && /\b(?:temporada completa|season pack|complete pack)\b/i.test(torrent.title)) {
-                        valid.push(torrent);
-                    }
-                    else {
-                        invalid.push(torrent);
-                    }
-                }
+        const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
+        results.forEach((result, i) => {
+            const torrent = torrents[i];
+            if (result.status === 'fulfilled' && result.value.matches) {
+                valid.push(torrent);
             }
-            catch {
+            else if (season && completePackRe.test(torrent.title)) {
+                valid.push(torrent);
+            }
+            else {
                 invalid.push(torrent);
             }
-        }
+        });
         return { valid, invalid };
     }
     async saveValidTorrentsToCatalog(torrents, request, season, episode, imdbTitles = null, isPackFallback = false) {

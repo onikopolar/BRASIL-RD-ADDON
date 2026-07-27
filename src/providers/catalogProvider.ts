@@ -244,26 +244,26 @@ export class CatalogProvider {
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
+    // Paralelo: valida todos os torrents de uma vez
+    const results = await Promise.allSettled(
+      torrents.map(t => this.titleFilter.doTitlesMatch(t.title, imdbId, season, episode))
+    );
+
     const valid: ScrapedTorrent[] = [];
     const invalid: ScrapedTorrent[] = [];
+    const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
 
-    for (const torrent of torrents) {
-      try {
-        const matchResult = await this.titleFilter.doTitlesMatch(torrent.title, imdbId, season, episode);
-        if (matchResult.matches) {
-          valid.push(torrent);
-        } else {
-          // se falhou mas é pack completo, aceita como fallback
-          if (season && /\b(?:temporada completa|season pack|complete pack)\b/i.test(torrent.title)) {
-            valid.push(torrent);
-          } else {
-            invalid.push(torrent);
-          }
-        }
-      } catch {
+    results.forEach((result, i) => {
+      const torrent = torrents[i];
+      if (result.status === 'fulfilled' && result.value.matches) {
+        valid.push(torrent);
+      } else if (season && completePackRe.test(torrent.title)) {
+        valid.push(torrent); // fallback: pack completo
+      } else {
         invalid.push(torrent);
       }
-    }
+    });
+
     return { valid, invalid };
   }
 

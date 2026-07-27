@@ -215,23 +215,28 @@ class StreamHandler {
                     fileEntries = await this.getImdbIdSeriesEntries(imdbId, season, episode);
                 }
             }
-            const streams = [];
-            for (const fileEntry of fileEntries) {
+            const validatedEntries = await Promise.all(fileEntries.map(async (fileEntry) => {
                 const torrent = fileEntry.torrent;
-                if (torrent && torrent.infoHash) {
-                    const titleValid = await this.validateDatabaseEntry(torrent.title, imdbId, request.type, fileEntry.imdbSeason, fileEntry.imdbEpisode);
-                    if (!titleValid) {
-                        this.logger.warn('Entrada do banco rejeitada por título', {
-                            imdbId,
-                            dbTitle: torrent.title?.substring(0, 60),
-                            dbImdbId: fileEntry.imdbId
-                        });
-                        continue;
-                    }
-                    const stream = this.convertDatabaseEntryToStream(fileEntry, torrent, request);
-                    if (stream)
-                        streams.push(stream);
+                if (!torrent?.infoHash)
+                    return null;
+                const titleValid = await this.validateDatabaseEntry(torrent.title, imdbId, request.type, fileEntry.imdbSeason, fileEntry.imdbEpisode);
+                if (!titleValid) {
+                    this.logger.warn('Entrada do banco rejeitada por título', {
+                        imdbId,
+                        dbTitle: torrent.title?.substring(0, 60),
+                        dbImdbId: fileEntry.imdbId
+                    });
+                    return null;
                 }
+                return fileEntry;
+            }));
+            const streams = [];
+            for (const fileEntry of validatedEntries) {
+                if (!fileEntry)
+                    continue;
+                const stream = this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
+                if (stream)
+                    streams.push(stream);
             }
             return { success: true, streams, source: 'database', processingTime: Date.now() - startTime };
         }

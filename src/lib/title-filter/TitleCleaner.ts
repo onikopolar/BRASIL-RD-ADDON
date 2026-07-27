@@ -5,6 +5,34 @@ interface TitleCacheEntry {
   timestamp: number;
 }
 
+// Escape regex chars
+function escRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+}
+
+// Pré-compila regexes UMA vez (não a cada chamada do extractCleanTitle)
+const COMPILED_TECH_TERMS: RegExp[] = [
+  '2160p', '1080p', '720p', '480p', '360p', 'SD', 'HD', 'FHD', 'UHD', '4K', 'HDR',
+  'WEB-DL', 'WEBRip', 'WEB-DLRip', 'WEB', 'DL', 'Rip', 'BluRay', 'Blu-ray', 'BRRip', 'BDRip',
+  'HDTV', 'PDTV', 'DSR', 'SATRip', 'DVDRip', 'DVD', 'BD', 'BR',
+  'x264', 'x265', 'H264', 'H265', 'AVC', 'HEVC', 'XviD', 'DivX',
+  'AC3', 'DTS', 'AAC', 'MP3', 'FLAC', 'DD5.1', 'Dolby Digital', 'Dolby',
+  'REPACK', 'PROPER', 'READNFO', 'NFO', 'RARBG', 'YTS', 'ETTV', 'EZTV', 'KILLERS', 'GGEZ'
+].map(t => new RegExp(`\\b${escRe(t)}\\b`, 'gi'));
+
+const COMPILED_TORRENT_WORDS: RegExp[] = [
+  'torrent', 'download', 'baixar', 'baixe'
+].map(w => new RegExp(`\\b${escRe(w)}\\b`, 'gi'));
+
+const COMPILED_SEASON_PATTERNS: RegExp[] = [
+  /\d+\s*ª?\s*temporada/gi,
+  /season\s*\d+/gi,
+  /s\d+/gi,
+  /\d+\s*epis[oó]dios?/gi,
+  /\d+\s*x\s*\d+/gi,
+  /s\d+\s*e\d+/gi
+];
+
 export class TitleCleaner {
   private readonly logger: Logger;
   private readonly cleanTitleCache = new Map<string, TitleCacheEntry>();
@@ -69,35 +97,11 @@ export class TitleCleaner {
       .replace(/\s+/g, ' ')
       .trim();
 
-    // === PASSO 2: Remove APENAS termos técnicos (IGUAL AO ORIGINAL) ===
-    const technicalTerms = [
-      // Qualidades
-      '2160p', '1080p', '720p', '480p', '360p', 'SD', 'HD', 'FHD', 'UHD', '4K', 'HDR',
-      // Formatos
-      'WEB-DL', 'WEBRip', 'WEB-DLRip', 'WEB', 'DL', 'Rip', 'BluRay', 'Blu-ray', 'BRRip', 'BDRip',
-      'HDTV', 'PDTV', 'DSR', 'SATRip', 'DVDRip', 'DVD', 'BD', 'BR',
-      // Codecs
-      'x264', 'x265', 'H264', 'H265', 'AVC', 'HEVC', 'XviD', 'DivX',
-      // Áudio (exceto Dual/Audio)
-      'AC3', 'DTS', 'AAC', 'MP3', 'FLAC', 'DD5.1', 'Dolby Digital', 'Dolby',
-      // Outros técnicos
-      'REPACK', 'PROPER', 'READNFO', 'NFO', 'RARBG', 'YTS', 'ETTV', 'EZTV', 'KILLERS', 'GGEZ'
-    ];
+    // === PASSO 2: Remove APENAS termos técnicos (pré-compilado) ===
+    COMPILED_TECH_TERMS.forEach(re => { cleaned = cleaned.replace(re, ' '); });
 
-    technicalTerms.forEach(term => {
-      const regex = new RegExp(`\\b${term}\\b`, 'gi');
-      cleaned = cleaned.replace(regex, ' ');
-    });
-
-    // === PASSO 3: Remove palavras específicas de torrent (IGUAL AO ORIGINAL) ===
-    const torrentWords = [
-      'torrent', 'download', 'baixar', 'baixe'
-    ];
-    
-    torrentWords.forEach(word => {
-      const regex = new RegExp(`\\b${word}\\b`, 'gi');
-      cleaned = cleaned.replace(regex, ' ');
-    });
+    // === PASSO 3: Remove palavras específicas de torrent (pré-compilado) ===
+    COMPILED_TORRENT_WORDS.forEach(re => { cleaned = cleaned.replace(re, ' '); });
 
     // === PASSO 4: Remove anos (IGUAL AO ORIGINAL) ===
     cleaned = cleaned.replace(/\s*\(\s*\d{4}\s*\)/g, ' ');
@@ -105,17 +109,8 @@ export class TitleCleaner {
     // === PASSO 5: Preserva números com indicadores ordinais (IGUAL AO ORIGINAL) ===
     cleaned = cleaned.replace(/\b(\d{1,2})(ª|º|a|o)\b/gi, '$1$2');
 
-    // === PASSO 6: Preserva padrões de temporada/episódio (IGUAL AO ORIGINAL) ===
-    const seasonPatterns = [
-      /\d+\s*ª?\s*temporada/gi,
-      /season\s*\d+/gi,
-      /s\d+/gi,
-      /\d+\s*epis[oó]dios?/gi,
-      /\d+\s*x\s*\d+/gi,
-      /s\d+\s*e\d+/gi
-    ];
-    
-    const hasSeasonInfo = seasonPatterns.some(pattern => pattern.test(cleaned));
+    // === PASSO 6: Preserva padrões de temporada/episódio (pré-compilado) ===
+    const hasSeasonInfo = COMPILED_SEASON_PATTERNS.some(pattern => pattern.test(cleaned));
 
     // === PASSO 7: NÃO REMOVE NÚMEROS SOLTOS quando não tem season info (IGUAL AO ORIGINAL) ===
     // **CRÍTICO:** O original NÃO FAZ NADA aqui quando não tem season info

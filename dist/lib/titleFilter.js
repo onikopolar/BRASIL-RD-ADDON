@@ -174,12 +174,16 @@ class TitleFilter {
     }
     async doTitlesMatch(torrentTitle, imdbId, targetSeason, targetEpisode) {
         try {
-            if (!this.isPortugueseContent(torrentTitle)) {
-                return { matches: false, similarity: 0, torrentMetadata: this.extractSeriesMetadata(torrentTitle), reason: 'Conteúdo não está em português' };
-            }
             const imdbTitles = await this.getImdbTitlesWithCache(imdbId, targetSeason);
             if (!imdbTitles || imdbTitles.allTitles.length === 0) {
+                if (!this.isPortugueseContent(torrentTitle)) {
+                    return { matches: false, similarity: 0, torrentMetadata: this.extractSeriesMetadata(torrentTitle), reason: 'Conteúdo não está em português' };
+                }
                 return { matches: false, similarity: 0, torrentMetadata: this.extractSeriesMetadata(torrentTitle), reason: `Nenhum título encontrado no TMDB para ${imdbId}` };
+            }
+            const langCheck = this.checkLanguageWithTmdb(torrentTitle, imdbTitles);
+            if (!langCheck.isPortuguese) {
+                return { matches: false, similarity: 0, torrentMetadata: this.extractSeriesMetadata(torrentTitle), reason: langCheck.reason };
             }
             const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
             const torrentYear = this.extractTorrentYear(torrentTitle);
@@ -215,6 +219,23 @@ class TitleFilter {
             this.logger.error('Erro comparação', { torrentTitle: torrentTitle.substring(0, 60), imdbId, error: error instanceof Error ? error.message : 'Erro' });
             return { matches: false, similarity: 0, torrentMetadata: this.extractSeriesMetadata(torrentTitle), reason: `Erro: ${error instanceof Error ? error.message : 'Erro'}` };
         }
+    }
+    checkLanguageWithTmdb(torrentTitle, imdbTitles) {
+        const torrentNorm = this.normalizeForComparison(torrentTitle);
+        const ptTitle = imdbTitles.portugueseTitle;
+        const enTitle = imdbTitles.originalTitle;
+        if (!ptTitle || ptTitle === enTitle) {
+            return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'TMDB sem título PT distinto' };
+        }
+        const ptNorm = this.normalizeForComparison(ptTitle);
+        const enNorm = this.normalizeForComparison(enTitle);
+        if (torrentNorm.includes(ptNorm) || ptNorm.includes(torrentNorm)) {
+            return { isPortuguese: true, reason: 'Título corresponde ao PT do TMDB' };
+        }
+        if ((torrentNorm.includes(enNorm) || enNorm.includes(torrentNorm)) && !torrentNorm.includes(ptNorm)) {
+            return { isPortuguese: false, reason: `Título em inglês: "${torrentTitle}" vs PT="${ptTitle}"` };
+        }
+        return { isPortuguese: this.isPortugueseContent(torrentTitle), reason: 'Título ambíguo, usando heurística' };
     }
     doTitlesMatchSync(torrentTitle, imdbTitle, targetSeason, targetEpisode) {
         if (!this.isPortugueseContent(torrentTitle))

@@ -281,12 +281,11 @@ export class StreamHandler {
         }
       }
 
-      const streams: Stream[] = [];
-      for (const fileEntry of fileEntries) {
-        const torrent = fileEntry.torrent;
-        if (torrent && torrent.infoHash) {
-          // Validação de segurança: re-verifica se o título do torrent
-          // realmente pertence ao IMDB solicitado (evita Korra→Aang)
+      // Validação paralela: verifica todos os títulos de uma vez (não sequencial)
+      const validatedEntries = await Promise.all(
+        fileEntries.map(async (fileEntry) => {
+          const torrent = fileEntry.torrent;
+          if (!torrent?.infoHash) return null;
           const titleValid = await this.validateDatabaseEntry(
             torrent.title, imdbId, request.type,
             fileEntry.imdbSeason, fileEntry.imdbEpisode
@@ -297,11 +296,17 @@ export class StreamHandler {
               dbTitle: torrent.title?.substring(0, 60),
               dbImdbId: fileEntry.imdbId
             });
-            continue;
+            return null;
           }
-          const stream = this.convertDatabaseEntryToStream(fileEntry, torrent, request);
-          if (stream) streams.push(stream);
-        }
+          return fileEntry;
+        })
+      );
+
+      const streams: Stream[] = [];
+      for (const fileEntry of validatedEntries) {
+        if (!fileEntry) continue;
+        const stream = this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
+        if (stream) streams.push(stream);
       }
 
       return { success: true, streams, source: 'database', processingTime: Date.now() - startTime };

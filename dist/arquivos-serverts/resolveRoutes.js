@@ -51,8 +51,10 @@ async function processMagnetWithTorbox(magnet, apiKey, season, episode, type = '
     try {
         const torrentInfo = await rdTorrentCacheService.getTorrentId(magnetHash, apiKey, torboxService);
         if (torrentInfo.torrentId) {
-            const streamLinkResult = await rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, torboxService);
-            const torrentDetails = await torboxService.getTorrentInfo(torrentInfo.torrentId, apiKey);
+            const [streamLinkResult, torrentDetails] = await Promise.all([
+                rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, torboxService),
+                torboxService.getTorrentInfo(torrentInfo.torrentId, apiKey)
+            ]);
             if (torrentInfo.status !== torrentDetails.download_state) {
                 rdTorrentCacheService.updateTorrentStatus(magnetHash, apiKey, torrentDetails.download_state);
             }

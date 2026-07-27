@@ -2,6 +2,28 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TitleCleaner = void 0;
 const logger_js_1 = require("../../utils/logger.js");
+function escRe(s) {
+    return s.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+}
+const COMPILED_TECH_TERMS = [
+    '2160p', '1080p', '720p', '480p', '360p', 'SD', 'HD', 'FHD', 'UHD', '4K', 'HDR',
+    'WEB-DL', 'WEBRip', 'WEB-DLRip', 'WEB', 'DL', 'Rip', 'BluRay', 'Blu-ray', 'BRRip', 'BDRip',
+    'HDTV', 'PDTV', 'DSR', 'SATRip', 'DVDRip', 'DVD', 'BD', 'BR',
+    'x264', 'x265', 'H264', 'H265', 'AVC', 'HEVC', 'XviD', 'DivX',
+    'AC3', 'DTS', 'AAC', 'MP3', 'FLAC', 'DD5.1', 'Dolby Digital', 'Dolby',
+    'REPACK', 'PROPER', 'READNFO', 'NFO', 'RARBG', 'YTS', 'ETTV', 'EZTV', 'KILLERS', 'GGEZ'
+].map(t => new RegExp(`\\b${escRe(t)}\\b`, 'gi'));
+const COMPILED_TORRENT_WORDS = [
+    'torrent', 'download', 'baixar', 'baixe'
+].map(w => new RegExp(`\\b${escRe(w)}\\b`, 'gi'));
+const COMPILED_SEASON_PATTERNS = [
+    /\d+\s*ª?\s*temporada/gi,
+    /season\s*\d+/gi,
+    /s\d+/gi,
+    /\d+\s*epis[oó]dios?/gi,
+    /\d+\s*x\s*\d+/gi,
+    /s\d+\s*e\d+/gi
+];
 class TitleCleaner {
     static getInstance() {
         if (!TitleCleaner.instance) {
@@ -44,36 +66,11 @@ class TitleCleaner {
             .replace(/[\[\]{}()]/g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
-        const technicalTerms = [
-            '2160p', '1080p', '720p', '480p', '360p', 'SD', 'HD', 'FHD', 'UHD', '4K', 'HDR',
-            'WEB-DL', 'WEBRip', 'WEB-DLRip', 'WEB', 'DL', 'Rip', 'BluRay', 'Blu-ray', 'BRRip', 'BDRip',
-            'HDTV', 'PDTV', 'DSR', 'SATRip', 'DVDRip', 'DVD', 'BD', 'BR',
-            'x264', 'x265', 'H264', 'H265', 'AVC', 'HEVC', 'XviD', 'DivX',
-            'AC3', 'DTS', 'AAC', 'MP3', 'FLAC', 'DD5.1', 'Dolby Digital', 'Dolby',
-            'REPACK', 'PROPER', 'READNFO', 'NFO', 'RARBG', 'YTS', 'ETTV', 'EZTV', 'KILLERS', 'GGEZ'
-        ];
-        technicalTerms.forEach(term => {
-            const regex = new RegExp(`\\b${term}\\b`, 'gi');
-            cleaned = cleaned.replace(regex, ' ');
-        });
-        const torrentWords = [
-            'torrent', 'download', 'baixar', 'baixe'
-        ];
-        torrentWords.forEach(word => {
-            const regex = new RegExp(`\\b${word}\\b`, 'gi');
-            cleaned = cleaned.replace(regex, ' ');
-        });
+        COMPILED_TECH_TERMS.forEach(re => { cleaned = cleaned.replace(re, ' '); });
+        COMPILED_TORRENT_WORDS.forEach(re => { cleaned = cleaned.replace(re, ' '); });
         cleaned = cleaned.replace(/\s*\(\s*\d{4}\s*\)/g, ' ');
         cleaned = cleaned.replace(/\b(\d{1,2})(ª|º|a|o)\b/gi, '$1$2');
-        const seasonPatterns = [
-            /\d+\s*ª?\s*temporada/gi,
-            /season\s*\d+/gi,
-            /s\d+/gi,
-            /\d+\s*epis[oó]dios?/gi,
-            /\d+\s*x\s*\d+/gi,
-            /s\d+\s*e\d+/gi
-        ];
-        const hasSeasonInfo = seasonPatterns.some(pattern => pattern.test(cleaned));
+        const hasSeasonInfo = COMPILED_SEASON_PATTERNS.some(pattern => pattern.test(cleaned));
         cleaned = cleaned
             .replace(/[._-]/g, ' ')
             .replace(/\s+/g, ' ')
