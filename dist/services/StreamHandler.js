@@ -219,6 +219,15 @@ class StreamHandler {
             for (const fileEntry of fileEntries) {
                 const torrent = fileEntry.torrent;
                 if (torrent && torrent.infoHash) {
+                    const titleValid = await this.validateDatabaseEntry(torrent.title, imdbId, request.type, fileEntry.imdbSeason, fileEntry.imdbEpisode);
+                    if (!titleValid) {
+                        this.logger.warn('Entrada do banco rejeitada por título', {
+                            imdbId,
+                            dbTitle: torrent.title?.substring(0, 60),
+                            dbImdbId: fileEntry.imdbId
+                        });
+                        continue;
+                    }
                     const stream = this.convertDatabaseEntryToStream(fileEntry, torrent, request);
                     if (stream)
                         streams.push(stream);
@@ -267,6 +276,16 @@ class StreamHandler {
             order: [[models_js_1.Torrent, 'seeders', 'DESC']]
         });
         return completePackEntries;
+    }
+    async validateDatabaseEntry(torrentTitle, imdbId, type, season, episode) {
+        try {
+            const targetEpisode = episode === null ? undefined : episode;
+            const match = await this.titleFilter.doTitlesMatch(torrentTitle, imdbId, season, targetEpisode);
+            return match.matches;
+        }
+        catch {
+            return true;
+        }
     }
     convertDatabaseEntryToStream(fileEntry, torrent, request) {
         try {

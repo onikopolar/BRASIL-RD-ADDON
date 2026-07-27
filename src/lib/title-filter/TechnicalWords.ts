@@ -38,7 +38,7 @@ export const TECHNICAL_WORDS = [
   // Idiomas expandidos
   'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'portugues', 'português', 'eng', 'english', 'ingles', 'spanish', 'espanol',
   'french', 'francês', 'german', 'alemão', 'italian', 'italiano', 'japanese', 'japonês', 'chinese', 'chinês',
-  'korean', 'coreano', 'russian', 'russo', 'brazilian', 'brasileiro', 'latino', 'latin',
+  'korean', 'coreano', 'russian', 'russo', 'brazilian', 'brasileiro', 'latino', 'latin', 'internacional',
   'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh', 'ru', 'ar', 'hi', 'tr', 'nl', 'pl', 'sv', 'no', 'da', 'fi',
   
   // GRUPOS DE RELEASE INTERNACIONAIS CONHECIDOS (PREDOMINANTEMENTE INGLÊS)
@@ -143,6 +143,8 @@ export const TECHNICAL_ACRONYMS = [
   'iso', 'm2ts', 'mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv',
   'gb', 'mb', 'kb', 'tb', 'pb', 'eb', 'zb', 'yb',
   'fps', 'hz', 'khz', 'mhz', 'ghz', 'bps', 'kbps', 'mbps', 'gbps',
+  // Formatos 3D e variantes
+  'hsbs', 'sbs', 'half-sbs', 'h-sbs', 'hou', 'half-ou', '3d',
   'rgb', 'yuv', 'ycbcr', 'hsv', 'hsl', 'cmyk',
   'ntsc', 'pal', 'secam', 'atsc', 'dvb', 'isdb',
   'ip', 'tcp', 'udp', 'http', 'https', 'ftp', 'sftp',

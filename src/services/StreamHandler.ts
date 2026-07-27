@@ -285,6 +285,20 @@ export class StreamHandler {
       for (const fileEntry of fileEntries) {
         const torrent = fileEntry.torrent;
         if (torrent && torrent.infoHash) {
+          // Validação de segurança: re-verifica se o título do torrent
+          // realmente pertence ao IMDB solicitado (evita Korra→Aang)
+          const titleValid = await this.validateDatabaseEntry(
+            torrent.title, imdbId, request.type,
+            fileEntry.imdbSeason, fileEntry.imdbEpisode
+          );
+          if (!titleValid) {
+            this.logger.warn('Entrada do banco rejeitada por título', {
+              imdbId,
+              dbTitle: torrent.title?.substring(0, 60),
+              dbImdbId: fileEntry.imdbId
+            });
+            continue;
+          }
           const stream = this.convertDatabaseEntryToStream(fileEntry, torrent, request);
           if (stream) streams.push(stream);
         }
@@ -339,6 +353,30 @@ export class StreamHandler {
     });
 
     return completePackEntries;
+  }
+
+  /**
+   * Validação de segurança: verifica se o título do torrent realmente
+   * pertence ao IMDB solicitado. Evita que registros com IMDB errado
+   * (ex: Korra salva como Aang) sejam servidos do banco.
+   */
+  private async validateDatabaseEntry(
+    torrentTitle: string,
+    imdbId: string,
+    type: string,
+    season?: number,
+    episode?: number | null
+  ): Promise<boolean> {
+    try {
+      const targetEpisode = episode === null ? undefined : episode;
+      const match = await this.titleFilter.doTitlesMatch(
+        torrentTitle, imdbId, season, targetEpisode
+      );
+      return match.matches;
+    } catch {
+      // Se falhar validação, permite passar (evita bloquear tudo se TMDB cair)
+      return true;
+    }
   }
 
   private convertDatabaseEntryToStream(fileEntry: any, torrent: any, request: StreamRequest): Stream | null {

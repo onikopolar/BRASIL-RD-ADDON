@@ -4,7 +4,8 @@ module.exports = {
     script: 'dist/server.js',
     cwd: __dirname,
     env: {
-      NODE_ENV: 'production'
+      NODE_ENV: 'production',
+      LOG_LEVEL: 'debug'
     },
     autorestart: true,
     watch: ['dist'],

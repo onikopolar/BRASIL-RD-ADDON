@@ -101,11 +101,13 @@ export class SimilarityCalculator {
 
       // Verifica palavras no torrent que NÃO existem em nenhum título TMDB
       // Ex: torrent "Avatar A Lenda de Korra" vs TMDB Aang "Avatar A Lenda de Aang"
-      // "korra" não está nos títulos TMDB → penalidade
+      // "korra" não está nos títulos TMDB → penalidade quadrática (1 palavra em 3 = forte)
       const foreignCheck = this.checkForeignWords(torrentClean, movieInfo.allTitles, movieInfo.mediaType);
       if (foreignCheck.hasForeign) {
-        const penalty = 1 - foreignCheck.foreignRatio;
-        const adjustedSimilarity = matchResult.similarity * Math.max(0.3, penalty);
+        // Penalidade quadrática: 1 palavra estranha em 3 (33%) → penalty = 0.44
+        //                        1 palavra estranha em 4 (25%) → penalty = 0.56
+        const penalty = Math.pow(1 - foreignCheck.foreignRatio, 2);
+        const adjustedSimilarity = matchResult.similarity * Math.max(0.25, penalty);
         const effectiveThreshold = movieInfo.mediaType === 'movie' ? 0.65 : 0.55;
 
         if (adjustedSimilarity < effectiveThreshold) {
@@ -177,7 +179,7 @@ export class SimilarityCalculator {
       }
     }
 
-    const threshold = mediaType === 'movie' ? 0.75 : 0.65;
+    const threshold = mediaType === 'movie' ? 0.70 : 0.65;
     const tmdbTitleLength = validTmdbTitles[0]?.length || 0;
     const effectiveThreshold = tmdbTitleLength <= 3 ? threshold * 0.7 : threshold;
 
@@ -450,7 +452,8 @@ export class SimilarityCalculator {
   normalizeForComparison(title: string, mediaType?: 'movie' | 'tv'): string {
     let clean = title
       .replace(/&#(\d+);/g, (_, d) => String.fromCharCode(Number(d)))
-      .replace(/&ndash;|&mdash;|&amp;|&lt;|&gt;|&quot;|&#039;|&apos;/g, ' ')
+      .replace(/&[AEIOUYaeiouy](?:grave|acute|circ|tilde|uml|ring|cedil|slash);/g, ' ') // À, É, etc
+      .replace(/&(?:ndash|mdash|amp|lt|gt|quot|apos|nbsp|rsquo|lsquo|rdquo|ldquo|hellip);/g, ' ')
       .toLowerCase()
       .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s]/g, ' ')
@@ -477,6 +480,8 @@ export class SimilarityCalculator {
     TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
     clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
     clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
+    clean = clean.replace(/\b(19|20)\d{2}\b/g, ''); // remove anos
+    clean = clean.replace(/\bs\d{1,3}e\d{1,3}\b/gi, ''); // remove S01E01
     clean = clean.replace(/\s+/g, ' ').trim();
 
     return clean + seqSuffix;
@@ -497,7 +502,8 @@ export class SimilarityCalculator {
     allTmdbTitles: string[],
     mediaType?: 'movie' | 'tv'
   ): { hasForeign: boolean; foreignWords: string[]; foreignRatio: number } {
-    const torrentWords = torrentClean.split(' ').filter(w => w.length > 2);
+    // Filtra palavras >2 chars e ignora números puros (anos, 1917, etc)
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 2 && !/^\d+$/.test(w));
     if (torrentWords.length === 0) {
       return { hasForeign: false, foreignWords: [], foreignRatio: 0 };
     }
@@ -507,7 +513,7 @@ export class SimilarityCalculator {
     for (const title of allTmdbTitles) {
       this.normalizeForComparison(title, mediaType)
         .split(' ')
-        .filter(w => w.length > 2)
+        .filter(w => w.length > 2 && !/^\d+$/.test(w))
         .forEach(w => tmdbWords.add(w));
     }
 
