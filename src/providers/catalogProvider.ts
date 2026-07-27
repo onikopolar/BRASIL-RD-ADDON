@@ -145,19 +145,15 @@ export class CatalogProvider {
     const finalSeason = season ?? (match ? parseInt(match[1]) : undefined);
     const finalEpisode = episode ?? (match ? parseInt(match[2]) : undefined);
 
-    let searchQuery = '';
-    let seasonYear: number | null = null;
-    if (imdbId) {
-      const tmdb = await this.getTmdbSearchData(imdbId, finalSeason);
-      if (tmdb) {
-        searchQuery = tmdb.searchTitle;
-        seasonYear = tmdb.seasonYear;
-      }
-    }
-    if (!searchQuery) {
+    // Cache local: busca TMDB UMA vez e reusa
+    const tmdb = imdbId ? await this.getTmdbSearchData(imdbId, finalSeason) : null;
+    if (!tmdb || !tmdb.searchTitle) {
       this.logger.warn('Sem título para scraping', { imdbId });
       return [];
     }
+
+    let searchQuery = tmdb.searchTitle;
+    const seasonYear = tmdb.seasonYear;
 
     if (type === 'series' && finalSeason) {
       searchQuery = `${searchQuery} Temporada ${finalSeason}`;
@@ -171,7 +167,7 @@ export class CatalogProvider {
     const uniqueTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
     const { valid, invalid } = await this.filterAndValidateTorrents(
       uniqueTorrents, imdbId, request, finalSeason, finalEpisode,
-      (await this.getTmdbSearchData(imdbId!, finalSeason)).imdbTitles
+      tmdb.imdbTitles
     );
 
     //  FALLBACK: Se scrapers não acharam nada válido, tenta Torrentio
@@ -200,7 +196,7 @@ export class CatalogProvider {
         // Validar com TitleFilter (revalidar pra segurança)
         const torrentioValidation = await this.filterAndValidateTorrents(
           scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode,
-          (await this.getTmdbSearchData(imdbId!, finalSeason)).imdbTitles
+          tmdb.imdbTitles
         );
 
         if (torrentioValidation.valid.length > 0) {
@@ -227,7 +223,7 @@ export class CatalogProvider {
     }
 
     await this.saveValidTorrentsToCatalog(valid, request, finalSeason, episodeToSave,
-      (await this.getTmdbSearchData(imdbId!, finalSeason)).imdbTitles, !hasExactEpisode && hasCompletePack);
+      tmdb.imdbTitles, !hasExactEpisode && hasCompletePack);
 
     const streams = await this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
     return this.streamFormatter.sortStreamsByQuality(streams);
@@ -282,7 +278,8 @@ export class CatalogProvider {
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 
-    for (const torrent of torrents) {
+    // Paralelo: salva todos os magnets de uma vez (cada um tem sua própria validação)
+    await Promise.allSettled(torrents.map(async torrent => {
       try {
         const episodeValue = isPackFallback ? null : episode;
         await this.autoMagnetService.autoAddMagnet(
@@ -292,14 +289,14 @@ export class CatalogProvider {
       } catch (error) {
         this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
       }
-    }
+    }));
   }
 
   private async processTorrentsWithOptimization(
     torrents: ScrapedTorrent[], request: any, season?: number, episode?: number
   ): Promise<Stream[]> {
     const streams: Stream[] = [];
-    const batchSize = 3;
+    const batchSize = 5;
     for (let i = 0; i < torrents.length; i += batchSize) {
       const batch = torrents.slice(i, i + batchSize);
       const batchPromises = batch.map(async torrent => {
@@ -317,7 +314,6 @@ export class CatalogProvider {
       for (const r of results) {
         if (r.status === 'fulfilled') streams.push(...r.value);
       }
-      if (i + batchSize < torrents.length) await new Promise(resolve => setTimeout(resolve, 800));
     }
     return streams;
   }
@@ -375,62 +371,6 @@ export class CatalogProvider {
   private markScrapingEnd(request: any): void {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
     this.inFlightScraping.delete(key);
-  }
-
-  private async getStreamsFromDatabase(request: any, season?: number, episode?: number): Promise<Stream[]> {
-    const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
-    if (!imdbId) return [];
-    const finalSeason = season ?? request.season;
-    const finalEpisode = episode ?? request.episode;
-
-    let entries: any[] = [];
-    if (request.type === 'movie') {
-      entries = await getImdbIdMovieEntries(imdbId);
-    } else if (request.type === 'series' && finalSeason !== undefined) {
-      entries = await getImdbIdSeriesEntries(imdbId, finalSeason, finalEpisode);
-    }
-    if (!entries.length) return [];
-
-    const torrentData = await this.processDatabaseTorrents(entries, request, finalSeason, finalEpisode);
-    const sorted = this.sortTorrentsByQuality(torrentData);
-    return this.createStreamsFromDbTorrents(sorted, request, finalSeason, finalEpisode);
-  }
-
-  private async processDatabaseTorrents(entries: any[], request: any, season?: number, episode?: number): Promise<any[]> {
-    const map = new Map<string, any>();
-    for (const entry of entries) {
-      const torrent = entry.Torrent;
-      const magnet = torrent.magnetLink || '';
-      const hash = extractHashFromMagnet(magnet);
-      if (!hash) continue;
-      const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
-      const quality = this.qualityDetector.extractBestQuality(torrent.title) || 'HD';
-      map.set(hash, {
-        torrent, metadata, quality,
-        qualityScore: this.getQualityScore(quality),
-        seeds: torrent.seeders || 50,
-        size: this.formatSize(torrent.size || 0),
-        language: torrent.languages || 'PT-BR',
-        magnet, magnetHash: hash, title: torrent.title,
-        requestType: request.type, season, episode
-      });
-    }
-    return Array.from(map.values());
-  }
-
-  private async createStreamsFromDbTorrents(torrents: any[], request: any, season?: number, episode?: number): Promise<Stream[]> {
-    const streams: Stream[] = [];
-    for (const t of torrents) {
-      const formatted = {
-        title: t.title, magnet: t.magnet, seeders: t.seeds,
-        size: t.size, quality: t.quality, language: t.language
-      };
-      const streamArrays = this.streamFormatter.createMultipleQualityStreams(
-        formatted, request, null, t.requestType, season, episode, undefined, 0
-      );
-      streams.push(...streamArrays);
-    }
-    return streams;
   }
 
   private async getStreamsFromJson(request: any, season?: number, episode?: number): Promise<Stream[]> {

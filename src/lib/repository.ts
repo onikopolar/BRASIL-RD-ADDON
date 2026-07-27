@@ -15,7 +15,7 @@ export function getImdbIdMovieEntries(imdbId: string) {
   return File.findAll({
     where: { imdbId: { [Op.eq]: imdbId } },
     include: [Torrent],
-    limit: 500,
+    limit: 50,
     order: [[Torrent, 'seeders', 'DESC']]
   });
 }

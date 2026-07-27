@@ -26,7 +26,7 @@ function getImdbIdMovieEntries(imdbId) {
     return models_js_1.File.findAll({
         where: { imdbId: { [sequelize_1.Op.eq]: imdbId } },
         include: [models_js_1.Torrent],
-        limit: 500,
+        limit: 50,
         order: [[models_js_1.Torrent, 'seeders', 'DESC']]
     });
 }

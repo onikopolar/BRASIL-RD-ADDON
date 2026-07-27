@@ -324,35 +324,25 @@ export class StreamHandler {
   }
 
   private async getImdbIdSeriesEntries(imdbId: string, season: number, episode: number) {
-    // Busca episodio especifico
-    const specificEpisodeEntries = await File.findAll({
+    // Query única: busca episódio específico + packs (episode null) em um só round-trip
+    const entries = await File.findAll({
       where: {
         imdbId: { [Op.eq]: imdbId },
         imdbSeason: { [Op.eq]: season },
-        imdbEpisode: { [Op.eq]: episode }
+        [Op.or]: [
+          { imdbEpisode: { [Op.eq]: episode } },
+          { imdbEpisode: { [Op.is]: null } }
+        ]
       },
       include: [{ model: Torrent, required: true, where: { seeders: { [Op.gte]: 5 } } }],
-      limit: 15,
+      limit: 30,
       order: [[Torrent, 'seeders', 'DESC']]
     });
 
-    if (specificEpisodeEntries.length > 0) {
-      return specificEpisodeEntries;
-    }
-
-    // Fallback para packs completos (episode null)
-    const completePackEntries = await File.findAll({
-      where: {
-        imdbId: { [Op.eq]: imdbId },
-        imdbSeason: { [Op.eq]: season },
-        imdbEpisode: { [Op.eq]: null }
-      },
-      include: [{ model: Torrent, required: true, where: { seeders: { [Op.gte]: 5 } } }],
-      limit: 15,
-      order: [[Torrent, 'seeders', 'DESC']]
-    });
-
-    return completePackEntries;
+    // Prioriza episódios específicos primeiro, packs depois
+    const specific = entries.filter(e => e.imdbEpisode === episode);
+    const packs = entries.filter(e => e.imdbEpisode === null);
+    return specific.length > 0 ? specific : packs;
   }
 
   /**

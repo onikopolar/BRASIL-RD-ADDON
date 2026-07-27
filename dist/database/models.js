@@ -93,7 +93,11 @@ Torrent.init({
     sequelize,
     modelName: 'Torrent',
     tableName: 'torrents',
-    timestamps: false
+    timestamps: false,
+    indexes: [
+        { fields: ['seeders'] },
+        { fields: ['type'] }
+    ]
 });
 File.init({
     id: { type: sequelize_1.DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
@@ -114,7 +118,15 @@ File.init({
     },
     kitsuId: { type: sequelize_1.DataTypes.INTEGER },
     kitsuEpisode: { type: sequelize_1.DataTypes.INTEGER }
-}, { sequelize, modelName: 'file' });
+}, {
+    sequelize,
+    modelName: 'file',
+    indexes: [
+        { fields: ['infoHash'] },
+        { fields: ['imdbId', 'imdbSeason', 'imdbEpisode'] },
+        { fields: ['kitsuId'] }
+    ]
+});
 Subtitle.init({
     infoHash: {
         type: sequelize_1.DataTypes.STRING(64),

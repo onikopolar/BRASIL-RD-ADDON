@@ -6,7 +6,6 @@ const streamFormatter_js_1 = require("../lib/streamFormatter.js");
 const magnetHelper_js_1 = require("../lib/magnetHelper.js");
 const logger_js_1 = require("../utils/logger.js");
 const MetadataExtractor_js_1 = require("../lib/title-filter/MetadataExtractor.js");
-const repository_js_1 = require("../lib/repository.js");
 const TorrentScraperService_js_1 = require("../services/scraper/TorrentScraperService.js");
 const ImdbScraperService_js_1 = require("../services/ImdbScraperService.js");
 const titleFilter_js_1 = require("../lib/titleFilter.js");
@@ -101,19 +100,13 @@ class CatalogProvider {
         const match = request.id.match(/tt\d+:(\d+):(\d+)/);
         const finalSeason = season ?? (match ? parseInt(match[1]) : undefined);
         const finalEpisode = episode ?? (match ? parseInt(match[2]) : undefined);
-        let searchQuery = '';
-        let seasonYear = null;
-        if (imdbId) {
-            const tmdb = await this.getTmdbSearchData(imdbId, finalSeason);
-            if (tmdb) {
-                searchQuery = tmdb.searchTitle;
-                seasonYear = tmdb.seasonYear;
-            }
-        }
-        if (!searchQuery) {
+        const tmdb = imdbId ? await this.getTmdbSearchData(imdbId, finalSeason) : null;
+        if (!tmdb || !tmdb.searchTitle) {
             this.logger.warn('Sem título para scraping', { imdbId });
             return [];
         }
+        let searchQuery = tmdb.searchTitle;
+        const seasonYear = tmdb.seasonYear;
         if (type === 'series' && finalSeason) {
             searchQuery = `${searchQuery} Temporada ${finalSeason}`;
         }
@@ -121,7 +114,7 @@ class CatalogProvider {
         if (!torrentResults.length)
             return [];
         const uniqueTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
-        const { valid, invalid } = await this.filterAndValidateTorrents(uniqueTorrents, imdbId, request, finalSeason, finalEpisode, (await this.getTmdbSearchData(imdbId, finalSeason)).imdbTitles);
+        const { valid, invalid } = await this.filterAndValidateTorrents(uniqueTorrents, imdbId, request, finalSeason, finalEpisode, tmdb.imdbTitles);
         if (valid.length === 0) {
             this.logger.debug(' Scrapers não acharam torrents PT-BR, tentando Torrentio como fallback...', { imdbId });
             const torrentioResults = await this.torrentioService.search(type, imdbId, finalSeason, finalEpisode);
@@ -138,7 +131,7 @@ class CatalogProvider {
                     language: tr.language,
                     type: tr.type
                 }));
-                const torrentioValidation = await this.filterAndValidateTorrents(scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode, (await this.getTmdbSearchData(imdbId, finalSeason)).imdbTitles);
+                const torrentioValidation = await this.filterAndValidateTorrents(scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode, tmdb.imdbTitles);
                 if (torrentioValidation.valid.length > 0) {
                     valid.push(...torrentioValidation.valid);
                 }
@@ -158,7 +151,7 @@ class CatalogProvider {
         if (!hasExactEpisode && hasCompletePack && finalSeason) {
             episodeToSave = null;
         }
-        await this.saveValidTorrentsToCatalog(valid, request, finalSeason, episodeToSave, (await this.getTmdbSearchData(imdbId, finalSeason)).imdbTitles, !hasExactEpisode && hasCompletePack);
+        await this.saveValidTorrentsToCatalog(valid, request, finalSeason, episodeToSave, tmdb.imdbTitles, !hasExactEpisode && hasCompletePack);
         const streams = await this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
         return this.streamFormatter.sortStreamsByQuality(streams);
     }
@@ -196,7 +189,7 @@ class CatalogProvider {
         const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
         if (!imdbId || torrents.length === 0)
             return;
-        for (const torrent of torrents) {
+        await Promise.allSettled(torrents.map(async (torrent) => {
             try {
                 const episodeValue = isPackFallback ? null : episode;
                 await this.autoMagnetService.autoAddMagnet(torrent.magnet, torrent.title, imdbId, request.type, torrent.seeders, torrent.quality, torrent.size, season, episodeValue);
@@ -204,11 +197,11 @@ class CatalogProvider {
             catch (error) {
                 this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
             }
-        }
+        }));
     }
     async processTorrentsWithOptimization(torrents, request, season, episode) {
         const streams = [];
-        const batchSize = 3;
+        const batchSize = 5;
         for (let i = 0; i < torrents.length; i += batchSize) {
             const batch = torrents.slice(i, i + batchSize);
             const batchPromises = batch.map(async (torrent) => {
@@ -224,8 +217,6 @@ class CatalogProvider {
                 if (r.status === 'fulfilled')
                     streams.push(...r.value);
             }
-            if (i + batchSize < torrents.length)
-                await new Promise(resolve => setTimeout(resolve, 800));
         }
         return streams;
     }
@@ -275,59 +266,6 @@ class CatalogProvider {
     markScrapingEnd(request) {
         const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
         this.inFlightScraping.delete(key);
-    }
-    async getStreamsFromDatabase(request, season, episode) {
-        const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
-        if (!imdbId)
-            return [];
-        const finalSeason = season ?? request.season;
-        const finalEpisode = episode ?? request.episode;
-        let entries = [];
-        if (request.type === 'movie') {
-            entries = await (0, repository_js_1.getImdbIdMovieEntries)(imdbId);
-        }
-        else if (request.type === 'series' && finalSeason !== undefined) {
-            entries = await (0, repository_js_1.getImdbIdSeriesEntries)(imdbId, finalSeason, finalEpisode);
-        }
-        if (!entries.length)
-            return [];
-        const torrentData = await this.processDatabaseTorrents(entries, request, finalSeason, finalEpisode);
-        const sorted = this.sortTorrentsByQuality(torrentData);
-        return this.createStreamsFromDbTorrents(sorted, request, finalSeason, finalEpisode);
-    }
-    async processDatabaseTorrents(entries, request, season, episode) {
-        const map = new Map();
-        for (const entry of entries) {
-            const torrent = entry.Torrent;
-            const magnet = torrent.magnetLink || '';
-            const hash = (0, magnetHelper_js_1.extractHashFromMagnet)(magnet);
-            if (!hash)
-                continue;
-            const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
-            const quality = this.qualityDetector.extractBestQuality(torrent.title) || 'HD';
-            map.set(hash, {
-                torrent, metadata, quality,
-                qualityScore: this.getQualityScore(quality),
-                seeds: torrent.seeders || 50,
-                size: this.formatSize(torrent.size || 0),
-                language: torrent.languages || 'PT-BR',
-                magnet, magnetHash: hash, title: torrent.title,
-                requestType: request.type, season, episode
-            });
-        }
-        return Array.from(map.values());
-    }
-    async createStreamsFromDbTorrents(torrents, request, season, episode) {
-        const streams = [];
-        for (const t of torrents) {
-            const formatted = {
-                title: t.title, magnet: t.magnet, seeders: t.seeds,
-                size: t.size, quality: t.quality, language: t.language
-            };
-            const streamArrays = this.streamFormatter.createMultipleQualityStreams(formatted, request, null, t.requestType, season, episode, undefined, 0);
-            streams.push(...streamArrays);
-        }
-        return streams;
     }
     async getStreamsFromJson(request, season, episode) {
         const curated = this.magnetService.searchMagnets(request);

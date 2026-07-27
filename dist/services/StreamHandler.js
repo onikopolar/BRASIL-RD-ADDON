@@ -252,30 +252,22 @@ class StreamHandler {
         });
     }
     async getImdbIdSeriesEntries(imdbId, season, episode) {
-        const specificEpisodeEntries = await models_js_1.File.findAll({
+        const entries = await models_js_1.File.findAll({
             where: {
                 imdbId: { [sequelize_1.Op.eq]: imdbId },
                 imdbSeason: { [sequelize_1.Op.eq]: season },
-                imdbEpisode: { [sequelize_1.Op.eq]: episode }
+                [sequelize_1.Op.or]: [
+                    { imdbEpisode: { [sequelize_1.Op.eq]: episode } },
+                    { imdbEpisode: { [sequelize_1.Op.is]: null } }
+                ]
             },
             include: [{ model: models_js_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
-            limit: 15,
+            limit: 30,
             order: [[models_js_1.Torrent, 'seeders', 'DESC']]
         });
-        if (specificEpisodeEntries.length > 0) {
-            return specificEpisodeEntries;
-        }
-        const completePackEntries = await models_js_1.File.findAll({
-            where: {
-                imdbId: { [sequelize_1.Op.eq]: imdbId },
-                imdbSeason: { [sequelize_1.Op.eq]: season },
-                imdbEpisode: { [sequelize_1.Op.eq]: null }
-            },
-            include: [{ model: models_js_1.Torrent, required: true, where: { seeders: { [sequelize_1.Op.gte]: 5 } } }],
-            limit: 15,
-            order: [[models_js_1.Torrent, 'seeders', 'DESC']]
-        });
-        return completePackEntries;
+        const specific = entries.filter(e => e.imdbEpisode === episode);
+        const packs = entries.filter(e => e.imdbEpisode === null);
+        return specific.length > 0 ? specific : packs;
     }
     async validateDatabaseEntry(torrentTitle, imdbId, type, season, episode) {
         try {
