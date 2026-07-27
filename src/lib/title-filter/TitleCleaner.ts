@@ -9,6 +9,7 @@ export class TitleCleaner {
   private readonly logger: Logger;
   private readonly cleanTitleCache = new Map<string, TitleCacheEntry>();
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
+  private cleanCallCount = 0;
 
   private static instance: TitleCleaner;
 
@@ -43,8 +44,8 @@ export class TitleCleaner {
   extractCleanTitle(fullTitle: string): string {
     const cacheKey = `clean:${fullTitle}`;
     
-    // Limpa caches antigos ocasionalmente
-    if (Math.random() < 0.01) {
+    // Limpa caches a cada 200 chamadas (previsível, não aleatório)
+    if (++this.cleanCallCount % 200 === 0) {
       this.cleanupOldCaches();
     }
     

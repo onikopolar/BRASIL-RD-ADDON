@@ -24,7 +24,6 @@ export class TitleFilter {
   private readonly DEDUP_CACHE_TTL = 10 * 60 * 1000;
   private readonly TITLE_CACHE_TTL = 5 * 60 * 1000;
   private readonly VERSION = '2.6.1'; // Melhoria na detecção de packs
-  private cleanupCounter = 0;
 
   private static instance: TitleFilter;
 
@@ -72,7 +71,6 @@ export class TitleFilter {
     const infoHash = this.extractInfoHash(torrent.magnet || torrent);
     const title = torrent.title || torrent;
     const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
-    if (++this.cleanupCounter % 100 === 0) this.cleanupOldCaches();
     if (this.cacheManager.isAlreadyProcessed(dedupeKey)) return true;
     this.cacheManager.markAsProcessed(dedupeKey);
     return false;

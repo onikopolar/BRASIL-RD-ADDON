@@ -12,6 +12,7 @@ class TitleCleaner {
     constructor() {
         this.cleanTitleCache = new Map();
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
+        this.cleanCallCount = 0;
         this.logger = new logger_js_1.Logger('TitleCleaner');
         this.logger.debug('TitleCleaner ready');
     }
@@ -25,7 +26,7 @@ class TitleCleaner {
     }
     extractCleanTitle(fullTitle) {
         const cacheKey = `clean:${fullTitle}`;
-        if (Math.random() < 0.01) {
+        if (++this.cleanCallCount % 200 === 0) {
             this.cleanupOldCaches();
         }
         const cachedEntry = this.cleanTitleCache.get(cacheKey);

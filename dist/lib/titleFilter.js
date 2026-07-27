@@ -16,7 +16,6 @@ class TitleFilter {
         this.DEDUP_CACHE_TTL = 10 * 60 * 1000;
         this.TITLE_CACHE_TTL = 5 * 60 * 1000;
         this.VERSION = '2.6.1';
-        this.cleanupCounter = 0;
         this.logger = new logger_js_1.Logger('TitleFilter');
         this.imdbScraper = ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.titleCleaner = index_js_1.TitleCleaner.getInstance();
@@ -51,8 +50,6 @@ class TitleFilter {
         const infoHash = this.extractInfoHash(torrent.magnet || torrent);
         const title = torrent.title || torrent;
         const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
-        if (++this.cleanupCounter % 100 === 0)
-            this.cleanupOldCaches();
         if (this.cacheManager.isAlreadyProcessed(dedupeKey))
             return true;
         this.cacheManager.markAsProcessed(dedupeKey);

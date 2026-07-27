@@ -22,6 +22,8 @@ export class CacheManager {
   private readonly TITLE_CACHE_TTL: number;
 
   private static instance: CacheManager;
+  private static cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000;
 
   public static getInstance(): CacheManager {
     if (!CacheManager.instance) {
@@ -31,14 +33,23 @@ export class CacheManager {
   }
   
   constructor(
-    imdbCacheTTL: number = 30 * 60 * 1000,    // 30 minutos
-    dedupCacheTTL: number = 10 * 60 * 1000,   // 10 minutos
-    titleCacheTTL: number = 5 * 60 * 1000     // 5 minutos
+    imdbCacheTTL: number = 30 * 60 * 1000,
+    dedupCacheTTL: number = 10 * 60 * 1000,
+    titleCacheTTL: number = 5 * 60 * 1000
   ) {
     this.logger = new Logger('CacheManager');
     this.IMDB_CACHE_TTL = imdbCacheTTL;
     this.DEDUP_CACHE_TTL = dedupCacheTTL;
     this.TITLE_CACHE_TTL = titleCacheTTL;
+    
+    // Limpeza periódica via timer (não mais Math.random())
+    if (!CacheManager.cleanupTimer) {
+      CacheManager.cleanupTimer = setInterval(() => {
+        this.cleanupOldCaches();
+      }, CacheManager.CLEANUP_INTERVAL_MS);
+      if (CacheManager.cleanupTimer.unref) CacheManager.cleanupTimer.unref();
+    }
+    
     this.logger.debug('CacheManager ready');
   }
 
@@ -139,11 +150,6 @@ export class CacheManager {
    * Verifica se já foi processado - IGUAL AO ORIGINAL
    */
   isAlreadyProcessed(dedupeKey: string): boolean {
-    // Limpeza periódica - IGUAL AO ORIGINAL (1% chance)
-    if (Math.random() < 0.01) {
-      this.cleanupOldCaches();
-    }
-    
     return this.processedTimestamps.has(dedupeKey);
   }
 

@@ -4,6 +4,14 @@ exports.SimilarityCalculator = void 0;
 const logger_js_1 = require("../../utils/logger.js");
 const ImdbScraperService_js_1 = require("../../services/ImdbScraperService.js");
 const TechnicalWords_js_1 = require("./TechnicalWords.js");
+function escapeRegex(str) {
+    return str.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+}
+const COMPILED_TECH_WORDS = TechnicalWords_js_1.TECHNICAL_WORDS
+    .filter(t => !/^\d+$/.test(t))
+    .map(t => new RegExp(`\\b${escapeRegex(t)}\\b`, 'gi'));
+const COMPILED_TECH_ACRONYMS = TechnicalWords_js_1.TECHNICAL_ACRONYMS
+    .map(a => new RegExp(`\\b${escapeRegex(a)}\\b`, 'gi'));
 class SimilarityCalculator {
     static getInstance() {
         if (!SimilarityCalculator.instance) {
@@ -387,9 +395,8 @@ class SimilarityCalculator {
             }
         }
         clean = clean.replace(/[\/\.\-_:]/g, ' ');
-        TechnicalWords_js_1.TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term))
-            clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
-        TechnicalWords_js_1.TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
+        COMPILED_TECH_WORDS.forEach(re => { clean = clean.replace(re, ''); });
+        COMPILED_TECH_ACRONYMS.forEach(re => { clean = clean.replace(re, ''); });
         clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
         clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
         clean = clean.replace(/\b(19|20)\d{2}\b/g, '');

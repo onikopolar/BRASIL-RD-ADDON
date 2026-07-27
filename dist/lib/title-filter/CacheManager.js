@@ -19,6 +19,13 @@ class CacheManager {
         this.IMDB_CACHE_TTL = imdbCacheTTL;
         this.DEDUP_CACHE_TTL = dedupCacheTTL;
         this.TITLE_CACHE_TTL = titleCacheTTL;
+        if (!CacheManager.cleanupTimer) {
+            CacheManager.cleanupTimer = setInterval(() => {
+                this.cleanupOldCaches();
+            }, CacheManager.CLEANUP_INTERVAL_MS);
+            if (CacheManager.cleanupTimer.unref)
+                CacheManager.cleanupTimer.unref();
+        }
         this.logger.debug('CacheManager ready');
     }
     cleanupOldCaches(imdbCacheTTL, dedupCacheTTL, titleCacheTTL) {
@@ -93,9 +100,6 @@ class CacheManager {
         return uniqueTorrents;
     }
     isAlreadyProcessed(dedupeKey) {
-        if (Math.random() < 0.01) {
-            this.cleanupOldCaches();
-        }
         return this.processedTimestamps.has(dedupeKey);
     }
     markAsProcessed(dedupeKey) {
@@ -301,3 +305,5 @@ class CacheManager {
     }
 }
 exports.CacheManager = CacheManager;
+CacheManager.cleanupTimer = null;
+CacheManager.CLEANUP_INTERVAL_MS = 5 * 60 * 1000;

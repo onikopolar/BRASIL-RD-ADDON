@@ -3,6 +3,19 @@ import { SmartTitleMatch, SeriesConfusion } from './interfaces.js';
 import { ImdbScraperService } from '../../services/ImdbScraperService.js';
 import { TECHNICAL_WORDS, TECHNICAL_ACRONYMS } from './TechnicalWords.js';
 
+// Escape regex special chars (ex: "5.1" → "5\\.1")
+function escapeRegex(str: string): string {
+  return str.replace(/[.*+?^${}()|[\]\\\/-]/g, '\\$&');
+}
+
+// Pré-compila todos os regexes UMA vez no carregamento do módulo
+const COMPILED_TECH_WORDS: RegExp[] = TECHNICAL_WORDS
+  .filter(t => !/^\d+$/.test(t))
+  .map(t => new RegExp(`\\b${escapeRegex(t)}\\b`, 'gi'));
+
+const COMPILED_TECH_ACRONYMS: RegExp[] = TECHNICAL_ACRONYMS
+  .map(a => new RegExp(`\\b${escapeRegex(a)}\\b`, 'gi'));
+
 export class SimilarityCalculator {
   private readonly logger: Logger;
   private confusingSeries: SeriesConfusion[];
@@ -476,8 +489,9 @@ export class SimilarityCalculator {
     }
 
     clean = clean.replace(/[\/\.\-_:]/g, ' ');
-    TECHNICAL_WORDS.forEach(term => { if (!/^\d+$/.test(term)) clean = clean.replace(new RegExp(`\\b${term}\\b`, 'gi'), ''); });
-    TECHNICAL_ACRONYMS.forEach(acr => clean = clean.replace(new RegExp(`\\b${acr}\\b`, 'gi'), ''));
+    // Usa regexes pré-compilados (não recompila a cada chamada)
+    COMPILED_TECH_WORDS.forEach(re => { clean = clean.replace(re, ''); });
+    COMPILED_TECH_ACRONYMS.forEach(re => { clean = clean.replace(re, ''); });
     clean = clean.replace(/\b\d{3,4}[pi]\b/gi, '').replace(/\b[0-9]+k\b/gi, '').replace(/\b[hx]\d{3}\b/gi, '').replace(/\b\d+\.\d+(?:ch)?\b/gi, '');
     clean = clean.replace(/\b\d{1,3}\b/g, '').replace(/\b\d{5,}\b/g, '');
     clean = clean.replace(/\b(19|20)\d{2}\b/g, ''); // remove anos
