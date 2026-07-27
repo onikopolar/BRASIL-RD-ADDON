@@ -186,6 +186,12 @@ class TitleFilter {
             }
             const torrentMetadata = this.extractSeriesMetadata(torrentTitle);
             const torrentYear = this.extractTorrentYear(torrentTitle);
+            if (imdbTitles.mediaType === 'movie' && this.hasSeasonIndicator(torrentTitle)) {
+                return {
+                    matches: false, similarity: 0, torrentMetadata,
+                    reason: 'Torrent é série, mas TMDB diz que é filme'
+                };
+            }
             if (targetSeason !== undefined) {
                 if (torrentMetadata.season && torrentMetadata.season !== targetSeason) {
                     return { matches: false, similarity: 0, torrentMetadata, reason: `Temporada diferente: S${torrentMetadata.season} vs S${targetSeason}` };

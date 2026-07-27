@@ -6,6 +6,7 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "node build.js",
+    "postbuild": "pm2 restart brasil-rd-addon --update-env",
     "start": "node railway-start.js",
     "start:stremio": "node dist/server.js",
     "dev": "node scripts/dev.js",
