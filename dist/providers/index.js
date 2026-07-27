@@ -15,5 +15,4 @@ var __exportStar = (this && this.__exportStar) || function(m, exports) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 __exportStar(require("./catalogProvider.js"), exports);
-__exportStar(require("./scraperProvider.js"), exports);
 __exportStar(require("./realdebridProvider.js"), exports);

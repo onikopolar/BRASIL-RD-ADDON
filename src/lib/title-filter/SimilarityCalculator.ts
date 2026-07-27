@@ -98,6 +98,35 @@ export class SimilarityCalculator {
       if (yearValidation.shouldReject) {
         return { matches: false, similarity: matchResult.similarity * 0.7, reason: yearValidation.reason };
       }
+
+      // Verifica palavras no torrent que NÃO existem em nenhum título TMDB
+      // Ex: torrent "Avatar A Lenda de Korra" vs TMDB Aang "Avatar A Lenda de Aang"
+      // "korra" não está nos títulos TMDB → penalidade
+      const foreignCheck = this.checkForeignWords(torrentClean, movieInfo.allTitles, movieInfo.mediaType);
+      if (foreignCheck.hasForeign) {
+        const penalty = 1 - foreignCheck.foreignRatio;
+        const adjustedSimilarity = matchResult.similarity * Math.max(0.3, penalty);
+        const effectiveThreshold = movieInfo.mediaType === 'movie' ? 0.65 : 0.55;
+
+        if (adjustedSimilarity < effectiveThreshold) {
+          this.logger.debug('Palavras não-TMDB rejeitaram match', {
+            torrentTitle: torrentTitle.substring(0, 80),
+            foreignWords: foreignCheck.foreignWords,
+            originalSimilarity: (matchResult.similarity * 100).toFixed(1) + '%',
+            adjustedSimilarity: (adjustedSimilarity * 100).toFixed(1) + '%',
+            foreignRatio: (foreignCheck.foreignRatio * 100).toFixed(0) + '%'
+          });
+          return {
+            matches: false,
+            similarity: adjustedSimilarity,
+            reason: `Palavras estranhas ao TMDB: [${foreignCheck.foreignWords.join(', ')}]`
+          };
+        }
+
+        matchResult.similarity = adjustedSimilarity;
+        matchResult.reason += ` | ⚠️ extra-TMDB: [${foreignCheck.foreignWords.join(', ')}]`;
+      }
+
       return matchResult;
     }
 
@@ -456,6 +485,41 @@ export class SimilarityCalculator {
   private extractYearFromTitle(title: string): number | null {
     const m = title.match(/\b(19|20)\d{2}\b/);
     return m ? parseInt(m[0]) : null;
+  }
+
+  /**
+   * Verifica se o torrent contém palavras significativas que não aparecem
+   * em nenhum título TMDB do IMDB solicitado.
+   * Ex: "Korra" num torrent quando o TMDB é do Aang.
+   */
+  private checkForeignWords(
+    torrentClean: string,
+    allTmdbTitles: string[],
+    mediaType?: 'movie' | 'tv'
+  ): { hasForeign: boolean; foreignWords: string[]; foreignRatio: number } {
+    const torrentWords = torrentClean.split(' ').filter(w => w.length > 2);
+    if (torrentWords.length === 0) {
+      return { hasForeign: false, foreignWords: [], foreignRatio: 0 };
+    }
+
+    // Coleta todas as palavras de todos os títulos TMDB (normalizados)
+    const tmdbWords = new Set<string>();
+    for (const title of allTmdbTitles) {
+      this.normalizeForComparison(title, mediaType)
+        .split(' ')
+        .filter(w => w.length > 2)
+        .forEach(w => tmdbWords.add(w));
+    }
+
+    // Palavras do torrent que não estão em NENHUM título TMDB
+    const foreignWords = torrentWords.filter(w => !tmdbWords.has(w));
+    const foreignRatio = foreignWords.length / torrentWords.length;
+
+    return {
+      hasForeign: foreignWords.length > 0,
+      foreignWords,
+      foreignRatio
+    };
   }
 
   calculateWordSimilarity(str1: string, str2: string): number {

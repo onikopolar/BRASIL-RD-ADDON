@@ -45,7 +45,8 @@ export class CuratedMagnetService {
 
   private async initializeDefaultMagnets(): Promise<void> {
     try {
-      const fs = await import('fs-extra');
+      const fsModule = await import('fs-extra');
+      const fs = (fsModule as any).default || fsModule;
       const path = await import('path');
 
       const magnetsPath = path.join(process.cwd(), 'data/magnets.json');

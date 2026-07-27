@@ -70,6 +70,12 @@ const WP_SITES: WordPressSite[] = [
     priority: 8,
     timeout: 15000,
   },
+  {
+    name: 'starckfilmes',
+    baseUrl: 'https://www.starckfilmes.net',
+    priority: 12,
+    timeout: 15000,
+  },
 ];
 
 export class WordPressScraper {
