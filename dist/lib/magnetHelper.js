@@ -1,79 +1,52 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.extractHashFromMagnet = extractHashFromMagnet;
-exports.generateLazyResolveUrl = generateLazyResolveUrl;
-exports.generateOldLazyResolveUrl = generateOldLazyResolveUrl;
-function base32ToHex(base32) {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
-    const cleaned = base32.toUpperCase().replace(/=+$/, '');
-    let bits = '';
-    for (let i = 0; i < cleaned.length; i++) {
-        const val = alphabet.indexOf(cleaned[i]);
-        if (val === -1)
-            throw new Error(`Caractere inválido em Base32: ${cleaned[i]}`);
-        bits += val.toString(2).padStart(5, '0');
+exports.analisarMagnet = analisarMagnet;
+exports.gerarUrlResolve = gerarUrlResolve;
+let analisadorTorrent = null;
+async function carregarAnalisador() {
+    if (!analisadorTorrent) {
+        const modulo = await import('parse-torrent');
+        analisadorTorrent = modulo.default;
     }
-    const relevantBits = bits.slice(0, 160);
-    let hex = '';
-    for (let i = 0; i < relevantBits.length; i += 4) {
-        const nibble = relevantBits.substring(i, i + 4);
-        hex += parseInt(nibble, 2).toString(16);
-    }
-    return hex.padStart(40, '0').slice(0, 40).toLowerCase();
+    return analisadorTorrent;
 }
-function extractHashFromMagnet(magnet) {
-    const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
-    if (!match)
-        return null;
-    let hash = match[1].toLowerCase();
-    if (hash.length === 32 && /^[a-z2-7]+$/.test(hash)) {
-        try {
-            hash = base32ToHex(hash);
-        }
-        catch {
+async function analisarMagnet(magnet) {
+    try {
+        const analisador = await carregarAnalisador();
+        const resultado = await analisador(magnet);
+        if (!resultado || !resultado.infoHash)
             return null;
-        }
+        return {
+            infoHash: resultado.infoHash.toLowerCase(),
+            nome: resultado.name || null,
+            anuncios: Array.isArray(resultado.announce) ? resultado.announce : []
+        };
     }
-    else if (hash.length !== 40 || !/^[a-f0-9]{40}$/.test(hash)) {
+    catch {
         return null;
     }
-    return hash;
 }
-function generateLazyResolveUrl(magnet, apiKey, filename = 'video.mkv', fileIndex = 0, type, season, episode) {
-    const infoHash = extractHashFromMagnet(magnet);
-    if (!infoHash) {
-        throw new Error('Could not extract info hash from magnet');
+async function gerarUrlResolve(magnet, chaveApi, nomeArquivo = 'video.mkv', indiceArquivo = 0, tipo, temporada, episodio) {
+    const dados = await analisarMagnet(magnet);
+    if (!dados) {
+        throw new Error('Nao foi possivel extrair infoHash do magnet');
     }
-    const encodedFilename = encodeURIComponent(filename);
+    const arquivoCodificado = encodeURIComponent(nomeArquivo);
     const baseUrl = process.env.BASE_URL
         || (process.env.RAILWAY_STATIC_URL
             ? `https://${process.env.RAILWAY_STATIC_URL}`
             : `http://localhost:${process.env.PORT || 7000}`);
-    let url = `${baseUrl}/resolve/torbox/${apiKey}/${infoHash}/null/${fileIndex}/${encodedFilename}`;
-    const params = new URLSearchParams();
-    if (type)
-        params.append('type', type);
-    if (type === 'series' && season !== undefined) {
-        params.append('season', season.toString());
-        if (episode !== undefined)
-            params.append('episode', episode.toString());
+    let url = `${baseUrl}/resolve/torbox/${chaveApi}/${dados.infoHash}/null/${indiceArquivo}/${arquivoCodificado}`;
+    const parametros = new URLSearchParams();
+    if (tipo)
+        parametros.append('type', tipo);
+    if (tipo === 'series' && temporada !== undefined) {
+        parametros.append('season', temporada.toString());
+        if (episodio !== undefined)
+            parametros.append('episode', episodio.toString());
     }
-    const queryString = params.toString();
-    if (queryString)
-        url += `?${queryString}`;
-    return url;
-}
-function generateOldLazyResolveUrl(magnet, apiKey, type, season, episode) {
-    const encodedMagnet = Buffer.from(magnet).toString('base64');
-    const domain = process.env.RAILWAY_STATIC_URL || "localhost:7000";
-    const protocol = process.env.RAILWAY_STATIC_URL ? "https" : "http";
-    let url = `${protocol}://${domain}/resolve/${encodedMagnet}?apiKey=${encodeURIComponent(apiKey)}`;
-    if (type)
-        url += `&type=${type}`;
-    if (type === 'series' && season !== undefined) {
-        url += `&season=${season}`;
-        if (episode !== undefined)
-            url += `&episode=${episode}`;
-    }
+    const consulta = parametros.toString();
+    if (consulta)
+        url += `?${consulta}`;
     return url;
 }

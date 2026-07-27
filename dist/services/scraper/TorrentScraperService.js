@@ -42,11 +42,13 @@ const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 const scraperProviders_js_1 = require("./scraperProviders.js");
 const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
-const ImdbScraperService_js_1 = require("../ImdbScraperService.js");
+const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
+const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
+        this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
         this.version = '6.2.0';
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
@@ -363,16 +365,7 @@ class TorrentScraperService {
         return Math.max(0, Math.min(100, score));
     }
     extractSeasonNumber(text) {
-        const patterns = [/S(\d+)/i, /Season\s+(\d+)/i, /Temporada\s+(\d+)/i, /(\d+)\s*x/i, /(\d+)ª?\s*Temp/i, /s(\d+)\s*e\d+/i, /(\d+)\s*temporada/i];
-        for (const p of patterns) {
-            const m = text.match(p);
-            if (m?.[1]) {
-                const s = parseInt(m[1]);
-                if (!isNaN(s) && s > 0)
-                    return s;
-            }
-        }
-        return null;
+        return this.episodeMatcher.extractSeasonFromTitle(text);
     }
     prepareSearchQuery(query, type, targetSeason) {
         if (type === 'series' && targetSeason !== undefined && !/temporada|season|s\d+/i.test(query)) {

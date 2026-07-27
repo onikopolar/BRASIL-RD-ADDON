@@ -1,6 +1,7 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.setupResolveRoutes = void 0;
+const magnetHelper_js_1 = require("../lib/magnetHelper.js");
 const AutoMagnetService_js_1 = require("../services/AutoMagnetService.js");
 const RealDebridService_js_1 = require("../services/RealDebridService.js");
 const RdTorrentCacheService_js_1 = require("../services/RdTorrentCacheService.js");
@@ -31,12 +32,12 @@ function createStreamFromStaticResponse(staticResponseService, staticResponse, r
         sources: []
     };
 }
-function extractMagnetHash(magnet) {
-    const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
-    return match ? match[1].toLowerCase() : null;
+async function extrairInfoHashDoMagnet(magnet) {
+    const dados = await (0, magnetHelper_js_1.analisarMagnet)(magnet);
+    return dados ? dados.infoHash : null;
 }
 async function processMagnetWithTorbox(magnet, apiKey, season, episode, type = 'movie') {
-    const magnetHash = extractMagnetHash(magnet);
+    const magnetHash = await extrairInfoHashDoMagnet(magnet);
     if (!magnetHash)
         return { success: false, status: 'error', message: 'Magnet link inválido' };
     const isSeries = type === 'series' || season !== undefined;
@@ -279,7 +280,7 @@ const setupResolveRoutes = (app) => {
             if (!apiKey)
                 return res.status(400).json({ success: false, error: 'API key obrigatória' });
             const torboxService = new RealDebridService_js_1.TorboxService();
-            const magnetHash = extractMagnetHash(magnet);
+            const magnetHash = await extrairInfoHashDoMagnet(magnet);
             if (!magnetHash)
                 return res.status(400).json({ success: false, error: 'Magnet inválido' });
             const existing = await torboxService.findExistingTorrent(magnetHash, apiKey);

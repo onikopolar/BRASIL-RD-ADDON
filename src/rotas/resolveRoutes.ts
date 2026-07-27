@@ -1,8 +1,9 @@
-import { AutoMagnetService } from '../services/AutoMagnetService.js';
-import { TorboxService } from '../services/RealDebridService.js';
-import { RdTorrentCacheService } from '../services/RdTorrentCacheService.js';
-import { CacheService } from '../services/CacheService.js';
-import { StaticResponseService, StaticResponse } from '../services/StaticResponseService.js';
+import { analisarMagnet } from '../magnet/magnetHelper.js';
+import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
+import { TorboxService } from '../debrid/RealDebridService.js';
+import { RdTorrentCacheService } from '../debrid/RdTorrentCacheService.js';
+import { CacheService } from '../debrid/CacheService.js';
+import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
 import { Logger } from '../utils/logger.js';
 import { getStatusMessage } from './statusHelpers.js';
 
@@ -39,16 +40,16 @@ function createStreamFromStaticResponse(
     };
 }
 
-function extractMagnetHash(magnet: string): string | null {
-    const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
-    return match ? match[1].toLowerCase() : null;
+async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
+    const dados = await analisarMagnet(magnet);
+    return dados ? dados.infoHash : null;
 }
 
 // Essa função NUNCA rejeita – sempre retorna um objeto com status
 async function processMagnetWithTorbox(
     magnet: string, apiKey: string, season?: number, episode?: number, type: string = 'movie'
 ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string; torrentId?: string }> {
-    const magnetHash = extractMagnetHash(magnet);
+    const magnetHash = await extrairInfoHashDoMagnet(magnet);
     if (!magnetHash) return { success: false, status: 'error', message: 'Magnet link inválido' };
 
     const isSeries = type === 'series' || season !== undefined;
@@ -334,7 +335,7 @@ export const setupResolveRoutes = (app: any) => {
             if (!apiKey) return res.status(400).json({ success: false, error: 'API key obrigatória' });
 
             const torboxService = new TorboxService();
-            const magnetHash = extractMagnetHash(magnet);
+            const magnetHash = await extrairInfoHashDoMagnet(magnet);
             if (!magnetHash) return res.status(400).json({ success: false, error: 'Magnet inválido' });
 
             const existing = await torboxService.findExistingTorrent(magnetHash, apiKey);

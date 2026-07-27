@@ -90,7 +90,7 @@ class EpisodeMatcher {
     extractSeasonFromTitle(title) {
         const patterns = [
             /temporada\s*(\d+)/i,
-            /(\d+)\s*temporada/i,
+            /(\d+)\s*ª?\s*temporada/i,
             /season\s*(\d+)/i,
             /s(\d+)/i,
             /(\d+)\s*ª?\s*temp/i

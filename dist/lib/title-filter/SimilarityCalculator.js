@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.SimilarityCalculator = void 0;
 const logger_js_1 = require("../../utils/logger.js");
 const ImdbScraperService_js_1 = require("../../services/ImdbScraperService.js");
+const LanguageDetector_js_1 = require("./LanguageDetector.js");
 class SimilarityCalculator {
     static getInstance() {
         if (!SimilarityCalculator.instance) {
@@ -15,6 +16,7 @@ class SimilarityCalculator {
         this.cacheTTL = 5 * 60 * 1000;
         this.logger = new logger_js_1.Logger('SimilarityCalculator');
         this.tmdbScraper = useTmdbScraper ? ImdbScraperService_js_1.ImdbScraperService.getInstance() : null;
+        this.languageDetector = LanguageDetector_js_1.LanguageDetector.getInstance();
     }
     async smartTitleContainsCheck(torrentTitle, imdbId, torrentMetadata) {
         let movieInfo = null;
@@ -47,8 +49,10 @@ class SimilarityCalculator {
         if (!movieInfo) {
             return { matches: false, similarity: 0, reason: 'Sem dados do TMDB' };
         }
-        const torrentYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
-        return this.comparacaoPalavraPorPalavra(torrentTitle, movieInfo, torrentYear, torrentMetadata?.season);
+        const torqueYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
+        const resultado = this.comparacaoPalavraPorPalavra(torrentTitle, movieInfo, torqueYear, torrentMetadata?.season);
+        resultado.mediaType = movieInfo.mediaType;
+        return resultado;
     }
     comparacaoPalavraPorPalavra(tituloTorrent, movieInfo, anoTorrent, temporadaAlvo) {
         const titulosValidos = movieInfo.allTitles.filter(t => t && t.trim().length > 0);
@@ -58,93 +62,90 @@ class SimilarityCalculator {
         const palavrasTorrent = this.normalizarParaComparacao(tituloTorrent)
             .split(' ').filter(w => w.length > 2 && !/^\d+$/.test(w));
         const setTorrent = new Set(palavrasTorrent);
-        const todasPalavrasTmdb = new Set();
-        for (const titulo of titulosValidos) {
-            for (const palavra of this.normalizarParaComparacao(titulo).split(' ')) {
+        const tmdbUniao = new Set();
+        let t = 0;
+        while (t < titulosValidos.length) {
+            const normalizado = this.normalizarParaComparacao(titulosValidos[t]).split(' ');
+            let w = 0;
+            while (w < normalizado.length) {
+                const palavra = normalizado[w];
                 if (palavra.length > 2 && !/^\d+$/.test(palavra)) {
-                    todasPalavrasTmdb.add(palavra);
+                    tmdbUniao.add(palavra);
                 }
+                w++;
             }
+            t++;
         }
         const palavrasEstranhas = [];
-        for (const palavra of palavrasTorrent) {
-            if (!todasPalavrasTmdb.has(palavra)) {
+        let i = 0;
+        while (i < palavrasTorrent.length) {
+            const palavra = palavrasTorrent[i];
+            if (!tmdbUniao.has(palavra)) {
                 palavrasEstranhas.push(palavra);
             }
+            i++;
         }
-        let melhorTitulo = '';
-        let melhorEncontradas = 0;
-        let melhorTotal = 0;
-        let melhorFaltando = [];
-        for (const titulo of titulosValidos) {
-            const palavrasTmdb = [];
-            for (const palavra of this.normalizarParaComparacao(titulo).split(' ')) {
-                if (palavra.length > 2 && !/^\d+$/.test(palavra)) {
-                    palavrasTmdb.push(palavra);
-                }
+        let encontradas = 0;
+        const faltando = [];
+        const uniaoArray = Array.from(tmdbUniao);
+        let k = 0;
+        while (k < uniaoArray.length) {
+            const palavra = uniaoArray[k];
+            if (setTorrent.has(palavra)) {
+                encontradas++;
             }
-            let encontradas = 0;
-            const faltando = [];
-            for (const palavra of palavrasTmdb) {
-                if (setTorrent.has(palavra)) {
-                    encontradas++;
-                }
-                else {
-                    faltando.push(palavra);
-                }
+            else {
+                faltando.push(palavra);
             }
-            if (encontradas > melhorEncontradas || (encontradas === melhorEncontradas && faltando.length < melhorFaltando.length)) {
-                melhorEncontradas = encontradas;
-                melhorTotal = palavrasTmdb.length;
-                melhorFaltando = faltando;
-                melhorTitulo = titulo;
-            }
+            k++;
         }
-        const tmdbCompleto = melhorFaltando.length === 0;
-        const proporcao = melhorTotal > 0 ? melhorEncontradas / melhorTotal : 0;
+        const tmdbCompleto = faltando.length === 0;
+        const totalTmdb = tmdbUniao.size;
+        const proporcao = totalTmdb > 0 ? encontradas / totalTmdb : 0;
         const temTemporada = !!(temporadaAlvo && this.temTemporadaExplicita(tituloTorrent, temporadaAlvo));
         const anoTmdb = movieInfo.year;
-        if (melhorEncontradas === 0) {
+        if (encontradas === 0) {
             return { matches: false, similarity: 0, reason: 'Nenhuma palavra TMDB' };
         }
-        if (anoTorrent && anoTmdb && anoTorrent !== anoTmdb) {
-            const diferenca = Math.abs(anoTmdb - anoTorrent);
-            if (diferenca <= 2 && proporcao >= 0.85) {
-                return { matches: true, similarity: proporcao, reason: `Match + ano próximo (${diferenca}a): "${melhorTitulo}"` };
-            }
-            return { matches: false, similarity: proporcao * 0.6, reason: `Ano diferente: TMDB ${anoTmdb} != ${anoTorrent}` };
+        const anoBate = !!(anoTorrent && anoTmdb && anoTorrent === anoTmdb);
+        const anoProximo = !!(anoTorrent && anoTmdb && Math.abs(anoTmdb - anoTorrent) <= 2);
+        const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
+        const temPalavrasSuficientes = encontradas >= 2;
+        const temEpisodioExplicito = !!(temporadaAlvo && this.temEpisodioExplicito(tituloTorrent));
+        if (anoBate && temIndicadorPt && temPalavrasSuficientes) {
+            return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + PT + ${encontradas}/${totalTmdb} palavras` };
         }
-        if (anoTorrent && anoTmdb && anoTorrent === anoTmdb && proporcao >= 0.7) {
-            return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + match ${melhorEncontradas}/${melhorTotal}: "${melhorTitulo}"` };
+        if (anoBate && tmdbCompleto) {
+            return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + match completo ${encontradas}/${totalTmdb}` };
         }
-        if (!anoTorrent) {
-            if (movieInfo.mediaType === 'tv' && temTemporada) {
-                if (proporcao >= 0.65) {
-                    return { matches: true, similarity: proporcao, reason: `Série S${temporadaAlvo} explícita: "${melhorTitulo}"` };
-                }
-                return { matches: false, similarity: proporcao * 0.5, reason: `Série S${temporadaAlvo} com match baixo: ${melhorEncontradas}/${melhorTotal}` };
-            }
-            if (proporcao >= 0.9) {
-                return { matches: true, similarity: proporcao, reason: 'Similaridade alta sem ano' };
-            }
-            return { matches: false, similarity: proporcao * 0.7, reason: `Requer ano. TMDB: ${anoTmdb}` };
+        if (anoProximo && temIndicadorPt && temPalavrasSuficientes) {
+            return { matches: true, similarity: proporcao, reason: `Ano proximo (${anoTorrent}~=${anoTmdb}) + PT + ${encontradas}/${totalTmdb}` };
+        }
+        if (movieInfo.mediaType === 'tv' && temTemporada && temPalavrasSuficientes) {
+            return { matches: true, similarity: proporcao, reason: `Serie S${temporadaAlvo} explicita + ${encontradas}/${totalTmdb}` };
+        }
+        if (temIndicadorPt && tmdbCompleto) {
+            return { matches: true, similarity: proporcao, reason: `PT + match completo ${encontradas}/${totalTmdb}` };
+        }
+        if (anoTorrent && anoTmdb && anoTorrent !== anoTmdb && !temIndicadorPt) {
+            return { matches: false, similarity: proporcao * 0.6, reason: `Ano diferente: TMDB ${anoTmdb} != ${anoTorrent} (sem PT)` };
         }
         if (tmdbCompleto && palavrasEstranhas.length === 0) {
-            return { matches: true, similarity: 1.0, reason: `Match completo: "${melhorTitulo}"` };
+            return { matches: true, similarity: 1.0, reason: `Match completo: ${encontradas}/${totalTmdb} palavras` };
         }
-        if (tmdbCompleto && palavrasEstranhas.length > 0 && melhorTotal <= 2) {
-            return { matches: false, similarity: proporcao * 0.5, reason: `TMDB curto + estranha: [${palavrasEstranhas.join(', ')}]` };
+        if (tmdbCompleto && palavrasEstranhas.length > 0 && totalTmdb <= 2) {
+            return { matches: false, similarity: 0.5, reason: `TMDB curto + estranha: [${palavrasEstranhas.join(', ')}]` };
         }
         if (tmdbCompleto && palavrasEstranhas.length > 0) {
             return { matches: true, similarity: 0.75, reason: `TMDB completo + extras: [${palavrasEstranhas.join(', ')}]` };
         }
         if (!tmdbCompleto && palavrasEstranhas.length > 0) {
-            return { matches: false, similarity: proporcao * 0.4, reason: `Faltam: [${melhorFaltando.join(', ')}] + estranhas: [${palavrasEstranhas.join(', ')}]` };
+            return { matches: false, similarity: 0.4, reason: `Faltam: [${faltando.join(', ')}] + estranhas: [${palavrasEstranhas.join(', ')}]` };
         }
-        if (proporcao >= 0.6) {
-            return { matches: true, similarity: proporcao, reason: `Match parcial: [${melhorEncontradas}/${melhorTotal}] "${melhorTitulo}"` };
+        if (encontradas >= 2) {
+            return { matches: true, similarity: proporcao, reason: `Match parcial: [${encontradas}/${totalTmdb}]` };
         }
-        return { matches: false, similarity: proporcao, reason: `Match insuficiente: [${melhorEncontradas}/${melhorTotal}] "${melhorTitulo}"` };
+        return { matches: false, similarity: proporcao, reason: `Match insuficiente: [${encontradas}/${totalTmdb}]` };
     }
     temTemporadaExplicita(titulo, temporada) {
         const lower = titulo.toLowerCase();

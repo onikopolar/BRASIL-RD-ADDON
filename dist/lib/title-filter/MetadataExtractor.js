@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.MetadataExtractor = void 0;
 const logger_js_1 = require("../../utils/logger.js");
+const episodeMatcher_js_1 = require("../episodeMatcher.js");
 class MetadataExtractor {
     static getInstance() {
         if (!MetadataExtractor.instance) {
@@ -12,18 +13,7 @@ class MetadataExtractor {
     constructor() {
         this.metadataCache = new Map();
         this.cacheTTL = 30000;
-        this.COMPLETE_SEASON_PATTERNS = [
-            /(\d+)\s*(?:ª|a|°|o)?\s*temporada\s*(?:completa|inteira)/i,
-            /temporada\s*(\d+)\s*(?:completa|inteira)/i,
-            /season\s*(\d+)\s*(?:complete|full)/i,
-            /s(\d+)\s*(?:complete|full)/i
-        ];
-        this.SEASON_PATTERNS = [
-            /(\d+)\s*(?:ª|a|°|o)?\s*temporada/i,
-            /temporada\s*(\d+)/i,
-            /season\s*(\d+)/i,
-            /s(\d+)\b(?!e\d)/i
-        ];
+        this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
         this.EPISODE_PATTERNS = [
             { pattern: /s(\d+)e(\d+)/i, type: 'sXeX' },
             { pattern: /(\d+)x(\d+)/i, type: 'XxX' },
@@ -225,24 +215,18 @@ class MetadataExtractor {
         return null;
     }
     extractCompleteSeason(title) {
-        for (const pattern of this.COMPLETE_SEASON_PATTERNS) {
-            const match = title.match(pattern);
-            if (match) {
-                const season = parseInt(match[1]);
-                if (!isNaN(season) && season > 0)
-                    return { season, pattern: match[0] };
+        if (this.episodeMatcher.ehPackTemporadaCompleta(title)) {
+            const season = this.episodeMatcher.extractSeasonFromTitle(title);
+            if (season !== null) {
+                return { season, pattern: `S${season.toString().padStart(2, '0')}` };
             }
         }
         return null;
     }
     extractSeason(title) {
-        for (const pattern of this.SEASON_PATTERNS) {
-            const match = title.match(pattern);
-            if (match) {
-                const season = parseInt(match[1]);
-                if (!isNaN(season) && season > 0)
-                    return { season, pattern: match[0] };
-            }
+        const season = this.episodeMatcher.extractSeasonFromTitle(title);
+        if (season !== null) {
+            return { season, pattern: `S${season.toString().padStart(2, '0')}` };
         }
         return null;
     }

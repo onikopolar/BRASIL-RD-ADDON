@@ -117,36 +117,15 @@ class CuratedMagnetService {
         }
     }
     doesMagnetMatchEpisode(magnetTitle, targetSeason, targetEpisode) {
-        const title = magnetTitle.toLowerCase();
-        const completeSeasonPatterns = [
-            /(\d+)\s*(?:ª|a|°|o)?\s*temporada\s*(?:completa|inteira)/i,
-            /temporada\s*(\d+)\s*(?:completa|inteira)/i,
-            /season\s*(\d+)\s*(?:complete|full)/i,
-            /s(\d+)\s*(?:complete|full)/i
-        ];
-        for (const pattern of completeSeasonPatterns) {
-            const match = title.match(pattern);
-            if (match) {
-                const seasonFromTitle = parseInt(match[1]);
-                if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
-                    return true;
-                }
-            }
+        if (this.episodeMatcher.ehPackTemporadaCompleta(magnetTitle)) {
+            const seasonFromTitle = this.episodeMatcher.extractSeasonFromTitle(magnetTitle);
+            if (seasonFromTitle === targetSeason)
+                return true;
         }
-        const seasonOnlyPatterns = [
-            /(\d+)\s*(?:ª|a|°|o)?\s*temporada/i,
-            /temporada\s*(\d+)/i,
-            /season\s*(\d+)/i,
-            /s(\d+)\b(?!e\d)/i
-        ];
-        for (const pattern of seasonOnlyPatterns) {
-            const match = title.match(pattern);
-            if (match) {
-                const seasonFromTitle = parseInt(match[1]);
-                if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
-                    return true;
-                }
-            }
+        if (this.episodeMatcher.temIndicadorTemporada(magnetTitle) && !this.episodeMatcher.temIndicadorEpisodio(magnetTitle)) {
+            const seasonFromTitle = this.episodeMatcher.extractSeasonFromTitle(magnetTitle);
+            if (seasonFromTitle === targetSeason)
+                return true;
         }
         const magnetEpisodeInfo = this.episodeMatcher.extractEpisodeInfo(magnetTitle);
         if (magnetEpisodeInfo.season !== targetSeason) {

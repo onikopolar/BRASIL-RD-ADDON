@@ -61,12 +61,3 @@ export const qualityPatterns: QualityPattern[] = [
     { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
     { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
 ];
-
-export const episodePatterns: RegExp[] = [
-    /(\d+)x(\d+)/i,
-    /s(\d+)e(\d+)/i,
-    /season[\s\._-]?(\d+)[\s\._-]?episode[\s\._-]?(\d+)/i,
-    /ep[\s\._-]?(\d+)/i,
-    /(\d+)(?:\s*-\s*|\s*)(\d+)/,
-    /^(\d+)$/
-];

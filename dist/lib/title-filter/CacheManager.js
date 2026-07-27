@@ -2,6 +2,7 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.CacheManager = void 0;
 const logger_js_1 = require("../../utils/logger.js");
+const magnetHelper_js_1 = require("../magnetHelper.js");
 class CacheManager {
     static getInstance() {
         if (!CacheManager.instance) {
@@ -60,14 +61,14 @@ class CacheManager {
             });
         }
     }
-    deduplicateTorrents(torrents, logger) {
+    async deduplicateTorrents(torrents, logger) {
         if (torrents.length <= 1)
             return torrents;
         const seen = new Set();
         const uniqueTorrents = [];
         let duplicatesRemoved = 0;
         for (const torrent of torrents) {
-            const infoHash = this.extractInfoHash(torrent.magnet || torrent);
+            const infoHash = await this.extrairInfoHash(torrent.magnet || torrent);
             const title = torrent.title || 'unknown';
             let key;
             if (infoHash) {
@@ -150,18 +151,18 @@ class CacheManager {
         const titleCacheKey = torrentTitle.toLowerCase();
         this.portugueseCheckCache.set(titleCacheKey, isPortuguese);
     }
-    extractInfoHash(source) {
+    async extrairInfoHash(source) {
         if (typeof source === 'string') {
-            const magnetMatch = source.match(/btih:([a-zA-Z0-9]{40})/i);
-            return magnetMatch ? magnetMatch[1].toLowerCase() : null;
+            const dados = await (0, magnetHelper_js_1.analisarMagnet)(source);
+            return dados ? dados.infoHash : null;
         }
         else if (source && typeof source === 'object') {
             if (source.infoHash) {
                 return source.infoHash.toLowerCase();
             }
             if (source.magnet && typeof source.magnet === 'string') {
-                const magnetMatch = source.magnet.match(/btih:([a-zA-Z0-9]{40})/i);
-                return magnetMatch ? magnetMatch[1].toLowerCase() : null;
+                const dados = await (0, magnetHelper_js_1.analisarMagnet)(source.magnet);
+                return dados ? dados.infoHash : null;
             }
         }
         return null;
@@ -203,8 +204,8 @@ class CacheManager {
             ttlProcessados: `${this.TITLE_CACHE_TTL / 60000}min`
         });
     }
-    checkAndMarkProcessed(torrent) {
-        const infoHash = this.extractInfoHash(torrent.magnet || torrent);
+    async checkAndMarkProcessed(torrent) {
+        const infoHash = await this.extrairInfoHash(torrent.magnet || torrent);
         const title = torrent.title || torrent;
         const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
         const alreadyProcessed = this.isAlreadyProcessed(dedupeKey);

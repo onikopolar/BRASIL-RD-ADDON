@@ -1,10 +1,12 @@
-import { Logger } from '../../utils/logger.js';
+import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
-import { ImdbScraperService } from '../../services/ImdbScraperService.js';
+import { ImdbScraperService } from '../catalogo/ImdbScraperService.js';
+import { LanguageDetector } from './LanguageDetector.js';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
   private readonly tmdbScraper: ImdbScraperService | null;
+  private readonly languageDetector: LanguageDetector;
 
   private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
@@ -21,6 +23,7 @@ export class SimilarityCalculator {
   constructor(_titleCleaner?: any, useTmdbScraper: boolean = true) {
     this.logger = new Logger('SimilarityCalculator');
     this.tmdbScraper = useTmdbScraper ? ImdbScraperService.getInstance() : null;
+    this.languageDetector = LanguageDetector.getInstance();
   }
 
   async smartTitleContainsCheck(
@@ -66,15 +69,18 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Sem dados do TMDB' };
     }
 
-    const torrentYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
+    const torqueYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
 
     // ═══ NOVA ABORDAGEM: comparação palavra-por-palavra com ano/temporada inline ═══
-    return this.comparacaoPalavraPorPalavra(
+    const resultado = this.comparacaoPalavraPorPalavra(
       torrentTitle,
       movieInfo,
-      torrentYear,
+      torqueYear,
       torrentMetadata?.season
     );
+    // Inclui mediaType para que o chamador possa validar movie vs série
+    resultado.mediaType = movieInfo.mediaType;
+    return resultado;
   }
 
   /**
@@ -100,127 +106,131 @@ export class SimilarityCalculator {
       .split(' ').filter(w => w.length > 2 && !/^\d+$/.test(w));
     const setTorrent = new Set(palavrasTorrent);
 
-    // Coleta TODAS as palavras de TODOS os títulos TMDB
-    const todasPalavrasTmdb = new Set<string>();
-    for (const titulo of titulosValidos) {
-      for (const palavra of this.normalizarParaComparacao(titulo).split(' ')) {
+    // PASSO 2: UNIÃO de TODAS as palavras de TODOS os títulos TMDB
+    //    Não escolhe o "melhor" título — usa o contexto completo.
+    const tmdbUniao = new Set<string>();
+    let t = 0;
+    while (t < titulosValidos.length) {
+      const normalizado = this.normalizarParaComparacao(titulosValidos[t]).split(' ');
+      let w = 0;
+      while (w < normalizado.length) {
+        const palavra = normalizado[w];
         if (palavra.length > 2 && !/^\d+$/.test(palavra)) {
-          todasPalavrasTmdb.add(palavra);
+          tmdbUniao.add(palavra);
         }
+        w++;
       }
+      t++;
     }
 
-    // ═══ PASSO 2: Palavras estranhas (torrent → TMDB) ═══
+    // PASSO 3: Palavras estranhas (torrent → união TMDB)
     const palavrasEstranhas: string[] = [];
-    for (const palavra of palavrasTorrent) {
-      if (!todasPalavrasTmdb.has(palavra)) {
+    let i = 0;
+    while (i < palavrasTorrent.length) {
+      const palavra = palavrasTorrent[i];
+      if (!tmdbUniao.has(palavra)) {
         palavrasEstranhas.push(palavra);
       }
+      i++;
     }
 
-    // ═══ PASSO 3: Melhor título TMDB (TMDB → torrent) ═══
-    let melhorTitulo = '';
-    let melhorEncontradas = 0;
-    let melhorTotal = 0;
-    let melhorFaltando: string[] = [];
-
-    for (const titulo of titulosValidos) {
-      const palavrasTmdb: string[] = [];
-      for (const palavra of this.normalizarParaComparacao(titulo).split(' ')) {
-        if (palavra.length > 2 && !/^\d+$/.test(palavra)) {
-          palavrasTmdb.push(palavra);
-        }
+    // PASSO 4: Conta matched/missing contra a UNIÃO total
+    let encontradas = 0;
+    const faltando: string[] = [];
+    const uniaoArray = Array.from(tmdbUniao);
+    let k = 0;
+    while (k < uniaoArray.length) {
+      const palavra = uniaoArray[k];
+      if (setTorrent.has(palavra)) {
+        encontradas++;
+      } else {
+        faltando.push(palavra);
       }
-
-      let encontradas = 0;
-      const faltando: string[] = [];
-      for (const palavra of palavrasTmdb) {
-        if (setTorrent.has(palavra)) {
-          encontradas++;
-        } else {
-          faltando.push(palavra);
-        }
-      }
-
-      if (encontradas > melhorEncontradas || (encontradas === melhorEncontradas && faltando.length < melhorFaltando.length)) {
-        melhorEncontradas = encontradas;
-        melhorTotal = palavrasTmdb.length;
-        melhorFaltando = faltando;
-        melhorTitulo = titulo;
-      }
+      k++;
     }
 
-    const tmdbCompleto = melhorFaltando.length === 0;
-    const proporcao = melhorTotal > 0 ? melhorEncontradas / melhorTotal : 0;
+    const tmdbCompleto = faltando.length === 0;
+    const totalTmdb = tmdbUniao.size;
+    const proporcao = totalTmdb > 0 ? encontradas / totalTmdb : 0;
     const temTemporada = !!(temporadaAlvo && this.temTemporadaExplicita(tituloTorrent, temporadaAlvo));
     const anoTmdb = movieInfo.year;
 
     // ═══════════════════════════════════════════
-    // REGRAS DE DECISÃO (ano + palavras, tudo inline)
+    // REGRAS DE DECISÃO — Checklist (SEM thresholds)
+    //
+    // Cada dado do TMDB vira um par SIM/NAO.
+    // O torrent vai passando conforme os checks batem.
+    // Nao existe "nota" ou "porcentagem" — ou bateu, ou nao bateu.
     // ═══════════════════════════════════════════
 
-    // 0. Nenhuma palavra encontrada
-    if (melhorEncontradas === 0) {
+    // 0. Nenhuma palavra encontrada → rejeicao imediata
+    if (encontradas === 0) {
       return { matches: false, similarity: 0, reason: 'Nenhuma palavra TMDB' };
     }
 
-    // 1. Ano diferente → rejeitar (pequena tolerância de 2 anos)
-    if (anoTorrent && anoTmdb && anoTorrent !== anoTmdb) {
-      const diferenca = Math.abs(anoTmdb - anoTorrent);
-      if (diferenca <= 2 && proporcao >= 0.85) {
-        return { matches: true, similarity: proporcao, reason: `Match + ano próximo (${diferenca}a): "${melhorTitulo}"` };
-      }
-      return { matches: false, similarity: proporcao * 0.6, reason: `Ano diferente: TMDB ${anoTmdb} != ${anoTorrent}` };
+    const anoBate = !!(anoTorrent && anoTmdb && anoTorrent === anoTmdb);
+    const anoProximo = !!(anoTorrent && anoTmdb && Math.abs(anoTmdb - anoTorrent) <= 2);
+    const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
+    const temPalavrasSuficientes = encontradas >= 2;
+    const temEpisodioExplicito = !!(temporadaAlvo && this.temEpisodioExplicito(tituloTorrent));
+
+    // 1. Ano bate + PT + 2+ palavras → ACEITA
+    if (anoBate && temIndicadorPt && temPalavrasSuficientes) {
+      return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + PT + ${encontradas}/${totalTmdb} palavras` };
     }
 
-    // 1.5 ⭐ Ano bate exatamente → sinal fortíssimo, ignora palavras estranhas/faltando
-    if (anoTorrent && anoTmdb && anoTorrent === anoTmdb && proporcao >= 0.7) {
-      return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + match ${melhorEncontradas}/${melhorTotal}: "${melhorTitulo}"` };
+    // 2. Ano bate + TMDB completo (todas palavras encontradas) → ACEITA
+    if (anoBate && tmdbCompleto) {
+      return { matches: true, similarity: proporcao, reason: `Ano bate (${anoTorrent}) + match completo ${encontradas}/${totalTmdb}` };
     }
 
-    // 2. Sem ano no torrent
-    if (!anoTorrent) {
-      // Série com temporada explícita → bypass do ano
-      if (movieInfo.mediaType === 'tv' && temTemporada) {
-        if (proporcao >= 0.65) {
-          return { matches: true, similarity: proporcao, reason: `Série S${temporadaAlvo} explícita: "${melhorTitulo}"` };
-        }
-        return { matches: false, similarity: proporcao * 0.5, reason: `Série S${temporadaAlvo} com match baixo: ${melhorEncontradas}/${melhorTotal}` };
-      }
-      // Similaridade muito alta → dispensa ano
-      if (proporcao >= 0.9) {
-        return { matches: true, similarity: proporcao, reason: 'Similaridade alta sem ano' };
-      }
-      return { matches: false, similarity: proporcao * 0.7, reason: `Requer ano. TMDB: ${anoTmdb}` };
+    // 3. Ano proximo + PT + 2+ palavras → ACEITA
+    if (anoProximo && temIndicadorPt && temPalavrasSuficientes) {
+      return { matches: true, similarity: proporcao, reason: `Ano proximo (${anoTorrent}~=${anoTmdb}) + PT + ${encontradas}/${totalTmdb}` };
     }
 
-    // ═══ REGRAS DE PALAVRAS ═══
+    // 4. Serie com temporada explicita + 2+ palavras → ACEITA
+    if (movieInfo.mediaType === 'tv' && temTemporada && temPalavrasSuficientes) {
+      return { matches: true, similarity: proporcao, reason: `Serie S${temporadaAlvo} explicita + ${encontradas}/${totalTmdb}` };
+    }
 
-    // 3. Match perfeito (todas TMDB + zero estranhas)
+    // 5. PT + TMDB completo → ACEITA (ex: titulo PT bate inteiro)
+    if (temIndicadorPt && tmdbCompleto) {
+      return { matches: true, similarity: proporcao, reason: `PT + match completo ${encontradas}/${totalTmdb}` };
+    }
+
+    // 6. Ano diferente (sem PT, sem palavras) → REJEITAR
+    if (anoTorrent && anoTmdb && anoTorrent !== anoTmdb && !temIndicadorPt) {
+      return { matches: false, similarity: proporcao * 0.6, reason: `Ano diferente: TMDB ${anoTmdb} != ${anoTorrent} (sem PT)` };
+    }
+
+    // ═══ REGRAS DE PALAVRAS (sem ano, sem PT) ═══
+
+    // 7. Match perfeito
     if (tmdbCompleto && palavrasEstranhas.length === 0) {
-      return { matches: true, similarity: 1.0, reason: `Match completo: "${melhorTitulo}"` };
+      return { matches: true, similarity: 1.0, reason: `Match completo: ${encontradas}/${totalTmdb} palavras` };
     }
 
-    // 4. TMDB curto (≤2 palavras) + estranhas → perigoso (sequência/spin-off?)
-    if (tmdbCompleto && palavrasEstranhas.length > 0 && melhorTotal <= 2) {
-      return { matches: false, similarity: proporcao * 0.5, reason: `TMDB curto + estranha: [${palavrasEstranhas.join(', ')}]` };
+    // 8. TMDB curto + estranhas → perigoso
+    if (tmdbCompleto && palavrasEstranhas.length > 0 && totalTmdb <= 2) {
+      return { matches: false, similarity: 0.5, reason: `TMDB curto + estranha: [${palavrasEstranhas.join(', ')}]` };
     }
 
-    // 5. TMDB completo + estranhas em título longo → aceita (ruído inofensivo)
+    // 9. TMDB completo + estranhas → aceita
     if (tmdbCompleto && palavrasEstranhas.length > 0) {
       return { matches: true, similarity: 0.75, reason: `TMDB completo + extras: [${palavrasEstranhas.join(', ')}]` };
     }
 
-    // 6. Faltam TMDB + tem estranhas → rejeitar (Korra vs Aang, Clone Wars vs SW)
+    // 10. Faltam TMDB + tem estranhas → rejeitar
     if (!tmdbCompleto && palavrasEstranhas.length > 0) {
-      return { matches: false, similarity: proporcao * 0.4, reason: `Faltam: [${melhorFaltando.join(', ')}] + estranhas: [${palavrasEstranhas.join(', ')}]` };
+      return { matches: false, similarity: 0.4, reason: `Faltam: [${faltando.join(', ')}] + estranhas: [${palavrasEstranhas.join(', ')}]` };
     }
 
-    // 7. Faltam TMDB mas sem estranhas → borderline (proporção decide)
-    if (proporcao >= 0.6) {
-      return { matches: true, similarity: proporcao, reason: `Match parcial: [${melhorEncontradas}/${melhorTotal}] "${melhorTitulo}"` };
+    // 11. Faltam TMDB mas sem estranhas → borderline
+    if (encontradas >= 2) {
+      return { matches: true, similarity: proporcao, reason: `Match parcial: [${encontradas}/${totalTmdb}]` };
     }
-    return { matches: false, similarity: proporcao, reason: `Match insuficiente: [${melhorEncontradas}/${melhorTotal}] "${melhorTitulo}"` };
+    return { matches: false, similarity: proporcao, reason: `Match insuficiente: [${encontradas}/${totalTmdb}]` };
   }
 
   private temTemporadaExplicita(titulo: string, temporada: number): boolean {

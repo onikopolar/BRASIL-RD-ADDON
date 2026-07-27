@@ -9,6 +9,8 @@ const index_js_1 = require("../config/index.js");
 const logger_js_1 = require("../utils/logger.js");
 const StaticResponseService_js_1 = require("./StaticResponseService.js");
 const StreamStatusException_js_1 = require("./StreamStatusException.js");
+const episodeMatcher_js_1 = require("../lib/episodeMatcher.js");
+const magnetHelper_js_1 = require("../lib/magnetHelper.js");
 class TorboxService {
     constructor(baseUrl) {
         this.maxRetries = 3;
@@ -17,6 +19,7 @@ class TorboxService {
             '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
             '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
         ];
+        this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
         this.logger = new logger_js_1.Logger('TorboxService');
         this.staticResponseService = new StaticResponseService_js_1.StaticResponseService(baseUrl);
     }
@@ -60,7 +63,7 @@ class TorboxService {
             }), 'addMagnet');
             const torrentId = response.data?.torrent_id || response.data?.id || response.data?.data?.torrent_id || response.data?.data?.id;
             if (torrentId) {
-                this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: this.extractMagnetHash(magnetLink) });
+                this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: await this.extrairMagnetHash(magnetLink) });
                 return String(torrentId);
             }
             throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
@@ -70,7 +73,7 @@ class TorboxService {
                 throw error;
             this.logger.error('Falha ao adicionar magnet ao Torbox', {
                 error: error instanceof Error ? error.message : 'Erro',
-                magnetHash: this.extractMagnetHash(magnetLink)
+                magnetHash: await this.extrairMagnetHash(magnetLink)
             });
             throw error;
         }
@@ -148,9 +151,8 @@ class TorboxService {
                     continue;
                 let score = f.size;
                 if (targetSeason !== undefined && targetEpisode !== undefined) {
-                    const fs = this.extractSeasonFromFileName(f.name);
-                    const fe = this.extractEpisodeFromFileName(f.name);
-                    if (fs === targetSeason && fe === targetEpisode)
+                    const { temporada, episodio } = this.extrairTemporadaEpisodio(f.name);
+                    if (temporada === targetSeason && episodio === targetEpisode)
                         score += 10000000000;
                 }
                 if (score > bestScore) {
@@ -210,7 +212,7 @@ class TorboxService {
         }
     }
     async processTorrent(magnetLink, apiKey) {
-        const hash = this.extractMagnetHash(magnetLink);
+        const hash = await this.extrairMagnetHash(magnetLink);
         try {
             const existing = await this.findExistingTorrent(hash, apiKey);
             if (existing) {
@@ -267,16 +269,16 @@ class TorboxService {
         if (!id?.trim())
             throw new Error('Torrent ID obrigatório');
     }
-    extractMagnetHash(link) {
-        return link.match(/btih:([a-zA-Z0-9]+)/i)?.[1]?.toLowerCase() || 'unknown';
+    async extrairMagnetHash(link) {
+        const dados = await (0, magnetHelper_js_1.analisarMagnet)(link);
+        return dados ? dados.infoHash : 'unknown';
     }
-    extractSeasonFromFileName(name) {
-        const m = name.match(/s(\d+)e\d+/i) || name.match(/season\s*(\d+)/i) || name.match(/(\d+)x\d+/i);
-        return m ? parseInt(m[1], 10) : undefined;
-    }
-    extractEpisodeFromFileName(name) {
-        const m = name.match(/s\d+e(\d+)/i) || name.match(/episode\s*(\d+)/i) || name.match(/\d+x(\d+)/i) || name.match(/ep\s*(\d+)/i);
-        return m ? parseInt(m[1], 10) : undefined;
+    extrairTemporadaEpisodio(nomeArquivo) {
+        const info = this.episodeMatcher.extractEpisodeInfo(nomeArquivo);
+        if (info.season > 0 && info.episode > 0) {
+            return { temporada: info.season, episodio: info.episode };
+        }
+        return {};
     }
     delay(ms) {
         return new Promise(resolve => setTimeout(resolve, ms));

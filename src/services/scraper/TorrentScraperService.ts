@@ -4,8 +4,9 @@ import * as cheerio from 'cheerio';
 import { TorrentResult } from './torrentTypes.js';
 import { torrentIndexerConfig, scraperProviders } from './scraperProviders.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
-import { ImdbScraperService } from '../ImdbScraperService.js';
+import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper } from './wordpressScraper.js';
+import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
 
 const logger = new Logger('TorrentScraperService');
 
@@ -13,6 +14,7 @@ export class TorrentScraperService {
     private readonly qualityDetector: QualityDetector;
     private readonly tmdbScraper: ImdbScraperService;
     private readonly wpScraper: WordPressScraper;
+    private readonly episodeMatcher = EpisodeMatcher.getInstance();
     private readonly version = '6.2.0'; // WP API scraper integrado
 
     constructor(tmdbScraper?: ImdbScraperService) {
@@ -353,15 +355,7 @@ export class TorrentScraperService {
     }
 
     private extractSeasonNumber(text: string): number | null {
-        const patterns = [/S(\d+)/i, /Season\s+(\d+)/i, /Temporada\s+(\d+)/i, /(\d+)\s*x/i, /(\d+)ª?\s*Temp/i, /s(\d+)\s*e\d+/i, /(\d+)\s*temporada/i];
-        for (const p of patterns) {
-            const m = text.match(p);
-            if (m?.[1]) {
-                const s = parseInt(m[1]);
-                if (!isNaN(s) && s > 0) return s;
-            }
-        }
-        return null;
+        return this.episodeMatcher.extractSeasonFromTitle(text);
     }
 
     private prepareSearchQuery(query: string, type: 'movie' | 'series', targetSeason?: number): string {

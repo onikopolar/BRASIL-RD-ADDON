@@ -118,7 +118,7 @@ class StreamFormatter {
             return 'MagnetDL';
         return 'Torrent';
     }
-    criarStreamDireto(torrentTitle, descricao, linkDireto, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
+    async criarStreamDireto(torrentTitle, descricao, linkDireto, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
         this.logger.debug('CRIANDO_STREAM_DIRETO', {
             qualidade: qualidade,
             tipo: tipo,
@@ -134,7 +134,7 @@ class StreamFormatter {
         const stream = {
             name: `Brasil RD\n${qualidade}`,
             title: tituloFinal,
-            infoHash: (0, magnetHelper_js_1.extractHashFromMagnet)(linkDireto) || undefined,
+            infoHash: (await (0, magnetHelper_js_1.analisarMagnet)(linkDireto))?.infoHash || undefined,
             fileIdx: fileIdx !== undefined ? fileIdx : 0,
             url: linkDireto
         };
@@ -156,14 +156,15 @@ class StreamFormatter {
         });
         return stream;
     }
-    criarStreamLazy(torrentTitle, descricao, magnet, apiKey, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
+    async criarStreamLazy(torrentTitle, descricao, magnet, apiKey, qualidade, tipo, temporada, episodio, behaviorHints, metadata, fileIdx) {
         this.logger.debug('CRIANDO_STREAM_LAZY', {
             qualidade: qualidade,
             tipo: tipo,
             temporada: temporada,
             episodio: episodio
         });
-        const magnetHash = (0, magnetHelper_js_1.extractHashFromMagnet)(magnet);
+        const dadosMagnet = await (0, magnetHelper_js_1.analisarMagnet)(magnet);
+        const magnetHash = dadosMagnet?.infoHash;
         const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
         const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
         const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
@@ -174,7 +175,7 @@ class StreamFormatter {
         let resolveUrl = '';
         try {
             const filename = this.sanitizarNomeArquivo(tituloFinal.split('\n')[0] + '.mkv');
-            resolveUrl = (0, magnetHelper_js_1.generateLazyResolveUrl)(magnet, apiKey, filename, fileIdx || 0, tipo, temporada, episodio);
+            resolveUrl = await (0, magnetHelper_js_1.gerarUrlResolve)(magnet, apiKey, filename, fileIdx || 0, tipo, temporada, episodio);
             this.logger.debug('URL_LAZY_GERADA', {
                 formato: 'torrentio_rd',
                 url_preview: resolveUrl.substring(0, 100),
@@ -233,7 +234,7 @@ class StreamFormatter {
         }
         return 'PT-BR';
     }
-    criarStreamsMultiplasQualidades(torrent, request, linkDireto, tipo, temporada, episodio, disponivelNoRD = false, fileIdx) {
+    async criarStreamsMultiplasQualidades(torrent, request, linkDireto, tipo, temporada, episodio, disponivelNoRD = false, fileIdx) {
         const todasQualidades = this.extrairTodasQualidades(torrent.title);
         this.logger.debug('PROCESSANDO_MULTIPLAS_QUALIDADES', {
             titulo_torrent: torrent.title.substring(0, 80),
@@ -261,13 +262,13 @@ class StreamFormatter {
             const nomeStream = `Brasil RD (${qualidade})`;
             const tituloCompletoTorrent = torrent.title;
             if (disponivelNoRD && linkDireto) {
-                streams.push(this.criarStreamDireto(tituloCompletoTorrent, descricaoBase, linkDireto, qualidade, tipo, temporada, episodio, {
+                streams.push(await this.criarStreamDireto(tituloCompletoTorrent, descricaoBase, linkDireto, qualidade, tipo, temporada, episodio, {
                     bingeGroup: `br-${request.id}-${qualidade}`,
                     filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
                 }, metadata, fileIdx));
             }
             else {
-                streams.push(this.criarStreamLazy(tituloCompletoTorrent, descricaoBase, torrent.magnet, request.apiKey, qualidade, tipo, temporada, episodio, {
+                streams.push(await this.criarStreamLazy(tituloCompletoTorrent, descricaoBase, torrent.magnet, request.apiKey, qualidade, tipo, temporada, episodio, {
                     bingeGroup: `br-${request.id}-${qualidade}`,
                     filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
                 }, metadata, fileIdx));
@@ -380,20 +381,20 @@ class StreamFormatter {
         }
         return '';
     }
-    criarStreamSerie(torrent, request, linkDireto, temporada, episodio, disponivelNoRD = false, fileIdx) {
+    async criarStreamSerie(torrent, request, linkDireto, temporada, episodio, disponivelNoRD = false, fileIdx) {
         const qualidades = this.extrairTodasQualidades(torrent.title);
         const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
         const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
-        return this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'series', temporada, episodio, {
+        return await this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'series', temporada, episodio, {
             bingeGroup: `br-${request.id}-${qualidade}`,
             filename: this.sanitizarNomeArquivo(torrent.title)
         }, undefined, fileIdx);
     }
-    criarStreamFilme(torrent, request, linkDireto, disponivelNoRD = false, fileIdx) {
+    async criarStreamFilme(torrent, request, linkDireto, disponivelNoRD = false, fileIdx) {
         const qualidades = this.extrairTodasQualidades(torrent.title);
         const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
         const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
-        return this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'movie', undefined, undefined, {
+        return await this.criarStreamLazy(torrent.title, descricaoBase, torrent.magnet, request.apiKey, qualidade, 'movie', undefined, undefined, {
             bingeGroup: `br-${request.id}-${qualidade}`,
             filename: this.sanitizarNomeArquivo(torrent.title)
         }, undefined, fileIdx);
@@ -452,14 +453,14 @@ class StreamFormatter {
             .replace(/[<>:"/\\|?*]/g, '_')
             .substring(0, 255);
     }
-    createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx) {
-        return this.criarStreamsMultiplasQualidades(torrent, request, directLink, type, season, episode, isAvailableOnRD, fileIdx);
+    async createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx) {
+        return await this.criarStreamsMultiplasQualidades(torrent, request, directLink, type, season, episode, isAvailableOnRD, fileIdx);
     }
-    createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false, fileIdx) {
-        return this.criarStreamSerie(torrent, request, directLink, season, episode, isAvailableOnRD, fileIdx);
+    async createSeriesStream(torrent, request, directLink, season, episode, isAvailableOnRD = false, fileIdx) {
+        return await this.criarStreamSerie(torrent, request, directLink, season, episode, isAvailableOnRD, fileIdx);
     }
-    createMovieStream(torrent, request, directLink, isAvailableOnRD = false, fileIdx) {
-        return this.criarStreamFilme(torrent, request, directLink, isAvailableOnRD, fileIdx);
+    async createMovieStream(torrent, request, directLink, isAvailableOnRD = false, fileIdx) {
+        return await this.criarStreamFilme(torrent, request, directLink, isAvailableOnRD, fileIdx);
     }
     sortStreamsByQuality(streams) {
         return this.ordenarStreamsPorQualidade(streams);

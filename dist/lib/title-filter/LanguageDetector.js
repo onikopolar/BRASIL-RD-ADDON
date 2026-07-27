@@ -37,18 +37,8 @@ class LanguageDetector {
         const encontradasEn = [];
         const desconhecidas = [];
         for (const palavra of palavrasTorrent) {
-            if ((0, TechnicalWords_js_1.isTechnicalWord)(palavra))
-                continue;
             if (/^\d+$/.test(palavra))
                 continue;
-            if (setPt.has(palavra)) {
-                encontradasPt.push(palavra);
-                continue;
-            }
-            if (setEn.has(palavra)) {
-                encontradasEn.push(palavra);
-                continue;
-            }
             if (this.INDICADORES_PT.has(palavra) || (0, TechnicalWords_js_1.isBrazilianReleaseGroup)(palavra)) {
                 encontradasPt.push(palavra);
                 continue;
@@ -57,6 +47,16 @@ class LanguageDetector {
                 encontradasEn.push(palavra);
                 continue;
             }
+            if (setPt.has(palavra)) {
+                encontradasPt.push(palavra);
+                continue;
+            }
+            if (setEn.has(palavra)) {
+                encontradasEn.push(palavra);
+                continue;
+            }
+            if ((0, TechnicalWords_js_1.isTechnicalWord)(palavra))
+                continue;
             desconhecidas.push(palavra);
         }
         if (encontradasPt.length > 0) {

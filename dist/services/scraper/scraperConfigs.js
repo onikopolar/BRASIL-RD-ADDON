@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.episodePatterns = exports.qualityPatterns = exports.promotionalKeywords = exports.ignoredWords = exports.qualityPriority = exports.allowedQualities = exports.retryDelay = exports.maxRetries = void 0;
+exports.qualityPatterns = exports.promotionalKeywords = exports.ignoredWords = exports.qualityPriority = exports.allowedQualities = exports.retryDelay = exports.maxRetries = void 0;
 exports.maxRetries = 3;
 exports.retryDelay = 1500;
 exports.allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
@@ -52,12 +52,4 @@ exports.qualityPatterns = [
     { pattern: /\.hdtv\./i, quality: '720p', confidence: 80 },
     { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
     { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
-];
-exports.episodePatterns = [
-    /(\d+)x(\d+)/i,
-    /s(\d+)e(\d+)/i,
-    /season[\s\._-]?(\d+)[\s\._-]?episode[\s\._-]?(\d+)/i,
-    /ep[\s\._-]?(\d+)/i,
-    /(\d+)(?:\s*-\s*|\s*)(\d+)/,
-    /^(\d+)$/
 ];

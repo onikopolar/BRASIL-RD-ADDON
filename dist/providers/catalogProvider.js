@@ -113,35 +113,10 @@ class CatalogProvider {
         const torrentResults = await this.torrentScraper.searchTorrents(searchQuery, type, finalSeason, seasonYear ?? undefined, imdbId || undefined);
         if (!torrentResults.length)
             return [];
-        const uniqueTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+        const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
         const { valid, invalid } = await this.filterAndValidateTorrents(uniqueTorrents, imdbId, request, finalSeason, finalEpisode, tmdb.imdbTitles);
         if (valid.length === 0) {
-            this.logger.debug(' Scrapers não acharam torrents PT-BR, tentando Torrentio como fallback...', { imdbId });
-            const torrentioResults = await this.torrentioService.search(type, imdbId, finalSeason, finalEpisode);
-            if (torrentioResults.length > 0) {
-                this.logger.info(` Torrentio fallback: ${torrentioResults.length} torrents PT-BR encontrados`, { imdbId });
-                const scrapedFromTorrentio = torrentioResults.map(tr => ({
-                    title: tr.title,
-                    magnet: tr.magnet,
-                    seeders: tr.seeders,
-                    leechers: 0,
-                    size: tr.size,
-                    quality: tr.quality,
-                    provider: `Torrentio/${tr.provider}`,
-                    language: tr.language,
-                    type: tr.type
-                }));
-                const torrentioValidation = await this.filterAndValidateTorrents(scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode, tmdb.imdbTitles);
-                if (torrentioValidation.valid.length > 0) {
-                    valid.push(...torrentioValidation.valid);
-                }
-                else {
-                    this.logger.debug(' Torrentio: resultados rejeitados pelo TitleFilter', { imdbId, count: torrentioResults.length });
-                }
-            }
-            else {
-                this.logger.debug(' Torrentio: nenhum resultado PT-BR', { imdbId });
-            }
+            this.logger.debug('🔒 Torrentio fallback BLOQUEADO — apenas scrapers BR', { imdbId });
         }
         if (valid.length === 0)
             return [];
@@ -163,7 +138,12 @@ class CatalogProvider {
         if (!imdbId)
             return { valid: torrents, invalid: [] };
         const ptTorrents = torrents.filter(t => this.titleFilter.conteudoEmPortugues(t.title));
-        const results = await Promise.allSettled(ptTorrents.map(t => this.titleFilter.titulosCombinam(t.title, imdbId, season, episode)));
+        const dadosMagnets = await Promise.all(ptTorrents.map(t => (0, magnetHelper_js_1.analisarMagnet)(t.magnet).catch(() => null)));
+        const results = await Promise.allSettled(ptTorrents.map((t, i) => {
+            const nomeCanonico = dadosMagnets[i]?.nome;
+            const tituloParaValidar = nomeCanonico || t.title;
+            return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
+        }));
         const valid = [];
         const invalid = torrents.filter(t => !ptTorrents.includes(t));
         const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
@@ -185,15 +165,7 @@ class CatalogProvider {
         const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
         if (!imdbId || torrents.length === 0)
             return;
-        await Promise.allSettled(torrents.map(async (torrent) => {
-            try {
-                const episodeValue = isPackFallback ? null : episode;
-                await this.autoMagnetService.autoAddMagnet(torrent.magnet, torrent.title, imdbId, request.type, torrent.seeders, torrent.quality, torrent.size, season, episodeValue);
-            }
-            catch (error) {
-                this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
-            }
-        }));
+        this.logger.debug('🔒 DB BLOQUEADO (teste) — saveValidTorrentsToCatalog ignorado', { count: torrents.length, imdbId });
     }
     async processTorrentsWithOptimization(torrents, request, season, episode) {
         const streams = [];
@@ -202,7 +174,7 @@ class CatalogProvider {
             const batch = torrents.slice(i, i + batchSize);
             const batchPromises = batch.map(async (torrent) => {
                 try {
-                    return this.streamFormatter.createMultipleQualityStreams(torrent, request, null, request.type === 'series' ? 'series' : 'movie', season, episode, false);
+                    return await this.streamFormatter.createMultipleQualityStreams(torrent, request, null, request.type === 'series' ? 'series' : 'movie', season, episode, false);
                 }
                 catch {
                     return [];
@@ -274,7 +246,7 @@ class CatalogProvider {
                 seeders: magnet.seeds || 0, size: magnet.size || 'N/A',
                 quality: magnet.quality || 'HD', language: magnet.language || 'PT-BR'
             };
-            const streamArrays = this.streamFormatter.createMultipleQualityStreams(formatted, request, null, request.type === 'series' ? 'series' : 'movie', season ?? magnet.season, episode ?? magnet.episode, undefined, 0);
+            const streamArrays = await this.streamFormatter.createMultipleQualityStreams(formatted, request, null, request.type === 'series' ? 'series' : 'movie', season ?? magnet.season, episode ?? magnet.episode, undefined, 0);
             streams.push(...streamArrays);
         }
         return streams;
@@ -328,11 +300,11 @@ class CatalogProvider {
             return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
         return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
     }
-    deduplicateTorrentsByMagnet(torrents) {
+    async deduplicateTorrentsByMagnet(torrents) {
         const seen = new Set();
         const unique = [];
         for (const t of torrents) {
-            const hash = (0, magnetHelper_js_1.extractHashFromMagnet)(t.magnet);
+            const hash = (await (0, magnetHelper_js_1.analisarMagnet)(t.magnet))?.infoHash;
             if (hash && seen.has(hash.toLowerCase()))
                 continue;
             if (hash)

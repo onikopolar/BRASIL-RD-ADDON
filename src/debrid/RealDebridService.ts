@@ -2,8 +2,10 @@ import axios, { AxiosInstance, AxiosResponse, AxiosError } from 'axios';
 import { config } from '../config/index.js';
 import { Logger } from '../utils/logger.js';
 import { TorboxTorrentInfo, TorboxFile } from '../types/index.js';
-import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
-import { StreamStatusException } from './StreamStatusException.js';
+import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
+import { StreamStatusException } from '../stream/StreamStatusException.js';
+import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
+import { analisarMagnet } from '../magnet/magnetHelper.js';
 
 interface TorboxError {
   error?: string;
@@ -35,6 +37,7 @@ export class TorboxService {
     '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
   ];
   private staticResponseService: StaticResponseService;
+  private readonly episodeMatcher = EpisodeMatcher.getInstance();
 
   constructor(baseUrl?: string) {
     this.logger = new Logger('TorboxService');
@@ -104,7 +107,7 @@ export class TorboxService {
 
       const torrentId = response.data?.torrent_id || response.data?.id || response.data?.data?.torrent_id || response.data?.data?.id;
       if (torrentId) {
-        this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: this.extractMagnetHash(magnetLink) });
+        this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: await this.extrairMagnetHash(magnetLink) });
         return String(torrentId);
       }
 
@@ -113,7 +116,7 @@ export class TorboxService {
       if (error instanceof StreamStatusException) throw error;
       this.logger.error('Falha ao adicionar magnet ao Torbox', {
         error: error instanceof Error ? error.message : 'Erro',
-        magnetHash: this.extractMagnetHash(magnetLink)
+        magnetHash: await this.extrairMagnetHash(magnetLink)
       });
       throw error;
     }
@@ -215,9 +218,8 @@ export class TorboxService {
         if (!this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext))) continue;
         let score = f.size;
         if (targetSeason !== undefined && targetEpisode !== undefined) {
-          const fs = this.extractSeasonFromFileName(f.name);
-          const fe = this.extractEpisodeFromFileName(f.name);
-          if (fs === targetSeason && fe === targetEpisode) score += 10_000_000_000;
+          const { temporada, episodio } = this.extrairTemporadaEpisodio(f.name);
+          if (temporada === targetSeason && episodio === targetEpisode) score += 10_000_000_000;
         }
         if (score > bestScore) { bestScore = score; bestFile = f; }
       }
@@ -281,7 +283,7 @@ export class TorboxService {
   }
 
   async processTorrent(magnetLink: string, apiKey: string) {
-    const hash = this.extractMagnetHash(magnetLink);
+    const hash = await this.extrairMagnetHash(magnetLink);
     try {
       const existing = await this.findExistingTorrent(hash, apiKey);
       if (existing) {
@@ -345,18 +347,17 @@ export class TorboxService {
     if (!id?.trim()) throw new Error('Torrent ID obrigatório');
   }
 
-  private extractMagnetHash(link: string): string {
-    return link.match(/btih:([a-zA-Z0-9]+)/i)?.[1]?.toLowerCase() || 'unknown';
+  private async extrairMagnetHash(link: string): Promise<string> {
+    const dados = await analisarMagnet(link);
+    return dados ? dados.infoHash : 'unknown';
   }
 
-  private extractSeasonFromFileName(name: string): number | undefined {
-    const m = name.match(/s(\d+)e\d+/i) || name.match(/season\s*(\d+)/i) || name.match(/(\d+)x\d+/i);
-    return m ? parseInt(m[1], 10) : undefined;
-  }
-
-  private extractEpisodeFromFileName(name: string): number | undefined {
-    const m = name.match(/s\d+e(\d+)/i) || name.match(/episode\s*(\d+)/i) || name.match(/\d+x(\d+)/i) || name.match(/ep\s*(\d+)/i);
-    return m ? parseInt(m[1], 10) : undefined;
+  private extrairTemporadaEpisodio(nomeArquivo: string): { temporada?: number; episodio?: number } {
+    const info = this.episodeMatcher.extractEpisodeInfo(nomeArquivo);
+    if (info.season > 0 && info.episode > 0) {
+      return { temporada: info.season, episodio: info.episode };
+    }
+    return {};
   }
 
   private delay(ms: number): Promise<void> {

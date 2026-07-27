@@ -1,5 +1,5 @@
-import { Logger } from '../../utils/logger.js';
-import { ImdbScraperService } from '../../services/ImdbScraperService.js';
+import { Logger } from '../utils/logger.js';
+import { ImdbScraperService } from '../catalogo/ImdbScraperService.js';
 import {
   isTechnicalWord,
   isInternationalReleaseGroup,
@@ -84,20 +84,12 @@ export class LanguageDetector {
     const desconhecidas: string[] = [];
 
     for (const palavra of palavrasTorrent) {
-      // 1. Palavra técnica → ignora (via TechnicalWords)
-      if (isTechnicalWord(palavra)) continue;
-      // 2. Número puro → ignora (ano, bitrate)
+      // 1. Número puro → ignora (ano, bitrate)
       if (/^\d+$/.test(palavra)) continue;
 
-      // 3. Verifica TODOS os contextos
-      if (setPt.has(palavra)) {
-        encontradasPt.push(palavra);
-        continue;
-      }
-      if (setEn.has(palavra)) {
-        encontradasEn.push(palavra);
-        continue;
-      }
+      // 2. IDIOMA PRIMEIRO (antes de descartar como técnica!)
+      //    "dublado", "dual", "legendado" etc estão no TechnicalWords
+      //    mas são indicadores FORTES de PT-BR — devem ser priorizados.
       if (this.INDICADORES_PT.has(palavra) || isBrazilianReleaseGroup(palavra)) {
         encontradasPt.push(palavra);
         continue;
@@ -107,7 +99,20 @@ export class LanguageDetector {
         continue;
       }
 
-      // 4. Não bateu nenhum contexto → desconhecida
+      // 3. TMDB PT/EN (título oficial)
+      if (setPt.has(palavra)) {
+        encontradasPt.push(palavra);
+        continue;
+      }
+      if (setEn.has(palavra)) {
+        encontradasEn.push(palavra);
+        continue;
+      }
+
+      // 4. Palavra técnica → ignora (codec, resolução, formato)
+      if (isTechnicalWord(palavra)) continue;
+
+      // 5. Não bateu nenhum contexto → desconhecida
       desconhecidas.push(palavra);
     }
 

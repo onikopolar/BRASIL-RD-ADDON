@@ -1,4 +1,4 @@
-// Arquivo: src/lib/title-filter/technical-words.ts
+// Arquivo: src/titulos/technical-words.ts
 // Palavras técnicas otimizadas para filtragem de títulos de torrents
 // Exporta constantes para uso no SimilarityCalculator
 

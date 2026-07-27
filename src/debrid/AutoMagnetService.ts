@@ -1,10 +1,11 @@
 import { getTorrent, createTorrent, createFile, File } from '../lib/repository.js';
 import { TorboxService } from './RealDebridService.js';
-import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
+import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { Logger } from '../utils/logger.js';
-import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../lib/titleFilter.js';
-import { EpisodeMatcher } from '../lib/episodeMatcher.js';
+import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../titulos/titleFilter.js';
+import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
+import { analisarMagnet } from '../magnet/magnetHelper.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -452,7 +453,7 @@ export class AutoMagnetService {
     titleMatchResult: TitleMatchResult
   ): Promise<boolean> {
     try {
-      const magnetHash = this.extractHashFromMagnet(magnetData.magnet);
+      const magnetHash = await this.extrairHashDoMagnet(magnetData.magnet);
       if (!magnetHash) {
         throw new Error('Não foi possível extrair infoHash');
       }
@@ -536,26 +537,14 @@ export class AutoMagnetService {
           createdAt: new Date(),
           updatedAt: new Date()
         }); */
-        this.logger.debug('🔒 DB BLOQUEADO (teste) — createTorrent ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
+        logger.debug('🔒 DB BLOQUEADO (teste) — createTorrent ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
       }
 
       // 🔒 BLOQUEADO PARA TESTE: await createFile({
       /* await createFile({
-        infoHash: magnetHash,
-        title: magnetData.title,
-        imdbId: magnetData.imdbId,
-        size: this.parseSizeToBytes(magnetData.size) || 0,
-        imdbTitle: imdbTitles.originalTitle,
-        portugueseTitle: imdbTitles.portugueseTitle,
-        imdbSeason: magnetData.imdbSeason,
-        imdbEpisode: magnetData.imdbEpisode,
-        matchedTitle: magnetData.matchedImdbTitle,
-        matchedLanguage: magnetData.matchedLanguage,
-        qualityMetadata: allQualities.length > 1 ? JSON.stringify({ allQualities: allQualities }) : null,
-        createdAt: new Date(),
-        updatedAt: new Date()
+        ...
       }); */
-      this.logger.debug('🔒 DB BLOQUEADO (teste) — createFile ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
+      logger.debug('🔒 DB BLOQUEADO (teste) — createFile ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
 
       logger.info('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),
@@ -606,9 +595,9 @@ export class AutoMagnetService {
     }
   }
 
-  private extractHashFromMagnet(magnet: string): string | null {
-    const match = magnet.match(/btih:([a-zA-Z0-9]+)/i);
-    return match ? match[1].toLowerCase() : null;
+  private async extrairHashDoMagnet(magnet: string): Promise<string | null> {
+    const dados = await analisarMagnet(magnet);
+    return dados ? dados.infoHash : null;
   }
 
   async processTorboxOnClick(
@@ -701,7 +690,7 @@ export class AutoMagnetService {
     apiKey: string
   ): Promise<{ found: boolean; torrentId?: string; status?: string; downloaded: boolean }> {
     try {
-      const magnetHash = this.extractMagnetHash(magnet);
+      const magnetHash = await this.extrairMagnetHash(magnet);
 
       if (!magnetHash) {
         return { found: false, downloaded: false };
@@ -725,9 +714,9 @@ export class AutoMagnetService {
     }
   }
 
-  private extractMagnetHash(magnet: string): string {
-    const match = magnet.match(/btih:([^&]+)/i);
-    return match ? match[1] : '';
+  private async extrairMagnetHash(magnet: string): Promise<string> {
+    const dados = await analisarMagnet(magnet);
+    return dados ? dados.infoHash : '';
   }
 
   async testTitleValidation(

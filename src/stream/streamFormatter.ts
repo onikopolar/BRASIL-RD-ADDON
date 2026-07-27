@@ -1,9 +1,9 @@
 import { Stream, StreamRequest } from '../types/index.js';
-import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper.js';
+import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { Logger } from '../utils/logger.js';
-import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor.js';
-import { EnhancedSeriesMetadata } from '../lib/title-filter/interfaces.js';
+import { MetadataExtractor } from '../titulos/MetadataExtractor.js';
+import { EnhancedSeriesMetadata } from '../titulos/interfaces.js';
 
 export class StreamFormatter {
   private readonly logger: Logger;
@@ -163,7 +163,7 @@ export class StreamFormatter {
   }
 
   // Stream direto do Real-Debrid - FORMATO CORRIGIDO
-  criarStreamDireto(
+  async criarStreamDireto(
     torrentTitle: string, // Título COMPLETO do torrent
     descricao: string,
     linkDireto: string,
@@ -174,7 +174,7 @@ export class StreamFormatter {
     behaviorHints?: any,
     metadata?: EnhancedSeriesMetadata,
     fileIdx?: number
-  ): Stream {
+  ): Promise<Stream> {
     this.logger.debug('CRIANDO_STREAM_DIRETO', { 
       qualidade: qualidade, 
       tipo: tipo, 
@@ -205,7 +205,7 @@ export class StreamFormatter {
     const stream: Stream = {
       name: `Brasil RD\n${qualidade}`,
       title: tituloFinal, // Título com 2-3 linhas e \n
-      infoHash: extractHashFromMagnet(linkDireto) || undefined,
+      infoHash: (await analisarMagnet(linkDireto))?.infoHash || undefined,
       fileIdx: fileIdx !== undefined ? fileIdx : 0,
       url: linkDireto
     };
@@ -233,7 +233,7 @@ export class StreamFormatter {
   }
 
   // Stream lazy (magnet) - FORMATO CORRIGIDO
-  criarStreamLazy(
+  async criarStreamLazy(
     torrentTitle: string, // Título COMPLETO do torrent
     descricao: string,
     magnet: string,
@@ -245,7 +245,7 @@ export class StreamFormatter {
     behaviorHints?: any,
     metadata?: EnhancedSeriesMetadata,
     fileIdx?: number
-  ): Stream {
+  ): Promise<Stream> {
     this.logger.debug('CRIANDO_STREAM_LAZY', { 
       qualidade: qualidade, 
       tipo: tipo, 
@@ -253,7 +253,8 @@ export class StreamFormatter {
       episodio: episodio 
     });
 
-    const magnetHash = extractHashFromMagnet(magnet);
+    const dadosMagnet = await analisarMagnet(magnet);
+    const magnetHash = dadosMagnet?.infoHash;
     
     // Extrai informações da descrição para usar nos emojis
     const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
@@ -279,7 +280,7 @@ export class StreamFormatter {
     let resolveUrl = '';
     try {
       const filename = this.sanitizarNomeArquivo(tituloFinal.split('\n')[0] + '.mkv');
-      resolveUrl = generateLazyResolveUrl(
+      resolveUrl = await gerarUrlResolve(
         magnet,
         apiKey,
         filename,
@@ -360,7 +361,7 @@ export class StreamFormatter {
   }
 
   // Cria streams separados para cada qualidade - MÉTODO PRINCIPAL CORRIGIDO
-  criarStreamsMultiplasQualidades(
+  async criarStreamsMultiplasQualidades(
     torrent: any,
     request: StreamRequest,
     linkDireto: string | null,
@@ -369,7 +370,7 @@ export class StreamFormatter {
     episodio?: number,
     disponivelNoRD: boolean = false,
     fileIdx?: number
-  ): Stream[] {
+  ): Promise<Stream[]> {
     const todasQualidades = this.extrairTodasQualidades(torrent.title);
     
     this.logger.debug('PROCESSANDO_MULTIPLAS_QUALIDADES', {
@@ -409,7 +410,7 @@ export class StreamFormatter {
       
       if (disponivelNoRD && linkDireto) {
         // Stream direto do Real-Debrid
-        streams.push(this.criarStreamDireto(
+        streams.push(await this.criarStreamDireto(
           tituloCompletoTorrent, // TÍTULO COMPLETO DO TORRENT
           descricaoBase,
           linkDireto,
@@ -426,7 +427,7 @@ export class StreamFormatter {
         ));
       } else {
         // Stream lazy com magnet
-        streams.push(this.criarStreamLazy(
+        streams.push(await this.criarStreamLazy(
           tituloCompletoTorrent, // TÍTULO COMPLETO DO TORRENT
           descricaoBase,
           torrent.magnet,
@@ -566,7 +567,7 @@ export class StreamFormatter {
   }
 
   // Métodos de compatibilidade (mantidos)
-  criarStreamSerie(
+  async criarStreamSerie(
     torrent: any,
     request: StreamRequest,
     linkDireto: string | null,
@@ -574,13 +575,13 @@ export class StreamFormatter {
     episodio: number,
     disponivelNoRD: boolean = false,
     fileIdx?: number
-  ): Stream {
+  ): Promise<Stream> {
     const qualidades = this.extrairTodasQualidades(torrent.title);
     const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
     
     const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
     
-    return this.criarStreamLazy(
+    return await this.criarStreamLazy(
       torrent.title, // Título COMPLETO do torrent
       descricaoBase,
       torrent.magnet,
@@ -598,19 +599,19 @@ export class StreamFormatter {
     );
   }
 
-  criarStreamFilme(
+  async criarStreamFilme(
     torrent: any,
     request: StreamRequest,
     linkDireto: string | null,
     disponivelNoRD: boolean = false,
     fileIdx?: number
-  ): Stream {
+  ): Promise<Stream> {
     const qualidades = this.extrairTodasQualidades(torrent.title);
     const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
     
     const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
     
-    return this.criarStreamLazy(
+    return await this.criarStreamLazy(
       torrent.title, // Título COMPLETO do torrent
       descricaoBase,
       torrent.magnet,
@@ -698,7 +699,7 @@ export class StreamFormatter {
   }
 
   // Método público mantendo compatibilidade (usa o novo formato internamente)
-  createMultipleQualityStreams(
+  async createMultipleQualityStreams(
     torrent: any,
     request: StreamRequest,
     directLink: string | null,
@@ -707,8 +708,8 @@ export class StreamFormatter {
     episode?: number,
     isAvailableOnRD: boolean = false,
     fileIdx?: number
-  ): Stream[] {
-    return this.criarStreamsMultiplasQualidades(
+  ): Promise<Stream[]> {
+    return await this.criarStreamsMultiplasQualidades(
       torrent,
       request,
       directLink,
@@ -721,7 +722,7 @@ export class StreamFormatter {
   }
 
   // Métodos públicos mantidos para compatibilidade
-  createSeriesStream(
+  async createSeriesStream(
     torrent: any,
     request: StreamRequest,
     directLink: string | null,
@@ -729,8 +730,8 @@ export class StreamFormatter {
     episode: number,
     isAvailableOnRD: boolean = false,
     fileIdx?: number
-  ): Stream {
-    return this.criarStreamSerie(
+  ): Promise<Stream> {
+    return await this.criarStreamSerie(
       torrent,
       request,
       directLink,
@@ -741,14 +742,14 @@ export class StreamFormatter {
     );
   }
 
-  createMovieStream(
+  async createMovieStream(
     torrent: any,
     request: StreamRequest,
     directLink: string | null,
     isAvailableOnRD: boolean = false,
     fileIdx?: number
-  ): Stream {
-    return this.criarStreamFilme(
+  ): Promise<Stream> {
+    return await this.criarStreamFilme(
       torrent,
       request,
       directLink,

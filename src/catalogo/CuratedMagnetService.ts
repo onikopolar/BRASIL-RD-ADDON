@@ -1,6 +1,6 @@
 import { Logger } from '../utils/logger.js';
 import { CuratedMagnet, StreamRequest } from '../types/index.js';
-import { EpisodeMatcher } from '../lib/episodeMatcher.js';
+import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 
 export class CuratedMagnetService {
   private magnets: Map<string, CuratedMagnet[]> = new Map();
@@ -142,42 +142,16 @@ export class CuratedMagnetService {
   }
 
   private doesMagnetMatchEpisode(magnetTitle: string, targetSeason: number, targetEpisode: number): boolean {
-    const title = magnetTitle.toLowerCase();
-    
-    // 1. TEMPORADA COMPLETA
-    const completeSeasonPatterns = [
-        /(\d+)\s*(?:ª|a|°|o)?\s*temporada\s*(?:completa|inteira)/i,
-        /temporada\s*(\d+)\s*(?:completa|inteira)/i,
-        /season\s*(\d+)\s*(?:complete|full)/i,
-        /s(\d+)\s*(?:complete|full)/i
-    ];
-
-    for (const pattern of completeSeasonPatterns) {
-        const match = title.match(pattern);
-        if (match) {
-            const seasonFromTitle = parseInt(match[1]);
-            if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
-                return true;
-            }
-        }
+    // 1. TEMPORADA COMPLETA → delega para EpisodeMatcher
+    if (this.episodeMatcher.ehPackTemporadaCompleta(magnetTitle)) {
+      const seasonFromTitle = this.episodeMatcher.extractSeasonFromTitle(magnetTitle);
+      if (seasonFromTitle === targetSeason) return true;
     }
 
-    // 2. APENAS TEMPORADA (sem episódio)
-    const seasonOnlyPatterns = [
-        /(\d+)\s*(?:ª|a|°|o)?\s*temporada/i,
-        /temporada\s*(\d+)/i,
-        /season\s*(\d+)/i,
-        /s(\d+)\b(?!e\d)/i
-    ];
-
-    for (const pattern of seasonOnlyPatterns) {
-        const match = title.match(pattern);
-        if (match) {
-            const seasonFromTitle = parseInt(match[1]);
-            if (!isNaN(seasonFromTitle) && seasonFromTitle === targetSeason) {
-                return true;
-            }
-        }
+    // 2. APENAS TEMPORADA (sem episódio) → delega para EpisodeMatcher
+    if (this.episodeMatcher.temIndicadorTemporada(magnetTitle) && !this.episodeMatcher.temIndicadorEpisodio(magnetTitle)) {
+      const seasonFromTitle = this.episodeMatcher.extractSeasonFromTitle(magnetTitle);
+      if (seasonFromTitle === targetSeason) return true;
     }
 
     // 3. EPISÓDIO ESPECÍFICO

@@ -1,5 +1,5 @@
 import { addonBuilder, getRouter } from 'stremio-addon-sdk';
-import { StreamHandler } from '../services/StreamHandler.js';
+import { StreamHandler } from '../stream/StreamHandler.js';
 import { Logger } from '../utils/logger.js';
 import { StreamRequest } from '../types/index.js';
 

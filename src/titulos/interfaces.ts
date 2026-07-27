@@ -1,4 +1,4 @@
-import { ImdbTitles } from '../../services/ImdbScraperService.js';
+import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
 
 export interface SeriesMetadata {
   season?: number;
@@ -50,6 +50,7 @@ export interface SmartTitleMatch {
   matches: boolean;
   similarity: number;
   reason: string;
+  mediaType?: 'movie' | 'tv';
 }
 
 export interface TitleFilterConfig {

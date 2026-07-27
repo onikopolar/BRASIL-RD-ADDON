@@ -1,16 +1,16 @@
-import { TorboxService } from './RealDebridService.js';
-import { CuratedMagnetService } from './CuratedMagnetService.js';
-import { AutoMagnetService } from './AutoMagnetService.js';
-import { CacheService } from './CacheService.js';
+import { TorboxService } from '../debrid/RealDebridService.js';
+import { CuratedMagnetService } from '../catalogo/CuratedMagnetService.js';
+import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
+import { CacheService } from '../debrid/CacheService.js';
 import { Logger } from '../utils/logger.js';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index.js';
 import { Op } from 'sequelize';
 import { Torrent, File } from '../database/models.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
-import { extractHashFromMagnet, generateLazyResolveUrl } from '../lib/magnetHelper.js';
-import { TitleFilter } from '../lib/titleFilter.js';
-import { StreamFormatter } from '../lib/streamFormatter.js';
-import { CatalogProvider } from '../providers/catalogProvider.js';
+import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
+import { TitleFilter } from '../titulos/titleFilter.js';
+import { StreamFormatter } from '../stream/streamFormatter.js';
+import { CatalogProvider } from '../catalogo/catalogProvider.js';
 import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
 import { StreamStatusException } from './StreamStatusException.js';
 
@@ -305,7 +305,7 @@ export class StreamHandler {
       const streams: Stream[] = [];
       for (const fileEntry of validatedEntries) {
         if (!fileEntry) continue;
-        const stream = this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
+        const stream = await this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
         if (stream) streams.push(stream);
       }
 
@@ -373,7 +373,7 @@ export class StreamHandler {
     }
   }
 
-  private convertDatabaseEntryToStream(fileEntry: any, torrent: any, request: StreamRequest): Stream | null {
+  private async convertDatabaseEntryToStream(fileEntry: any, torrent: any, request: StreamRequest): Promise<Stream | null> {
     try {
       const magnetHash = torrent.infoHash;
       const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
@@ -418,7 +418,7 @@ export class StreamHandler {
         status: 'available',
         infoHash: magnetHash,
         magnet: magnetLink,
-        url: generateLazyResolveUrl(
+        url: await gerarUrlResolve(
           magnetLink,
           request.apiKey!,
           filename,

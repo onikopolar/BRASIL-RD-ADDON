@@ -51,6 +51,12 @@ class TitleFilter {
                 }
             }
             const resultado = await this.similarityCalculator.smartTitleContainsCheck(tituloTorrent, imdbId, { year: anoTorrent, season: temporadaAlvo });
+            if (resultado.mediaType === 'movie' && this.episodeMatcher.temIndicadorTemporada(tituloTorrent)) {
+                return {
+                    matches: false, similarity: 0, torrentMetadata: metadados,
+                    reason: 'Torrent é série, mas TMDB diz que é filme'
+                };
+            }
             return {
                 matches: resultado.matches,
                 similarity: resultado.similarity,

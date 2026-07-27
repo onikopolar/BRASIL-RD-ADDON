@@ -1,9 +1,9 @@
 import { Logger } from '../utils/logger.js';
-import { SimilarityCalculator } from './title-filter/SimilarityCalculator.js';
-import { MetadataExtractor } from './title-filter/MetadataExtractor.js';
-import { LanguageDetector } from './title-filter/LanguageDetector.js';
+import { SimilarityCalculator } from './SimilarityCalculator.js';
+import { MetadataExtractor } from './MetadataExtractor.js';
+import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
-import { TitleMatchResult, SeriesMetadata } from './title-filter/interfaces.js';
+import { TitleMatchResult, SeriesMetadata } from './interfaces.js';
 
 /**
  * TitleFilter — Orquestrador fino de validação de títulos.
@@ -90,6 +90,14 @@ export class TitleFilter {
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent, imdbId, { year: anoTorrent, season: temporadaAlvo }
       );
+
+      // 4. Se TMDB diz que é FILME mas torrent tem indicadores de SÉRIE → rejeitar
+      if (resultado.mediaType === 'movie' && this.episodeMatcher.temIndicadorTemporada(tituloTorrent)) {
+        return {
+          matches: false, similarity: 0, torrentMetadata: metadados,
+          reason: 'Torrent é série, mas TMDB diz que é filme'
+        };
+      }
 
       return {
         matches: resultado.matches,

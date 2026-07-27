@@ -234,7 +234,7 @@ class StreamHandler {
             for (const fileEntry of validatedEntries) {
                 if (!fileEntry)
                     continue;
-                const stream = this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
+                const stream = await this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
                 if (stream)
                     streams.push(stream);
             }
@@ -284,7 +284,7 @@ class StreamHandler {
             return true;
         }
     }
-    convertDatabaseEntryToStream(fileEntry, torrent, request) {
+    async convertDatabaseEntryToStream(fileEntry, torrent, request) {
         try {
             const magnetHash = torrent.infoHash;
             const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
@@ -322,7 +322,7 @@ class StreamHandler {
                 status: 'available',
                 infoHash: magnetHash,
                 magnet: magnetLink,
-                url: (0, magnetHelper_js_1.generateLazyResolveUrl)(magnetLink, request.apiKey, filename, finalFileIndex, request.type, season, episode)
+                url: await (0, magnetHelper_js_1.gerarUrlResolve)(magnetLink, request.apiKey, filename, finalFileIndex, request.type, season, episode)
             };
             return stream;
         }

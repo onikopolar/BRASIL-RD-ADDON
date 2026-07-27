@@ -5,18 +5,18 @@ import express from 'express';
 import cors from 'cors';
 import path from 'path';
 import { sequelize } from './database/models.js';
-import { manifest } from './arquivos-serverts/manifest.js';
-import { configureTemplate } from './arquivos-serverts/configureTemplate.js';
-import { createStremioBuilder, getStremioRouter } from './arquivos-serverts/streamHandlerBuilder.js';
-import { setupBasicRoutes } from './arquivos-serverts/basicRoutes.js';
-import { setupResolveRoutes } from './arquivos-serverts/resolveRoutes.js';
-import { setupStaticRoutes } from './arquivos-serverts/staticRoutes.js';
-import { createServer } from './arquivos-serverts/serverFunctions.js';
-import { CacheService } from './services/CacheService.js';
+import { manifest } from './rotas/manifest.js';
+import { configureTemplate } from './rotas/configureTemplate.js';
+import { createStremioBuilder, getStremioRouter } from './rotas/streamHandlerBuilder.js';
+import { setupBasicRoutes } from './rotas/basicRoutes.js';
+import { setupResolveRoutes } from './rotas/resolveRoutes.js';
+import { setupStaticRoutes } from './rotas/staticRoutes.js';
+import { createServer } from './rotas/serverFunctions.js';
+import { CacheService } from './debrid/CacheService.js';
 import { Logger } from './utils/logger.js';
 import { clientInfoMiddleware } from './middlewares/clientInfo.js';
 import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit.js';
-import { metricsService } from './services/MetricsService.js';
+import { metricsService } from './catalogo/MetricsService.js';
 import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug.js';
 
 const logger = new Logger('Main');
@@ -171,7 +171,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
             return res.json({ streams: [] });
         }
 
-        const { StreamHandler } = await import('./services/StreamHandler.js');
+        const { StreamHandler } = await import('./stream/StreamHandler.js');
         const streamHandler = StreamHandler.getInstance();
 
         // Define URL base a partir do host da requisicao (para URLs absolutas nos videos)

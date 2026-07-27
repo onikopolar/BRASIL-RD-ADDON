@@ -8,6 +8,7 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { allowedQualities } from './scraperConfigs.js';
+import { analisarMagnet } from '../../magnet/magnetHelper.js';
 
 const logger = new Logger('WordPressScraper');
 
@@ -138,7 +139,7 @@ export class WordPressScraper {
     const results: TorrentResult[] = [];
     for (const post of response.data) {
       try {
-        const extracted = this.extractMagnetsFromPost(post, site.name, type);
+        const extracted = await this.extractMagnetsFromPost(post, site.name, type);
         results.push(...extracted);
       } catch {
         // Post individual com problema, ignora
@@ -148,11 +149,11 @@ export class WordPressScraper {
     return results;
   }
 
-  private extractMagnetsFromPost(
+  private async extractMagnetsFromPost(
     post: any,
     provider: string,
     type: 'movie' | 'series'
-  ): TorrentResult[] {
+  ): Promise<TorrentResult[]> {
     const title = post.title?.rendered || '';
     const content = post.content?.rendered || '';
     if (!content) return [];
@@ -160,31 +161,28 @@ export class WordPressScraper {
     const $ = cheerio.load(content);
     const results: TorrentResult[] = [];
 
-    // Encontra todos os links magnet no conteúdo
     const magnetLinks = $('a[href^="magnet:"]');
     if (!magnetLinks.length) return [];
 
-    // Extrai metadata do conteúdo HTML
     const metadata = this.extractPostMetadata($, content);
     const seriesInfo = this.extractSeriesEpisodes($, content, title);
 
-    magnetLinks.each((_, el) => {
+    const elementos = magnetLinks.toArray();
+    for (const el of elementos) {
       const magnet = $(el).attr('href');
-      if (!magnet) return;
+      if (!magnet) continue;
 
-      // Tenta extrair o nome do episódio do texto próximo ao magnet
       const episodeLabel = this.extractEpisodeLabel($, el);
 
-      // Determina o título final
       let resultTitle = this.buildResultTitle(title, episodeLabel, seriesInfo, type);
 
       const quality = this.qualityDetector.extractQualityFromFilename(resultTitle)
         || metadata.quality
         || this.extractQualityFromTitle(title);
 
-      if (!allowedQualities.has(quality)) return;
+      if (!allowedQualities.has(quality)) continue;
 
-      const infoHash = this.extractInfoHash(magnet);
+      const infoHash = await this.extrairInfoHashDoMagnet(magnet);
       const size = metadata.size || 'Desconhecido';
       const language = metadata.language || this.extractLanguage(title) || 'Desconhecido';
       const season = seriesInfo?.season;
@@ -205,7 +203,7 @@ export class WordPressScraper {
         lastUpdated: new Date(post.date || Date.now()),
         confidence: 0.85,
       });
-    });
+    }
 
     return results;
   }
@@ -306,9 +304,9 @@ export class WordPressScraper {
     return cleanTitle;
   }
 
-  private extractInfoHash(magnet: string): string | null {
-    const match = magnet.match(/btih:([a-fA-F0-9]{40})/);
-    return match ? match[1].toLowerCase() : null;
+  private async extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
+    const dados = await analisarMagnet(magnet);
+    return dados ? dados.infoHash : null;
   }
 
   private extractQualityFromTitle(title: string): string {

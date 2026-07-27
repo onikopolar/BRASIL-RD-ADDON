@@ -1,17 +1,17 @@
-import { CuratedMagnetService } from '../services/CuratedMagnetService.js';
+import { CuratedMagnetService } from '../catalogo/CuratedMagnetService.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
-import { StreamFormatter } from '../lib/streamFormatter.js';
+import { StreamFormatter } from '../stream/streamFormatter.js';
 import { Stream } from '../types/index.js';
-import { extractHashFromMagnet } from '../lib/magnetHelper.js';
+import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { Logger } from '../utils/logger.js';
-import { MetadataExtractor } from '../lib/title-filter/MetadataExtractor.js';
+import { MetadataExtractor } from '../titulos/MetadataExtractor.js';
 import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../lib/repository.js';
 import { TorrentScraperService } from '../services/scraper/TorrentScraperService.js';
-import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
-import { TitleFilter } from '../lib/titleFilter.js';
-import { AutoMagnetService } from '../services/AutoMagnetService.js';
-import { metricsService } from '../services/MetricsService.js';
-import { TorrentioService, TorrentioResult } from '../services/TorrentioService.js';
+import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
+import { TitleFilter } from '../titulos/titleFilter.js';
+import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
+import { metricsService } from '../catalogo/MetricsService.js';
+import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.js';
 
 interface ScrapedTorrent {
   title: string;
@@ -164,14 +164,17 @@ export class CatalogProvider {
     );
     if (!torrentResults.length) return [];
 
-    const uniqueTorrents = this.deduplicateTorrentsByMagnet(torrentResults);
+    const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
     const { valid, invalid } = await this.filterAndValidateTorrents(
       uniqueTorrents, imdbId, request, finalSeason, finalEpisode,
       tmdb.imdbTitles
     );
 
-    //  FALLBACK: Se scrapers não acharam nada válido, tenta Torrentio
-    if (valid.length === 0) {
+    // 🔒 FALLBACK TORRENTIO BLOQUEADO
+    //    Torrentio só valida nome — não confirma se o infoHash tem
+    //    indicadores reais de PT-BR. Deixar comentado até implementar
+    //    verificação de infoHash via TorboxService.
+    /* if (valid.length === 0) {
       this.logger.debug(' Scrapers não acharam torrents PT-BR, tentando Torrentio como fallback...', { imdbId });
       const torrentioResults = await this.torrentioService.search(
         type as 'movie' | 'series', imdbId!, finalSeason, finalEpisode
@@ -180,7 +183,6 @@ export class CatalogProvider {
       if (torrentioResults.length > 0) {
         this.logger.info(` Torrentio fallback: ${torrentioResults.length} torrents PT-BR encontrados`, { imdbId });
 
-        // Converter TorrentioResult para ScrapedTorrent (formato interno)
         const scrapedFromTorrentio: ScrapedTorrent[] = torrentioResults.map(tr => ({
           title: tr.title,
           magnet: tr.magnet,
@@ -193,7 +195,6 @@ export class CatalogProvider {
           type: tr.type
         }));
 
-        // Validar com TitleFilter (revalidar pra segurança)
         const torrentioValidation = await this.filterAndValidateTorrents(
           scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode,
           tmdb.imdbTitles
@@ -207,6 +208,9 @@ export class CatalogProvider {
       } else {
         this.logger.debug(' Torrentio: nenhum resultado PT-BR', { imdbId });
       }
+    } */
+    if (valid.length === 0) {
+      this.logger.debug('🔒 Torrentio fallback BLOQUEADO — apenas scrapers BR', { imdbId });
     }
 
     if (valid.length === 0) return [];
@@ -244,12 +248,23 @@ export class CatalogProvider {
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
-    // Pré-filtro rápido: descarta torrents obviamente não-PT (sem TMDB)
+    // Pre-filtro rapido: descarta torrents obviamente nao-PT (sem TMDB)
     const ptTorrents = torrents.filter(t => this.titleFilter.conteudoEmPortugues(t.title));
 
-    // Paralelo: valida título (similaridade) de todos os torrents PT
+    // Extrai nomes canonicos dos magnets via parse-torrent (parametro "dn" do magnet)
+    // O nome canonico eh mais confiavel que titulo de scraper para o TitleFilter
+    const dadosMagnets = await Promise.all(
+      ptTorrents.map(t => analisarMagnet(t.magnet).catch(() => null))
+    );
+
+    // Paralelo: valida titulo (similaridade) de todos os torrents PT
+    // Usa nome canonico do magnet quando disponivel, senao usa titulo do scraper
     const results = await Promise.allSettled(
-      ptTorrents.map(t => this.titleFilter.titulosCombinam(t.title, imdbId, season, episode))
+      ptTorrents.map((t, i) => {
+        const nomeCanonico = dadosMagnets[i]?.nome;
+        const tituloParaValidar = nomeCanonico || t.title;
+        return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
+      })
     );
 
     const valid: ScrapedTorrent[] = [];
@@ -281,8 +296,9 @@ export class CatalogProvider {
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 
-    // Paralelo: salva todos os magnets de uma vez (cada um tem sua própria validação)
-    await Promise.allSettled(torrents.map(async torrent => {
+    // 🔒 BLOQUEADO PARA TESTE
+    this.logger.debug('🔒 DB BLOQUEADO (teste) — saveValidTorrentsToCatalog ignorado', { count: torrents.length, imdbId });
+    /* await Promise.allSettled(torrents.map(async torrent => {
       try {
         const episodeValue = isPackFallback ? null : episode;
         await this.autoMagnetService.autoAddMagnet(
@@ -292,7 +308,7 @@ export class CatalogProvider {
       } catch (error) {
         this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
       }
-    }));
+    })); */
   }
 
   private async processTorrentsWithOptimization(
@@ -304,7 +320,7 @@ export class CatalogProvider {
       const batch = torrents.slice(i, i + batchSize);
       const batchPromises = batch.map(async torrent => {
         try {
-          return this.streamFormatter.createMultipleQualityStreams(
+          return await this.streamFormatter.createMultipleQualityStreams(
             torrent, request, null,
             request.type === 'series' ? 'series' : 'movie',
             season, episode, false
@@ -386,7 +402,7 @@ export class CatalogProvider {
         seeders: magnet.seeds || 0, size: magnet.size || 'N/A',
         quality: magnet.quality || 'HD', language: magnet.language || 'PT-BR'
       };
-      const streamArrays = this.streamFormatter.createMultipleQualityStreams(
+      const streamArrays = await this.streamFormatter.createMultipleQualityStreams(
         formatted, request, null,
         request.type === 'series' ? 'series' : 'movie',
         season ?? magnet.season, episode ?? magnet.episode, undefined, 0
@@ -447,11 +463,11 @@ export class CatalogProvider {
     return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
   }
 
-  private deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): ScrapedTorrent[] {
+  private async deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): Promise<ScrapedTorrent[]> {
     const seen = new Set<string>();
     const unique: ScrapedTorrent[] = [];
     for (const t of torrents) {
-      const hash = extractHashFromMagnet(t.magnet);
+      const hash = (await analisarMagnet(t.magnet))?.infoHash;
       if (hash && seen.has(hash.toLowerCase())) continue;
       if (hash) seen.add(hash.toLowerCase());
       unique.push(t);

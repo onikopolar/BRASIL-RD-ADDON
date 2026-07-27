@@ -1,4 +1,4 @@
-import { CacheService } from '../services/CacheService.js';
+import { CacheService } from '../debrid/CacheService.js';
 import { Logger } from '../utils/logger.js';
 
 const logger = new Logger('Routes');

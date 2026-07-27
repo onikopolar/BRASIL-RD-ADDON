@@ -1,7 +1,7 @@
 import express from 'express';
 import path from 'path';
 import { Logger } from '../utils/logger.js';
-import { StaticResponseService, StaticResponse } from '../services/StaticResponseService.js';
+import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
 
 const logger = new Logger('StaticRoutes');
 

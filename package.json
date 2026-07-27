@@ -32,6 +32,7 @@
     "fs-extra": "^11.3.2",
     "named-queue": "^2.2.1",
     "p-limit": "^7.2.0",
+    "parse-torrent": "^11.0.24",
     "pg": "^8.16.3",
     "pg-hstore": "^2.3.4",
     "prom-client": "^14.2.0",

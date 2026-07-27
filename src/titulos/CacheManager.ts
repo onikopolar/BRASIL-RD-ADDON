@@ -1,10 +1,11 @@
-import { Logger } from '../../utils/logger.js';
-import { ImdbTitles } from '../../services/ImdbScraperService.js';
+import { Logger } from '../utils/logger.js';
+import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import {
   ImdbTitleCacheEntry,
   DeduplicationCacheEntry,
   SeriesConfusion
 } from './interfaces.js';
+import { analisarMagnet } from '../magnet/magnetHelper.js';
 
 export class CacheManager {
   private readonly logger: Logger;
@@ -101,7 +102,7 @@ export class CacheManager {
   /**
    * Deduplica torrents - IGUAL AO ORIGINAL
    */
-  deduplicateTorrents(torrents: any[], logger?: Logger): any[] {
+  async deduplicateTorrents(torrents: any[], logger?: Logger): Promise<any[]> {
     if (torrents.length <= 1) return torrents;
     
     const seen = new Set<string>();
@@ -109,7 +110,7 @@ export class CacheManager {
     let duplicatesRemoved = 0;
     
     for (const torrent of torrents) {
-      const infoHash = this.extractInfoHash(torrent.magnet || torrent);
+      const infoHash = await this.extrairInfoHash(torrent.magnet || torrent);
       const title = torrent.title || 'unknown';
       
       let key: string;
@@ -236,17 +237,17 @@ getImdbTitlesFromCache(imdbId: string): ImdbTitleCacheEntry | null {
   /**
    * Extrai infoHash - EXATAMENTE IGUAL AO ORIGINAL
    */
-  extractInfoHash(source: string | any): string | null {
+  async extrairInfoHash(source: string | any): Promise<string | null> {
     if (typeof source === 'string') {
-      const magnetMatch = source.match(/btih:([a-zA-Z0-9]{40})/i);
-      return magnetMatch ? magnetMatch[1].toLowerCase() : null;
+      const dados = await analisarMagnet(source);
+      return dados ? dados.infoHash : null;
     } else if (source && typeof source === 'object') {
       if (source.infoHash) {
         return source.infoHash.toLowerCase();
       }
       if (source.magnet && typeof source.magnet === 'string') {
-        const magnetMatch = source.magnet.match(/btih:([a-zA-Z0-9]{40})/i);
-        return magnetMatch ? magnetMatch[1].toLowerCase() : null;
+        const dados = await analisarMagnet(source.magnet);
+        return dados ? dados.infoHash : null;
       }
     }
     return null;
@@ -321,8 +322,8 @@ getImdbTitlesFromCache(imdbId: string): ImdbTitleCacheEntry | null {
   /**
    * Verifica e marca como processado - NOVO (para TitleFilter refatorado)
    */
-  checkAndMarkProcessed(torrent: any): { alreadyProcessed: boolean; dedupeKey: string } {
-    const infoHash = this.extractInfoHash(torrent.magnet || torrent);
+  async checkAndMarkProcessed(torrent: any): Promise<{ alreadyProcessed: boolean; dedupeKey: string }> {
+    const infoHash = await this.extrairInfoHash(torrent.magnet || torrent);
     const title = torrent.title || torrent;
     const dedupeKey = this.createDedupeKey(title, infoHash || undefined);
     
