@@ -3,12 +3,14 @@ import { TorboxService } from './RealDebridService.js';
 import { ImdbScraperService, ImdbTitles } from '../services/ImdbScraperService.js';
 import { Logger } from '../utils/logger.js';
 import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../lib/titleFilter.js';
+import { EpisodeMatcher } from '../lib/episodeMatcher.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
 const imdbScraper = ImdbScraperService.getInstance();
 const titleFilter = TitleFilter.getInstance();
+const episodeMatcher = EpisodeMatcher.getInstance();
 const qualityDetector = QualityDetector.getInstance();
 
 interface MagnetData {
@@ -102,7 +104,7 @@ export class AutoMagnetService {
         return result;
       }
 
-      const imdbTitles = await this.getImdbTitlesWithCache(imdbId);
+      const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         const result = { success: false, magnetAdded: false, message: 'Títulos IMDB não encontrados' };
         this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
@@ -120,17 +122,17 @@ export class AutoMagnetService {
         let rejectionReason = titleMatchResult.reason || 'Título não corresponde';
 
         if (type === 'series' && imdbSeason !== undefined) {
-          const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
-          const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-          const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
+          const torrentMetadata = titleFilter.extrairMetadados(torrentTitle);
+          const multiplos = episodeMatcher.temMultiplosEpisodios(torrentTitle);
+          const ehPack = episodeMatcher.ehPackTemporadaCompleta(torrentTitle);
           
-          if (!isCompletePack) {
-            if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
+          if (!ehPack) {
+            if (multiplos.temMultiplos && multiplos.episodioInicio && multiplos.episodioFim) {
               if (imdbEpisode !== undefined && imdbEpisode !== null) {
-                const episodeInRange = imdbEpisode >= hasMultipleEpisodes.startEpisode && 
-                                     imdbEpisode <= hasMultipleEpisodes.endEpisode;
+                const episodeInRange = imdbEpisode >= multiplos.episodioInicio && 
+                                     imdbEpisode <= multiplos.episodioFim;
                 if (!episodeInRange) {
-                  rejectionReason = `Episódio ${imdbEpisode} fora do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}`;
+                  rejectionReason = `Episódio ${imdbEpisode} fora do range ${multiplos.episodioInicio}-${multiplos.episodioFim}`;
                 } else {
                   rejectionReason = titleMatchResult.reason || 'Outro motivo de rejeição';
                 }
@@ -161,9 +163,9 @@ export class AutoMagnetService {
       let torrentEpisode = imdbEpisode;
 
       if (type === 'series') {
-        const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
-        const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-        const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
+        const torrentMetadata = titleFilter.extrairMetadados(torrentTitle);
+        const multiplos = episodeMatcher.temMultiplosEpisodios(torrentTitle);
+        const ehPack = episodeMatcher.ehPackTemporadaCompleta(torrentTitle);
         
         logger.debug('Season/Episode debug', {
           torrentTitle: torrentTitle.substring(0, 60),
@@ -171,24 +173,24 @@ export class AutoMagnetService {
           passedEpisode: imdbEpisode,
           extractedSeason: torrentMetadata.season,
           extractedEpisode: torrentMetadata.episode,
-          hasMultipleEpisodes: hasMultipleEpisodes.hasMultiple,
-          isCompletePack: isCompletePack,
-          episodeRange: hasMultipleEpisodes.hasMultiple ? 
-            `${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}` : 'não'
+          temMultiplos: multiplos.temMultiplos,
+          ehPack: ehPack,
+          episodeRange: multiplos.temMultiplos ? 
+            `${multiplos.episodioInicio}-${multiplos.episodioFim}` : 'não'
         });
 
         if (torrentSeason === undefined && torrentMetadata.season) {
           torrentSeason = torrentMetadata.season;
         }
         
-        if (isCompletePack) {
+        if (ehPack) {
           torrentEpisode = null;
           logger.debug('Pack de temporada completa detectado', {
             title: torrentTitle.substring(0, 60),
             season: torrentSeason,
             episodeDefinido: 'null (pack completo)'
           });
-        } else if (hasMultipleEpisodes.hasMultiple) {
+        } else if (multiplos.temMultiplos) {
           if (torrentEpisode === undefined && imdbEpisode !== undefined && imdbEpisode !== null) {
             torrentEpisode = imdbEpisode;
           }
@@ -239,7 +241,7 @@ export class AutoMagnetService {
           validationMessage += ` | S${torrentSeason}`;
           if (torrentEpisode !== null && torrentEpisode !== undefined) {
             validationMessage += `E${torrentEpisode}`;
-          } else if (this.isCompleteSeasonPack(torrentTitle)) {
+          } else if (episodeMatcher.ehPackTemporadaCompleta(torrentTitle)) {
             validationMessage += ' (Temporada Completa)';
           }
         }
@@ -299,21 +301,6 @@ export class AutoMagnetService {
     }
   }
 
-  private async getImdbTitlesWithCache(imdbId: string): Promise<ImdbTitles | null> {
-    const cacheKey = `imdb_${imdbId}`;
-    const cached = this.imdbCache.get(cacheKey);
-    
-    if (cached && (Date.now() - cached.timestamp) < this.imdbCacheTTL) {
-      return cached.data;
-    }
-
-    const data = await imdbScraper.getTitlesFromImdbId(imdbId);
-    if (data) {
-      this.imdbCache.set(cacheKey, { data: data, timestamp: Date.now() });
-    }
-    
-    return data;
-  }
 
   private async validateTitleWithCache(
     torrentTitle: string,
@@ -328,33 +315,10 @@ export class AutoMagnetService {
       return cached.result;
     }
 
-    const result = await titleFilter.doTitlesMatch(torrentTitle, imdbId, season, episode);
+    const result = await titleFilter.titulosCombinam(torrentTitle, imdbId, season, episode);
     this.titleValidationCache.set(cacheKey, { result: result, timestamp: Date.now() });
     
     return result;
-  }
-
-  // NOVA LÓGICA: detecta temporada sem episódio
-  private hasSeasonIndicator(title: string): boolean {
-    const lower = title.toLowerCase();
-    const patterns = [
-      /\bs\d{1,3}\b/,
-      /\bseason\s*\d{1,3}\b/,
-      /\bt\d{1,3}\b/,
-      /\btemporada\s*\d{1,3}\b/,
-      /\b\d{1,2}ª?\s*temporada\b/
-    ];
-    return patterns.some(p => p.test(lower));
-  }
-
-  private hasEpisodeIndicator(title: string): boolean {
-    const lower = title.toLowerCase();
-    return /s\d+e\d+/i.test(lower) || /episode\s+\d+/i.test(lower) || /\be\d{1,3}\b/i.test(lower);
-  }
-
-  // Agora verifica se tem temporada sem episódio
-  private isCompleteSeasonPack(torrentTitle: string): boolean {
-    return this.hasSeasonIndicator(torrentTitle) && !this.hasEpisodeIndicator(torrentTitle);
   }
 
   private extractAllQualitiesFromTitle(title: string): string[] {
@@ -451,45 +415,6 @@ export class AutoMagnetService {
     }
     
     return '';
-  }
-
-  private hasMultipleEpisodes(torrentTitle: string): { hasMultiple: boolean; startEpisode?: number; endEpisode?: number } {
-    const lowerTitle = torrentTitle.toLowerCase();
-    
-    const episodeRangeMatch = lowerTitle.match(/e(\d{1,10})-(\d{1,10})(?:-(\d{1,10}))?(?:-(\d{1,10}))?/);
-    
-    if (episodeRangeMatch) {
-      const startEpisode = parseInt(episodeRangeMatch[1]);
-      let endEpisode = startEpisode;
-      for (let i = 2; i <= 4; i++) {
-        if (episodeRangeMatch[i]) {
-          endEpisode = parseInt(episodeRangeMatch[i]);
-        }
-      }
-      
-      logger.debug('Detectado múltiplos episódios', {
-        title: torrentTitle.substring(0, 60),
-        startEpisode: startEpisode,
-        endEpisode: endEpisode
-      });
-      
-      return { hasMultiple: true, startEpisode: startEpisode, endEpisode: endEpisode };
-    }
-    
-    const concatenatedMatch = lowerTitle.match(/e(\d{1,10})e(\d{1,10})(?:e(\d{1,10}))?(?:e(\d{1,10}))?/);
-    if (concatenatedMatch) {
-      const startEpisode = parseInt(concatenatedMatch[1]);
-      let endEpisode = startEpisode;
-      for (let i = 2; i <= 4; i++) {
-        if (concatenatedMatch[i]) {
-          endEpisode = parseInt(concatenatedMatch[i]);
-        }
-      }
-      
-      return { hasMultiple: true, startEpisode: startEpisode, endEpisode: endEpisode };
-    }
-    
-    return { hasMultiple: false };
   }
 
   private validateMagnetLink(magnet: string): boolean {
@@ -595,7 +520,8 @@ export class AutoMagnetService {
 
       const existingTorrent = await getTorrent(magnetHash);
       if (!existingTorrent) {
-        await createTorrent({
+        // 🔒 BLOQUEADO PARA TESTE: await createTorrent({
+        /* await createTorrent({
           infoHash: magnetHash,
           provider: 'brasil-rd',
           magnetLink: magnetData.magnet,
@@ -609,10 +535,12 @@ export class AutoMagnetService {
           metadata: allQualities.length > 1 ? JSON.stringify({ availableQualities: allQualities }) : null,
           createdAt: new Date(),
           updatedAt: new Date()
-        });
+        }); */
+        this.logger.debug('🔒 DB BLOQUEADO (teste) — createTorrent ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
       }
 
-      await createFile({
+      // 🔒 BLOQUEADO PARA TESTE: await createFile({
+      /* await createFile({
         infoHash: magnetHash,
         title: magnetData.title,
         imdbId: magnetData.imdbId,
@@ -626,7 +554,8 @@ export class AutoMagnetService {
         qualityMetadata: allQualities.length > 1 ? JSON.stringify({ allQualities: allQualities }) : null,
         createdAt: new Date(),
         updatedAt: new Date()
-      });
+      }); */
+      this.logger.debug('🔒 DB BLOQUEADO (teste) — createFile ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
 
       logger.info('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),
@@ -814,16 +743,16 @@ export class AutoMagnetService {
     torrentMetadata?: SeriesMetadata;
     seasonMatch?: boolean;
     episodeMatch?: boolean;
-    isCompletePack?: boolean;
+    ehPack?: boolean;
     reason?: string;
   }> {
     try {
       const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
-      const torrentMetadata = titleFilter.extractSeriesMetadata(torrentTitle);
-      const hasMultipleEpisodes = this.hasMultipleEpisodes(torrentTitle);
-      const isCompletePack = this.isCompleteSeasonPack(torrentTitle);
+      const torrentMetadata = titleFilter.extrairMetadados(torrentTitle);
+      const multiplos = episodeMatcher.temMultiplosEpisodios(torrentTitle);
+      const ehPack = episodeMatcher.ehPackTemporadaCompleta(torrentTitle);
       
-      const matchResult = await titleFilter.doTitlesMatch(
+      const matchResult = await titleFilter.titulosCombinam(
         torrentTitle,
         imdbId,
         testSeason,
@@ -842,16 +771,16 @@ export class AutoMagnetService {
       }
 
       if (testEpisode !== undefined && testEpisode !== null) {
-        if (isCompletePack) {
+        if (ehPack) {
           episodeMatch = true;
           reason += ' Pack de temporada completa - compatível com qualquer episódio.';
-        } else if (hasMultipleEpisodes.hasMultiple && hasMultipleEpisodes.startEpisode && hasMultipleEpisodes.endEpisode) {
-          episodeMatch = testEpisode >= hasMultipleEpisodes.startEpisode && 
-                        testEpisode <= hasMultipleEpisodes.endEpisode;
+        } else if (multiplos.temMultiplos && multiplos.episodioInicio && multiplos.episodioFim) {
+          episodeMatch = testEpisode >= multiplos.episodioInicio && 
+                        testEpisode <= multiplos.episodioFim;
           if (!episodeMatch) {
-            reason += ` Episódio fora do range: ${testEpisode} vs ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
+            reason += ` Episódio fora do range: ${testEpisode} vs ${multiplos.episodioInicio}-${multiplos.episodioFim}.`;
           } else {
-            reason += ` Episódio ${testEpisode} dentro do range ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}.`;
+            reason += ` Episódio ${testEpisode} dentro do range ${multiplos.episodioInicio}-${multiplos.episodioFim}.`;
           }
         } else if (torrentMetadata.episode) {
           episodeMatch = torrentMetadata.episode === testEpisode;
@@ -869,13 +798,13 @@ export class AutoMagnetService {
           reason += ' (pt)';
         }
         if (torrentMetadata.season) reason += ` S${torrentMetadata.season}`;
-        if (isCompletePack) {
+        if (ehPack) {
           reason += ' (Temporada Completa)';
         } else if (torrentMetadata.episode) {
           reason += `E${torrentMetadata.episode}`;
         }
-        if (hasMultipleEpisodes.hasMultiple) {
-          reason += ` [Range: ${hasMultipleEpisodes.startEpisode}-${hasMultipleEpisodes.endEpisode}]`;
+        if (multiplos.temMultiplos) {
+          reason += ` [Range: ${multiplos.episodioInicio}-${multiplos.episodioFim}]`;
         }
         reason += ` (${(matchResult.similarity * 100).toFixed(1)}%)`;
       } else {
@@ -896,7 +825,7 @@ export class AutoMagnetService {
         torrentMetadata: torrentMetadata,
         seasonMatch: seasonMatch,
         episodeMatch: episodeMatch,
-        isCompletePack: isCompletePack,
+        ehPack: ehPack,
         reason: reason
       };
 
@@ -909,8 +838,8 @@ export class AutoMagnetService {
     }
   }
 
-  extractSeriesMetadata(torrentTitle: string): SeriesMetadata {
-    return titleFilter.extractSeriesMetadata(torrentTitle);
+  extrairMetadados(torrentTitle: string): SeriesMetadata {
+    return titleFilter.extrairMetadados(torrentTitle);
   }
 
   async getImdbTitles(imdbId: string): Promise<ImdbTitles | null> {

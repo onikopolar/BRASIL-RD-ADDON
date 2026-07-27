@@ -277,7 +277,7 @@ class StreamHandler {
     async validateDatabaseEntry(torrentTitle, imdbId, type, season, episode) {
         try {
             const targetEpisode = episode === null ? undefined : episode;
-            const match = await this.titleFilter.doTitlesMatch(torrentTitle, imdbId, season, targetEpisode);
+            const match = await this.titleFilter.titulosCombinam(torrentTitle, imdbId, season, targetEpisode);
             return match.matches;
         }
         catch {

@@ -162,12 +162,13 @@ class CatalogProvider {
     async filterAndValidateTorrents(torrents, imdbId, request, season, episode, imdbTitles = null) {
         if (!imdbId)
             return { valid: torrents, invalid: [] };
-        const results = await Promise.allSettled(torrents.map(t => this.titleFilter.doTitlesMatch(t.title, imdbId, season, episode)));
+        const ptTorrents = torrents.filter(t => this.titleFilter.conteudoEmPortugues(t.title));
+        const results = await Promise.allSettled(ptTorrents.map(t => this.titleFilter.titulosCombinam(t.title, imdbId, season, episode)));
         const valid = [];
-        const invalid = [];
+        const invalid = torrents.filter(t => !ptTorrents.includes(t));
         const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
         results.forEach((result, i) => {
-            const torrent = torrents[i];
+            const torrent = ptTorrents[i];
             if (result.status === 'fulfilled' && result.value.matches) {
                 valid.push(torrent);
             }

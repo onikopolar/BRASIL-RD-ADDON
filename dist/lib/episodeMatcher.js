@@ -13,6 +13,11 @@ class EpisodeMatcher {
             /^(\d+)$/
         ];
     }
+    static getInstance() {
+        if (!EpisodeMatcher.instance)
+            EpisodeMatcher.instance = new EpisodeMatcher();
+        return EpisodeMatcher.instance;
+    }
     extractEpisodeInfo(filename) {
         for (const pattern of this.episodePatterns) {
             const match = filename.match(pattern);
@@ -129,6 +134,68 @@ class EpisodeMatcher {
             }
         }
         return { season: 1, episode: 1, isValid: false };
+    }
+    temIndicadorTemporada(titulo) {
+        const lower = titulo.toLowerCase();
+        const padroes = [
+            /\bs\d{1,3}\b/,
+            /\bseason\s*\d{1,3}\b/,
+            /\bt\d{1,3}\b/,
+            /\btemporada\s*\d{1,3}\b/,
+            /\b\d{1,2}ª?\s*temporada\b/
+        ];
+        return padroes.some(p => p.test(lower));
+    }
+    temIndicadorEpisodio(titulo) {
+        const lower = titulo.toLowerCase();
+        return /s\d+e\d+/i.test(lower) || /episode\s+\d+/i.test(lower) || /\be\d{1,3}\b/i.test(lower);
+    }
+    ehPackTemporadaCompleta(titulo) {
+        return this.temIndicadorTemporada(titulo) && !this.temIndicadorEpisodio(titulo);
+    }
+    temMultiplosEpisodios(titulo) {
+        const lower = titulo.toLowerCase();
+        const rangeMatch = lower.match(/e(\d{1,10})-(\d{1,10})(?:-(\d{1,10}))?(?:-(\d{1,10}))?/);
+        if (rangeMatch) {
+            const inicio = parseInt(rangeMatch[1]);
+            let fim = inicio;
+            for (let i = 2; i <= 4; i++)
+                if (rangeMatch[i])
+                    fim = parseInt(rangeMatch[i]);
+            return { temMultiplos: true, episodioInicio: inicio, episodioFim: fim };
+        }
+        const concatMatch = lower.match(/e(\d{1,10})e(\d{1,10})(?:e(\d{1,10}))?(?:e(\d{1,10}))?/);
+        if (concatMatch) {
+            const inicio = parseInt(concatMatch[1]);
+            let fim = inicio;
+            for (let i = 2; i <= 4; i++)
+                if (concatMatch[i])
+                    fim = parseInt(concatMatch[i]);
+            return { temMultiplos: true, episodioInicio: inicio, episodioFim: fim };
+        }
+        return { temMultiplos: false };
+    }
+    episodioEhCompativel(tituloTorrent, episodioTorrent, episodioAlvo, temporadaAlvo) {
+        if (this.ehPackTemporadaCompleta(tituloTorrent)) {
+            return { compativel: true, motivo: 'Pack de temporada (sem episódio específico)' };
+        }
+        const multiplos = this.temMultiplosEpisodios(tituloTorrent);
+        if (multiplos.temMultiplos && multiplos.episodioInicio && multiplos.episodioFim) {
+            if (episodioAlvo >= multiplos.episodioInicio && episodioAlvo <= multiplos.episodioFim) {
+                return { compativel: true, motivo: `Episódio ${episodioAlvo} no range ${multiplos.episodioInicio}-${multiplos.episodioFim}` };
+            }
+            return { compativel: false, motivo: `Episódio ${episodioAlvo} fora do range ${multiplos.episodioInicio}-${multiplos.episodioFim}` };
+        }
+        if (episodioTorrent === undefined) {
+            if (this.temIndicadorTemporada(tituloTorrent) && !this.temIndicadorEpisodio(tituloTorrent)) {
+                return { compativel: true, motivo: 'Provável pack de temporada (sem episódio)' };
+            }
+            return { compativel: false, motivo: 'Episódio não especificado' };
+        }
+        if (episodioTorrent === episodioAlvo) {
+            return { compativel: true, motivo: `Episódio específico ${episodioAlvo} corresponde` };
+        }
+        return { compativel: false, motivo: `Episódio diferente: Torrent E${episodioTorrent} vs E${episodioAlvo}` };
     }
 }
 exports.EpisodeMatcher = EpisodeMatcher;

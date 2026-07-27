@@ -244,21 +244,24 @@ export class CatalogProvider {
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
-    // Paralelo: valida todos os torrents de uma vez
+    // Pré-filtro rápido: descarta torrents obviamente não-PT (sem TMDB)
+    const ptTorrents = torrents.filter(t => this.titleFilter.conteudoEmPortugues(t.title));
+
+    // Paralelo: valida título (similaridade) de todos os torrents PT
     const results = await Promise.allSettled(
-      torrents.map(t => this.titleFilter.doTitlesMatch(t.title, imdbId, season, episode))
+      ptTorrents.map(t => this.titleFilter.titulosCombinam(t.title, imdbId, season, episode))
     );
 
     const valid: ScrapedTorrent[] = [];
-    const invalid: ScrapedTorrent[] = [];
+    const invalid: ScrapedTorrent[] = torrents.filter(t => !ptTorrents.includes(t)); // não-PT já são inválidos
     const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
 
     results.forEach((result, i) => {
-      const torrent = torrents[i];
+      const torrent = ptTorrents[i];
       if (result.status === 'fulfilled' && result.value.matches) {
         valid.push(torrent);
       } else if (season && completePackRe.test(torrent.title)) {
-        valid.push(torrent); // fallback: pack completo
+        valid.push(torrent);
       } else {
         invalid.push(torrent);
       }

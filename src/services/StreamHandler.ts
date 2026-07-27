@@ -364,12 +364,11 @@ export class StreamHandler {
   ): Promise<boolean> {
     try {
       const targetEpisode = episode === null ? undefined : episode;
-      const match = await this.titleFilter.doTitlesMatch(
+      const match = await this.titleFilter.titulosCombinam(
         torrentTitle, imdbId, season, targetEpisode
       );
       return match.matches;
     } catch {
-      // Se falhar validação, permite passar (evita bloquear tudo se TMDB cair)
       return true;
     }
   }
