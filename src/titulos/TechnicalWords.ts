@@ -176,7 +176,7 @@ export const INTERNATIONAL_TRACKERS = [
 export const BRAZILIAN_RELEASE_GROUPS = [
   'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'cmdtv', 'cmdb',
   'dhg', 'divulgahd', 'legiahd', 'baixar', 'download', 'brasil',
-  'brrip', 'br-rip', 'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
+  'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes'
 ];
 
@@ -311,11 +311,92 @@ export function getTechnicalWordsStats() {
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
-    version: '1.1.0', // Atualização: Minor (novas funcionalidades)
-    description: 'Adicionada detecção inteligente de releases internacionais/brasileiros'
+    version: '1.2.0', // getPotentialSequelNumbers para delegar deteccao de sequencia
+    description: 'Delegacao de deteccao de numeros de sequencia via contexto tecnico'
   };
 }
 
-// Log de atualização da versão
-console.log('[INFO] [TechnicalWords] Versão 1.1.0 carregada - Detecção inteligente de releases');
+// Extrai numeros (2-19) do titulo que podem indicar sequencia de franquia.
+// Filtra numeros que aparecem em contexto tecnico (audio, qualidade, episodios).
+// Delega para isTechnicalWord + regex de padroes conhecidos.
+export function getPotentialSequelNumbers(title: string): number[] {
+  const lower = title.toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+  // Extrai todos os tokens (split por espaco E por ponto)
+  const spaceTokens = lower
+    .replace(/[^\w\s.]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ');
+  const allTokens = new Set<string>();
+  for (const t of spaceTokens) {
+    allTokens.add(t);
+    t.split('.').forEach(sub => allTokens.add(sub));
+  }
+
+  // Extrai numeros puros 2-19
+  const candidates: number[] = [];
+  for (const token of allTokens) {
+    if (/^\d+$/.test(token)) {
+      const n = Number(token);
+      if (n >= 2 && n <= 19) candidates.push(n);
+    }
+  }
+
+  // Filtra: mantem só os que NAO estao em contexto tecnico
+  const result: number[] = [];
+  for (const num of candidates) {
+    if (!_isInTechnicalContext(lower, num, allTokens)) {
+      result.push(num);
+    }
+  }
+
+  return [...new Set(result)];
+}
+
+/** Verifica se um numero aparece apenas em contexto tecnico no titulo */
+function _isInTechnicalContext(
+  lowerTitle: string,
+  num: number,
+  allTokens: Set<string>
+): boolean {
+  const numStr = String(num);
+
+  // a) Tokens NAO-puros que contem o numero e sao technical words
+  //    Ex: "5.1", "1080p", "2ch", "dd5.1", "s2", "e2", "ep2", "cd2"
+  for (const token of allTokens) {
+    if (!/^\d+$/.test(token) && token.includes(numStr) && isTechnicalWord(token)) {
+      return true;
+    }
+  }
+
+  // b) Audio channels como "5.1", "7.1", "2.0" no titulo original
+  //    Cobre titulos TPB onde "DUAL.5.1" vira um token so
+  const audioRe = /(\d+\.\d+(?:ch)?)/g;
+  let m;
+  while ((m = audioRe.exec(lowerTitle)) !== null) {
+    if (isTechnicalWord(m[1])) {
+      const nums = m[1].match(/\d+/g);
+      if (nums && nums.map(Number).includes(num)) return true;
+    }
+  }
+
+  // c) Range de episodios: S01E01-02, S01E01 02
+  const epRangeRe = /s\d+e\d+[-\s]+0*(\d+)/gi;
+  while ((m = epRangeRe.exec(lowerTitle)) !== null) {
+    if (Number(m[1]) === num) return true;
+  }
+
+  // d) Range de episodios sem Sxx: E01-02
+  const eRangeRe = /\be\d+[-\s]+0*(\d+)\b/gi;
+  while ((m = eRangeRe.exec(lowerTitle)) !== null) {
+    if (Number(m[1]) === num) return true;
+  }
+
+  return false;
+}
+
+// Log de atualizacao da versao
+console.log('[INFO] [TechnicalWords] Versao 1.2.0 carregada - Deteccao de sequencia delegada');
 console.log('[DEBUG] [TechnicalWords] Iniciada verificação de grupos internacionais/brasileiros');

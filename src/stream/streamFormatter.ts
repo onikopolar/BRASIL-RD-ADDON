@@ -295,7 +295,8 @@ export class StreamFormatter {
         tipo,
         temporada,
         episodio,
-        qualidade
+        qualidade,
+        magnetHash // evita re-parse — já temos do analisarMagnet acima
       );
       
       /* DEBUG SILENCIOSO

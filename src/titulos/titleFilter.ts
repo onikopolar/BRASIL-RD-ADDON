@@ -38,6 +38,16 @@ export class TitleFilter {
     return this.languageDetector.isPortugueseContent(titulo);
   }
 
+  /** Versão detalhada: retorna motivo, palavras encontradas PT/EN */
+  verificarIdiomaDetalhado(titulo: string) {
+    return this.languageDetector.verificarIdioma(titulo, null, null);
+  }
+
+  /** Versão com TMDB: palavras do título PT batem contra set do TMDB */
+  verificarIdiomaComTMDB(titulo: string, tmdbPt: string | null, tmdbEn: string | null) {
+    return this.languageDetector.verificarIdioma(titulo, tmdbPt, tmdbEn);
+  }
+
   /** Extrai ano do título (ex: "Matrix 1999" → 1999) */
   extrairAno(titulo: string): number | undefined {
     const m = titulo.match(/\b(19|20)\d{2}\b/);

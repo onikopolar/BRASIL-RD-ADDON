@@ -10,6 +10,15 @@ async function carregarAnalisador() {
   return analisadorTorrent;
 }
 
+// ── Decode HTML entities via cheerio (tag <span> é válida) ────────────
+
+function decodeHtmlEntities(text: string): string {
+  // cheerio.load().text() decodifica &ccedil; → ç, &atilde; → ã, etc.
+  // Usamos <span> que é uma tag HTML válida (diferente de <d> que falhava)
+  const cheerio = require('cheerio');
+  return cheerio.load(`<span>${text}</span>`)('span').text();
+}
+
 // ── Tipos ─────────────────────────────────────────────────────────────
 
 export interface DadosMagnet {
@@ -34,7 +43,7 @@ export async function analisarMagnet(magnet: string): Promise<DadosMagnet | null
     if (!resultado || !resultado.infoHash) return null;
     return {
       infoHash: resultado.infoHash.toLowerCase(),
-      nome: resultado.name || null,
+      nome: resultado.name ? decodeHtmlEntities(resultado.name) : null,
       anuncios: Array.isArray(resultado.announce) ? resultado.announce : []
     };
   } catch {
@@ -56,10 +65,11 @@ export async function gerarUrlResolve(
   tipo?: 'movie' | 'series',
   temporada?: number,
   episodio?: number,
-  qualidade?: string
+  qualidade?: string,
+  infoHashPreParsed?: string // evita re-parse do magnet
 ): Promise<string> {
-  const dados = await analisarMagnet(magnet);
-  if (!dados) {
+  const infoHash = infoHashPreParsed || (await analisarMagnet(magnet))?.infoHash;
+  if (!infoHash) {
     throw new Error('Nao foi possivel extrair infoHash do magnet');
   }
 
@@ -70,7 +80,7 @@ export async function gerarUrlResolve(
       ? `https://${process.env.RAILWAY_STATIC_URL}`
       : `http://localhost:${process.env.PORT || 7000}`);
 
-  let url = `${baseUrl}/resolve/torbox/${chaveApi}/${dados.infoHash}/null/${indiceArquivo}/${arquivoCodificado}`;
+  let url = `${baseUrl}/resolve/torbox/${chaveApi}/${infoHash}/null/${indiceArquivo}/${arquivoCodificado}`;
 
   const parametros = new URLSearchParams();
   if (tipo) parametros.append('type', tipo);

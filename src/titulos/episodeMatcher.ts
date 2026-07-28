@@ -29,8 +29,16 @@ export class EpisodeMatcher {
   ];
 
   extractEpisodeInfo(filename: string): EpisodeInfo {
+    // Extrai apenas o nome do arquivo (ignora caminho de pasta)
+    // Ex: "Pasta/S02E01-02-03/S02E03.mkv" → "S02E03.mkv"
+    const nomeArquivo = filename.includes('/')
+      ? filename.split('/').pop() || filename
+      : filename.includes('\\')
+        ? filename.split('\\').pop() || filename
+        : filename;
+
     for (const pattern of this.episodePatterns) {
-      const match = filename.match(pattern);
+      const match = nomeArquivo.match(pattern);
       if (match) {
         let season = 1;
         let episode = 0;
@@ -74,7 +82,7 @@ export class EpisodeMatcher {
       }
     }
 
-    const fallbackMatch = filename.match(/\d+/);
+    const fallbackMatch = nomeArquivo.match(/\d+/);
     const fallbackNumber = fallbackMatch ? parseInt(fallbackMatch[0]) : 0;
 
     return {

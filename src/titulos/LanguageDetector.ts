@@ -139,10 +139,10 @@ export class LanguageDetector {
       };
     }
 
-    // Nada bateu → benefício da dúvida (pode ser nome próprio, título curto, etc.)
+    // Nada bateu → REJEITA. Addon é PT-BR — sem indicador, não é nosso conteúdo.
     return {
-      ehPortugues: true,
-      motivo: `Nenhum indicador claro. Desconhecidas: ${desconhecidas.join(', ')}`,
+      ehPortugues: false,
+      motivo: `Nenhum indicador PT-BR. Desconhecidas: ${desconhecidas.join(', ')}`,
       palavrasPt: [],
       palavrasEn: [],
       desconhecidas,

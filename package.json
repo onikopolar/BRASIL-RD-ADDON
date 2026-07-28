@@ -26,6 +26,7 @@
     "cacheable": "^2.3.0",
     "cheerio": "^1.1.2",
     "cors": "^2.8.5",
+    "crawlee": "^3.17.0",
     "dotenv": "^16.3.0",
     "express": "^5.1.0",
     "express-rate-limit": "^8.2.1",

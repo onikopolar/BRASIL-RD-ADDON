@@ -44,6 +44,7 @@ const scraperProviders_js_1 = require("./scraperProviders.js");
 const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
+const tpbScraper_js_1 = require("./tpbScraper.js");
 const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
@@ -70,10 +71,25 @@ class TorrentScraperService {
             const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
             const wpPromise = this.wpScraper.search(query, type).catch(() => []);
-            const [indexerResults, webResults, wpResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise
+            const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const tpbPromise = Promise.all([
+                (0, tpbScraper_js_1.searchTpb)(tpbQueryEn, type),
+                tpbQueryPt !== tpbQueryEn ? (0, tpbScraper_js_1.searchTpb)(tpbQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set();
+                const merged = [...en, ...pt].filter(t => {
+                    if (seen.has(t.infoHash))
+                        return false;
+                    seen.add(t.infoHash);
+                    return true;
+                });
+                return merged.map(r => this.mapTpbResult(r, type)).filter((r) => r !== null);
+            }).catch(() => []);
+            const [indexerResults, webResults, wpResults, tpbResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
@@ -303,6 +319,30 @@ class TorrentScraperService {
             season: season ?? undefined,
             lastUpdated: new Date(r.date || Date.now()),
             confidence: 0.8
+        };
+    }
+    mapTpbResult(r, type) {
+        if (!r.title || !r.magnet)
+            return null;
+        const quality = this.qualityDetector.extractQualityFromFilename(r.title);
+        if (!this.qualityDetector.isValidQuality(quality))
+            return null;
+        const season = this.extractSeasonNumber(r.title);
+        return {
+            title: this.cleanTitle(r.title),
+            magnet: r.magnet,
+            seeders: r.seeders,
+            leechers: r.leechers,
+            size: 'N/A',
+            quality,
+            provider: 'TPB',
+            language: this.extractLanguage(r.title),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            sizeInBytes: 0,
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.7
         };
     }
     mapProviderResult(item, providerName, type) {

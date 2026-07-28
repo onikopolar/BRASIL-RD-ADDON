@@ -16,6 +16,7 @@ import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.
 interface ScrapedTorrent {
   title: string;
   canonicalName?: string; // nome do magnet (dn) via parse-torrent — fonte CANÔNICA
+  magnetInfoHash?: string; // infoHash do magnet (cache — evita re-parse)
   magnet: string;
   seeders: number;
   leechers: number;
@@ -185,49 +186,6 @@ export class CatalogProvider {
       tmdb.imdbTitles
     );
 
-    // 🔒 FALLBACK TORRENTIO BLOQUEADO
-    //    Torrentio só valida nome — não confirma se o infoHash tem
-    //    indicadores reais de PT-BR. Deixar comentado até implementar
-    //    verificação de infoHash via TorboxService.
-    /* if (valid.length === 0) {
-      this.logger.debug(' Scrapers não acharam torrents PT-BR, tentando Torrentio como fallback...', { imdbId });
-      const torrentioResults = await this.torrentioService.search(
-        type as 'movie' | 'series', imdbId!, finalSeason, finalEpisode
-      );
-
-      if (torrentioResults.length > 0) {
-        this.logger.info(` Torrentio fallback: ${torrentioResults.length} torrents PT-BR encontrados`, { imdbId });
-
-        const scrapedFromTorrentio: ScrapedTorrent[] = torrentioResults.map(tr => ({
-          title: tr.title,
-          magnet: tr.magnet,
-          seeders: tr.seeders,
-          leechers: 0,
-          size: tr.size,
-          quality: tr.quality,
-          provider: `Torrentio/${tr.provider}`,
-          language: tr.language,
-          type: tr.type
-        }));
-
-        const torrentioValidation = await this.filterAndValidateTorrents(
-          scrapedFromTorrentio, imdbId, request, finalSeason, finalEpisode,
-          tmdb.imdbTitles
-        );
-
-        if (torrentioValidation.valid.length > 0) {
-          valid.push(...torrentioValidation.valid);
-        } else {
-          this.logger.debug(' Torrentio: resultados rejeitados pelo TitleFilter', { imdbId, count: torrentioResults.length });
-        }
-      } else {
-        this.logger.debug(' Torrentio: nenhum resultado PT-BR', { imdbId });
-      }
-    } */
-    if (valid.length === 0) {
-      this.logger.debug('🔒 Torrentio fallback BLOQUEADO — apenas scrapers BR', { imdbId });
-    }
-
     if (valid.length === 0) {
       this.logger.info('📋 Scraping: todos torrents filtrados — 0 válidos', {
         imdbId, season: finalSeason, episode: finalEpisode,
@@ -281,14 +239,33 @@ export class CatalogProvider {
     );
     torrents.forEach((t, i) => {
       if (dadosMagnets[i]?.nome) t.canonicalName = dadosMagnets[i]!.nome!;
+      if (dadosMagnets[i]?.infoHash) t.magnetInfoHash = dadosMagnets[i]!.infoHash;
     });
 
     // ═══ PASSO 2: Pre-filtro PT-BR usando canonicalName (magnet) ═══
     // Se o magnet tem nome canônico SEM indicadores PT-BR → REJEITADO
     // mesmo que o scraper diga "Dual Áudio" (falso positivo)
-    const ptTorrents = torrents.filter(t =>
-      this.titleFilter.conteudoEmPortugues(t.canonicalName || t.title)
-    );
+    // Passa TMDB titles pra verificarIdioma — palavras do título PT (ex: "liga", "justica") 
+    // batem contra o set do TMDB e são detectadas como PT-BR
+    const tmdbPt = imdbTitles?.portugueseTitle || null;
+    const tmdbEn = imdbTitles?.originalTitle || null;
+    const ptTorrents = torrents.filter(t => {
+      const nome = t.canonicalName || t.title;
+      const resultado = this.titleFilter.verificarIdiomaComTMDB(nome, tmdbPt, tmdbEn);
+      const ehPt = resultado.ehPortugues;
+
+      // Log detalhado so para torrents realmente relevantes (sem "dual" que pega tudo)
+      if (/liga da justi[cç]|ponto de igni[cç]|brasil|dublado(?!.*dual)/.test(nome.toLowerCase())) {
+        this.logger.debug('Detalhe PT-BR', {
+          nome: nome.substring(0, 70),
+          ehPt,
+          motivo: resultado.motivo,
+          palavrasPt: resultado.palavrasPt?.join(','),
+          palavrasEn: resultado.palavrasEn?.join(','),
+        });
+      }
+      return ehPt;
+    });
     const falsoPositivo = torrents.filter(t =>
       !ptTorrents.includes(t) && t.canonicalName
     );
@@ -355,17 +332,23 @@ export class CatalogProvider {
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 
-    await Promise.allSettled(torrents.map(async torrent => {
-      try {
-        const episodeValue = isPackFallback ? null : episode;
-        await this.autoMagnetService.autoAddMagnet(
-          torrent.magnet, torrent.title, imdbId, request.type,
-          torrent.seeders, torrent.quality, torrent.size, season, episodeValue
-        );
-      } catch (error) {
-        this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
-      }
-    }));
+    // Batch de 5 para evitar SQLITE_BUSY com muitas escritas simultâneas
+    const batchSize = 5;
+    for (let i = 0; i < torrents.length; i += batchSize) {
+      const batch = torrents.slice(i, i + batchSize);
+      await Promise.allSettled(batch.map(async torrent => {
+        try {
+          const episodeValue = isPackFallback ? null : episode;
+          await this.autoMagnetService.autoAddMagnet(
+            torrent.magnet, torrent.title, imdbId, request.type,
+            torrent.seeders, torrent.quality, torrent.size, season, episodeValue,
+            torrent.magnetInfoHash
+          );
+        } catch (error) {
+          this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
+        }
+      }));
+    }
   }
 
   private async processTorrentsWithOptimization(
@@ -453,18 +436,27 @@ export class CatalogProvider {
     const curated = this.magnetService.searchMagnets(request);
     if (!curated.length) return [];
     const streams: Stream[] = [];
-    for (const magnet of curated) {
-      const formatted = {
-        title: magnet.title, magnet: magnet.magnet || '',
-        seeders: magnet.seeds || 0, size: magnet.size || 'N/A',
-        quality: magnet.quality || 'HD', language: magnet.language || 'PT-BR'
-      };
-      const streamArrays = await this.streamFormatter.createMultipleQualityStreams(
-        formatted, request, null,
-        request.type === 'series' ? 'series' : 'movie',
-        season ?? magnet.season, episode ?? magnet.episode, undefined, 0
-      );
-      streams.push(...streamArrays);
+    const batchSize = 5;
+    for (let i = 0; i < curated.length; i += batchSize) {
+      const batch = curated.slice(i, i + batchSize);
+      const batchPromises = batch.map(async magnet => {
+        const formatted = {
+          title: magnet.title, magnet: magnet.magnet || '',
+          seeders: magnet.seeds || 0, size: magnet.size || 'N/A',
+          quality: magnet.quality || 'HD', language: magnet.language || 'PT-BR'
+        };
+        try {
+          return await this.streamFormatter.createMultipleQualityStreams(
+            formatted, request, null,
+            request.type === 'series' ? 'series' : 'movie',
+            season ?? magnet.season, episode ?? magnet.episode, undefined, 0
+          );
+        } catch { return []; }
+      });
+      const results = await Promise.allSettled(batchPromises);
+      for (const r of results) {
+        if (r.status === 'fulfilled') streams.push(...r.value);
+      }
     }
     return streams;
   }
@@ -530,8 +522,19 @@ export class CatalogProvider {
     const seenTitles = new Set<string>();
     const unique: ScrapedTorrent[] = [];
     const packRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
+
+    // Passo 1: resolve infoHashes faltantes em paralelo
+    const missing = torrents.filter(t => !t.magnetInfoHash);
+    if (missing.length > 0) {
+      const results = await Promise.all(missing.map(t => analisarMagnet(t.magnet).catch(() => null)));
+      missing.forEach((t, i) => {
+        if (results[i]?.infoHash) t.magnetInfoHash = results[i]!.infoHash;
+      });
+    }
+
+    // Passo 2: dedup síncrono (sem awaits)
     for (const t of torrents) {
-      const hash = (await analisarMagnet(t.magnet))?.infoHash;
+      const hash = t.magnetInfoHash;
       if (hash && seen.has(hash.toLowerCase())) continue;
       if (hash) seen.add(hash.toLowerCase());
       // Para packs, dedup também por título normalizado (ignora SxxExx)

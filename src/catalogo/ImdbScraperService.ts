@@ -6,6 +6,7 @@ const logger = new Logger('TMDBScraper');
 export interface ImdbTitles {
   originalTitle: string;
   portugueseTitle: string | null;
+  portugueseTitleRaw: string | null;  // COM acentos, para busca em sites como TPB
   allTitles: string[];
   foundInPortuguese: boolean;
   year?: number;
@@ -52,7 +53,6 @@ export class ImdbScraperService {
       const cached = ImdbScraperService.globalCache.get(cacheKey);
       
       if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
-        logger.debug('Cache TMDB hit', { imdbId, season });
         return cached.data;
       }
 
@@ -170,6 +170,7 @@ export class ImdbScraperService {
       const result: ImdbTitles = {
         originalTitle: normalizedOriginal,
         portugueseTitle: hasPortuguese ? normalizedPortuguese : null,
+        portugueseTitleRaw: hasPortuguese ? portugueseTitle : null,
         allTitles: uniqueTitles,
         foundInPortuguese: hasPortuguese,
         year,
@@ -296,6 +297,7 @@ export class ImdbScraperService {
     return {
       originalTitle: `Unknown Title (${imdbId})`,
       portugueseTitle: null,
+      portugueseTitleRaw: null,
       allTitles: [],
       foundInPortuguese: false,
       portuguesePriority: false

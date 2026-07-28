@@ -87,12 +87,10 @@ const WP_SITES: WordPressSite[] = [
     timeout: 15000,
   },
   {
-    // DESATIVADO 2026-07-28: Cloudflare retorna 403 em todas as rotas
-    // (homepage + API). Bloqueio por IP/datacenter, sem solução via código.
-    name: 'starckfilmes',
-    baseUrl: 'https://www.starckfilmes.net',
-    priority: 0,
-    timeout: 15000,
+    name: 'Starck Filmes',
+    baseUrl: 'https://www.starckfilmes-v23.com',
+    priority: 7,
+    timeout: 20000,
   },
 ];
 
@@ -129,28 +127,22 @@ export class WordPressScraper {
     const encodedQuery = encodeURIComponent(query);
     const apiUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodedQuery}&per_page=15&_fields=id,title,link,content,date`;
 
-    const config: AxiosRequestConfig = {
+    // DNS bypass + Crawlee-style anti-bot headers
+    const response = await axios.get(apiUrl, {
       timeout: site.timeout,
       httpsAgent: dnsAgent,
       lookup: lookupCustomizado,
       headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
         'Accept': 'application/json',
-        'Accept-Language': 'pt-BR,pt;q=0.9',
+        'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.5',
+        'Cache-Control': 'no-cache',
+        'Sec-Ch-Ua': '"Chromium";v="150"',
+        'Sec-Ch-Ua-Mobile': '?0',
+        'Sec-Ch-Ua-Platform': '"Windows"',
       },
-    };
-
-    // Proxy opcional (ex: Tor + Privoxy) — substitui o DNS agent
-    const proxyUrl = process.env.PROXY_URL;
-    if (proxyUrl && site.requiresProxy) {
-      try {
-        config.httpsAgent = createProxyAgent(proxyUrl);
-      } catch {
-        logger.warn(`Proxy mal configurado: ${proxyUrl}`);
-      }
-    }
-
-    const response = await axios.get(apiUrl, config);
+      validateStatus: (s) => s < 500,
+    });
 
     if (!Array.isArray(response.data)) return [];
 
