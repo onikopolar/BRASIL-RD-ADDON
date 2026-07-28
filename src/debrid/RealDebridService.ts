@@ -17,6 +17,7 @@ interface TorboxCreateTorrentResponse {
     torrent_id?: number;
     id?: number;
     hash?: string;
+    queued_id?: number;
   };
   torrent_id?: number;
   id?: number;
@@ -105,9 +106,21 @@ export class TorboxService {
         'addMagnet'
       );
 
-      const torrentId = response.data?.torrent_id || response.data?.id || response.data?.data?.torrent_id || response.data?.data?.id;
+      const torrentId = response.data?.torrent_id
+        || response.data?.id
+        || response.data?.data?.torrent_id
+        || response.data?.data?.id
+        || response.data?.data?.queued_id;
+
       if (torrentId) {
-        this.logger.info('Magnet adicionado ao Torbox', { torrentId, magnetHash: await this.extrairMagnetHash(magnetLink) });
+        this.logger.info('Magnet adicionado ao Torbox', {
+          torrentId,
+          magnetHash: await this.extrairMagnetHash(magnetLink),
+          campoEncontrado: response.data?.torrent_id ? 'torrent_id' :
+            response.data?.id ? 'id' :
+            response.data?.data?.torrent_id ? 'data.torrent_id' :
+            response.data?.data?.id ? 'data.id' : 'data.queued_id'
+        });
         return String(torrentId);
       }
 

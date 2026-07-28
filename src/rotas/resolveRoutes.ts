@@ -1,3 +1,4 @@
+import path from 'path';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { TorboxService } from '../debrid/RealDebridService.js';
@@ -6,6 +7,23 @@ import { CacheService } from '../debrid/CacheService.js';
 import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
 import { Logger } from '../utils/logger.js';
 import { getStatusMessage } from './statusHelpers.js';
+
+// Envia video MP4 de status diretamente (sem redirect) para o Stremio Web tocar
+function sendStatusVideo(res: any, resolveLogger: Logger, requestId: string, videoUrl: string) {
+  const filename = videoUrl.split('/').pop() || 'downloading_v2.mp4';
+  const filePath = path.join(__dirname, '..', 'videos', filename);
+
+  resolveLogger.info('🎬 ENVIANDO vídeo de status DIRETO (sendFile)', {
+    requestId,
+    filename,
+  });
+
+  res.setHeader('Content-Type', 'video/mp4');
+  res.setHeader('Accept-Ranges', 'bytes');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+  res.sendFile(filePath);
+}
 
 const logger = new Logger('ResolveRoutes');
 const autoMagnetService = new AutoMagnetService();
@@ -247,14 +265,14 @@ export const setupResolveRoutes = (app: any) => {
             streamResponse.description += `\nErro: ${errorMessage}`;
         }
 
-        // Garantir que sempre retornamos um JSON
+        // Garantir que sempre retornamos um redirect para video de status
         if (!streamResponse) {
             // usando baseUrl do topo
             const staticResponseService = new StaticResponseService(baseUrl);
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponse.FAILED_UNEXPECTED, `resolve-fallback-${Date.now()}`, season, episode);
         }
 
-        return res.json({ streams: [streamResponse] });
+        return sendStatusVideo(res, resolveLogger, req._ultraDebugId, streamResponse.url);
     });
 
     // Rota original (magnet em base64)
@@ -325,7 +343,7 @@ export const setupResolveRoutes = (app: any) => {
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponse.FAILED_UNEXPECTED, `resolve-fallback-${Date.now()}`, season, episode);
         }
 
-        return res.json({ streams: [streamResponse] });
+        return sendStatusVideo(res, logger, req._ultraDebugId, streamResponse.url);
     });
 
     app.get('/resolve/:magnet/status', async (req: any, res: any) => {
