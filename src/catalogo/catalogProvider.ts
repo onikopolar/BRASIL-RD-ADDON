@@ -243,18 +243,14 @@ export class CatalogProvider {
     });
 
     // ═══ PASSO 2: Pre-filtro PT-BR usando canonicalName (magnet) ═══
-    // Se o magnet tem nome canônico SEM indicadores PT-BR → REJEITADO
-    // mesmo que o scraper diga "Dual Áudio" (falso positivo)
-    // Passa TMDB titles pra verificarIdioma — palavras do título PT (ex: "liga", "justica") 
-    // batem contra o set do TMDB e são detectadas como PT-BR
-    const tmdbPt = imdbTitles?.portugueseTitle || null;
-    const tmdbEn = imdbTitles?.originalTitle || null;
+    // Verifica APENAS indicadores explicitos de idioma (dual, dublado, grupos BR).
+    // NAO usa TMDB — nomes de magnet e titulos TMDB nao tem relacao direta.
+    // O dn do magnet ja contem o idioma real do torrent.
     const ptTorrents = torrents.filter(t => {
       const nome = t.canonicalName || t.title;
-      const resultado = this.titleFilter.verificarIdiomaComTMDB(nome, tmdbPt, tmdbEn);
+      const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
       const ehPt = resultado.ehPortugues;
 
-      // Log detalhado so para torrents realmente relevantes (sem "dual" que pega tudo)
       if (/liga da justi[cç]|ponto de igni[cç]|brasil|dublado(?!.*dual)/.test(nome.toLowerCase())) {
         this.logger.debug('Detalhe PT-BR', {
           nome: nome.substring(0, 70),

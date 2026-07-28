@@ -230,10 +230,12 @@ export class TorboxService {
       for (const f of files) {
         if (!this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext))) continue;
         let score = 0;
-        // Prioridade 1: Episódio correto (+100B — sempre vence arquivos de outros episódios)
+        // Prioridade 1: Episodio correto (+100B — sempre vence arquivos de outros episodios)
         if (targetSeason !== undefined && targetEpisode !== undefined) {
-          const { temporada, episodio } = this.extrairTemporadaEpisodio(f.name);
-          if (temporada === targetSeason && episodio === targetEpisode) score += 100_000_000_000;
+          const match = this.episodeMatcher.arquivoPertenceAoEpisodio(
+            f.name, targetSeason, targetEpisode
+          );
+          if (match) score += 100_000_000_000;
         }
         // Prioridade 2: Qualidade correta (+50B — vence arquivos de qualidade diferente)
         if (targetQuality && f.name.toLowerCase().includes(targetQuality.toLowerCase())) {
@@ -379,14 +381,6 @@ export class TorboxService {
   private async extrairMagnetHash(link: string): Promise<string> {
     const dados = await analisarMagnet(link);
     return dados ? dados.infoHash : 'unknown';
-  }
-
-  private extrairTemporadaEpisodio(nomeArquivo: string): { temporada?: number; episodio?: number } {
-    const info = this.episodeMatcher.extractEpisodeInfo(nomeArquivo);
-    if (info.season > 0 && info.episode > 0) {
-      return { temporada: info.season, episodio: info.episode };
-    }
-    return {};
   }
 
   private delay(ms: number): Promise<void> {

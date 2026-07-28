@@ -4,11 +4,7 @@ export interface EpisodeInfo {
   rawMatch: string;
 }
 
-export interface RequestEpisodeInfo {
-  season: number;
-  episode: number;
-  isValid: boolean;
-}
+import { isTechnicalWord } from './TechnicalWords.js';
 
 export class EpisodeMatcher {
   private static instance: EpisodeMatcher;
@@ -18,105 +14,184 @@ export class EpisodeMatcher {
     return EpisodeMatcher.instance;
   }
 
-  private readonly episodePatterns: RegExp[] = [
-    /(\d+)x(\d+)/i,
-    /s(\d+)e(\d+)/i,
-    /season[\s\._-]?(\d+)[\s\._-]?episode[\s\._-]?(\d+)/i,
-    /temporada[\s\._-]?(\d+)[\s\._-]?epis[oó]dio[\s\._-]?(\d+)/i,  // NOVO PADRÃO
-    /ep[\s\._-]?(\d+)/i,
-    /(\d+)(?:\s*-\s*|\s*)(\d+)/,
-    /^(\d+)$/
-  ];
+  // ─── CONSTANTES ───
+
+  /** Extensoes de arquivo de video conhecidas */
+  private readonly extensoesVideo: ReadonlySet<string> = new Set([
+    '.mkv', '.mp4', '.avi', '.webm', '.mov', '.wmv', '.flv', '.ts', '.m4v',
+  ]);
+
+  // ═══════════════════════════════════════════
+  // NOVO: pergunta binaria (V2 — generico, sem hacks)
+  // ═══════════════════════════════════════════
+
+  /**
+   * Pergunta binaria: este arquivo (path completo do Torbox) pertence
+   * ao episodio alvo?
+   *
+   * Diferente de extractEpisodeInfo: aqui nao extraimos — respondemos
+   * SIM ou NAO direto. Usa "ultimo SxxExx na string" pra ignorar
+   * prefixo de pasta naturalmente, sem split('/').
+   */
+  arquivoPertenceAoEpisodio(
+    caminhoCompleto: string,
+    temporadaAlvo: number,
+    episodioAlvo: number
+  ): boolean {
+    // 1) So processa arquivos de video
+    if (!this.ehArquivoDeVideo(caminhoCompleto)) return false;
+
+    const normalizado = caminhoCompleto.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+
+    // 2) Metodo primario: ultimo SxxExx no path cru
+    const { temporada, episodio } = this.extrairDoUltimoSxxExx(normalizado);
+    if (temporada > 0 && episodio > 0) {
+      return temporada === temporadaAlvo && episodio === episodioAlvo;
+    }
+
+    // 3) Fallback: NxNN (ex: 5x12)
+    const nx = this.extrairDoUltimoNxNN(normalizado);
+    if (nx.temporada > 0 && nx.episodio > 0) {
+      return nx.temporada === temporadaAlvo && nx.episodio === episodioAlvo;
+    }
+
+    // 4) Fallback via ruido-strip (Season X Episode Y etc)
+    const sinal = this.limparRuido(normalizado);
+    const doSinal = this.extrairDoUltimoSxxExx(sinal);
+    if (doSinal.temporada > 0 && doSinal.episodio > 0) {
+      return doSinal.temporada === temporadaAlvo && doSinal.episodio === episodioAlvo;
+    }
+
+    // 5) Fallback numerico: primeiros 2 numeros do sinal = season, episode
+    const numeros = sinal.match(/\d+/g);
+    if (numeros && numeros.length >= 2) {
+      const s = parseInt(numeros[0]);
+      const e = parseInt(numeros[1]);
+      return s === temporadaAlvo && e === episodioAlvo;
+    }
+
+    return false;
+  }
+
+  // ─── METODOS PRIVADOS (V2) ───
+
+  /** Verifica se o caminho termina com extensao de video conhecida */
+  private ehArquivoDeVideo(caminho: string): boolean {
+    const lower = caminho.toLowerCase();
+    for (const ext of this.extensoesVideo) {
+      if (lower.endsWith(ext)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Encontra TODOS os padroes SxxExx na string e extrai
+   * season/episode do ULTIMO match.
+   *
+   * O ultimo match naturalmente pertence ao nome do arquivo,
+   * nao ao prefixo da pasta — sem precisar de split('/').
+   */
+  private extrairDoUltimoSxxExx(texto: string): { temporada: number; episodio: number } {
+    const matches = texto.match(/s(\d+)[ex](\d+)/gi);
+    if (!matches || matches.length === 0) return { temporada: 0, episodio: 0 };
+
+    const ultimo = matches[matches.length - 1];
+    const parsed = ultimo.match(/s?(\d+)[ex](\d+)/i);
+    if (!parsed) return { temporada: 0, episodio: 0 };
+
+    const temporada = parseInt(parsed[1]);
+    const episodio = parseInt(parsed[2]);
+    return { temporada, episodio };
+  }
+
+  /** Fallback: formato 5x12 */
+  private extrairDoUltimoNxNN(texto: string): { temporada: number; episodio: number } {
+    const matches = texto.match(/(\d+)x(\d+)/gi);
+    if (!matches || matches.length === 0) return { temporada: 0, episodio: 0 };
+
+    const ultimo = matches[matches.length - 1];
+    const parsed = ultimo.match(/(\d+)x(\d+)/i);
+    if (!parsed) return { temporada: 0, episodio: 0 };
+
+    return { temporada: parseInt(parsed[1]), episodio: parseInt(parsed[2]) };
+  }
+
+  /**
+   * Remove ruido tecnico do texto usando isTechnicalWord().
+   * Preserva tokens estruturais (SxxExx, NxNN, numeros puros, palavras
+   * de season/episodio) via regex — sem listas novas, sem duplicacao.
+   */
+  private limparRuido(texto: string): string {
+    const normalizado = texto
+      .replace(/[^\w\s.]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const tokensEspaco = normalizado.split(' ');
+    const todosTokens = new Set<string>();
+    for (const t of tokensEspaco) {
+      todosTokens.add(t);
+      t.split('.').forEach(sub => todosTokens.add(sub));
+    }
+
+    const sinal: string[] = [];
+    for (const token of todosTokens) {
+      // Preserva tokens que indicam estrutura de episodio
+      if (/^s?\d+[ex]\d+$/i.test(token)) { sinal.push(token); continue; }  // S02E03, 5x12
+      if (/^\d{1,2}$/.test(token))      { sinal.push(token); continue; }  // numeros puros (season/ep avulsos)
+      if (/^(season|episode|temporada|epis[oó]dio|cap|capitulo|chapter)$/i.test(token)) { sinal.push(token); continue; }
+      if (/^(s|e|ep|x)\d{1,2}$/i.test(token)) { sinal.push(token); continue; }  // s2, e3, ep4
+
+      // Remove ruido via TECHNICAL_WORDS (fonte unica)
+      if (!isTechnicalWord(token)) {
+        sinal.push(token);
+      }
+    }
+
+    return sinal.join(' ');
+  }
+
+  // ═══════════════════════════════════════════
+  // METODOS LEGADOS (mantidos por compatibilidade)
+  // ═══════════════════════════════════════════
 
   extractEpisodeInfo(filename: string): EpisodeInfo {
-    // Extrai apenas o nome do arquivo (ignora caminho de pasta)
-    // Ex: "Pasta/S02E01-02-03/S02E03.mkv" → "S02E03.mkv"
+    // Extrai apenas o nome do arquivo
     const nomeArquivo = filename.includes('/')
       ? filename.split('/').pop() || filename
       : filename.includes('\\')
         ? filename.split('\\').pop() || filename
         : filename;
 
-    for (const pattern of this.episodePatterns) {
-      const match = nomeArquivo.match(pattern);
-      if (match) {
-        let season = 1;
-        let episode = 0;
+    const normalizado = nomeArquivo.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
 
-        // Determinar qual padrão foi encontrado
-        if (pattern.source === '(\\d+)x(\\d+)') {
-          // Formato 1x01
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else if (pattern.source === 's(\\d+)e(\\d+)') {
-          // Formato S01E01
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else if (pattern.source.includes('season') && pattern.source.includes('episode')) {
-          // Formato Season X Episode Y
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else if (pattern.source.includes('temporada') && pattern.source.includes('epis')) {
-          // Formato Temporada X Episodio Y
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        } else if (pattern.source.includes('ep')) {
-          // Formato Ep XX
-          episode = parseInt(match[1]);
-        } else if (pattern.source === '^(\\d+)$') {
-          // Apenas número
-          episode = parseInt(match[1]);
-        } else if (match.length >= 3) {
-          // Outros padrões com dois grupos
-          season = parseInt(match[1]);
-          episode = parseInt(match[2]);
-        }
+    // Usa os mesmos metodos do V2 (extrairDoUltimoSxxExx, NxNN, limparRuido)
+    const sxe = this.extrairDoUltimoSxxExx(normalizado);
+    if (sxe.temporada > 0 && sxe.episodio > 0) {
+      return { season: sxe.temporada, episode: sxe.episodio, rawMatch: `S${sxe.temporada.toString().padStart(2, '0')}E${sxe.episodio.toString().padStart(2, '0')}` };
+    }
 
-        if (!isNaN(season) && !isNaN(episode) && season > 0 && episode > 0) {
-          return {
-            season,
-            episode,
-            rawMatch: match[0]
-          };
-        }
-      }
+    const nx = this.extrairDoUltimoNxNN(normalizado);
+    if (nx.temporada > 0 && nx.episodio > 0) {
+      return { season: nx.temporada, episode: nx.episodio, rawMatch: `${nx.temporada}x${nx.episodio.toString().padStart(2, '0')}` };
+    }
+
+    const sinal = this.limparRuido(normalizado);
+    const doSinal = this.extrairDoUltimoSxxExx(sinal);
+    if (doSinal.temporada > 0 && doSinal.episodio > 0) {
+      return { season: doSinal.temporada, episode: doSinal.episodio, rawMatch: `S${doSinal.temporada}E${doSinal.episodio}` };
+    }
+
+    const numeros = sinal.match(/\d+/g);
+    if (numeros && numeros.length >= 2) {
+      return { season: parseInt(numeros[0]), episode: parseInt(numeros[1]), rawMatch: numeros.slice(0, 2).join(' ') };
     }
 
     const fallbackMatch = nomeArquivo.match(/\d+/);
     const fallbackNumber = fallbackMatch ? parseInt(fallbackMatch[0]) : 0;
-
-    return {
-      season: 1,
-      episode: fallbackNumber,
-      rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown'
-    };
-  }
-
-  extractEpisodeFromRequest(requestId: string): RequestEpisodeInfo {
-    const defaultResult = { season: 1, episode: 1, isValid: false };
-    
-    if (!requestId || typeof requestId !== 'string') {
-      return defaultResult;
-    }
-
-    const match = requestId.match(/tt\d+:(\d+):(\d+)/);
-    
-    if (!match) {
-      return defaultResult;
-    }
-
-    const season = parseInt(match[1]);
-    const episode = parseInt(match[2]);
-
-    if (isNaN(season) || isNaN(episode) || season < 1 || episode < 1) {
-      return defaultResult;
-    }
-
-    return {
-      season,
-      episode,
-      isValid: true
-    };
+    return { season: 1, episode: fallbackNumber, rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown' };
   }
 
   extractSeasonFromTitle(title: string): number | null {
@@ -139,48 +214,6 @@ export class EpisodeMatcher {
     }
 
     return null;
-  }
-
-  compareEpisodeInfo(a: EpisodeInfo, b: EpisodeInfo): number {
-    if (a.season !== b.season) {
-      return a.season - b.season;
-    }
-    
-    if (a.episode !== b.episode) {
-      return a.episode - b.episode;
-    }
-    
-    return 0;
-  }
-
-  getSeasonCacheKey(imdbId: string, season: number): string {
-    return `season:${imdbId}:${season}`;
-  }
-
-  extractEpisodeFromMultipleSources(
-    requestId: string, 
-    torrentTitle?: string
-  ): RequestEpisodeInfo {
-    // 1. Primeiro tenta do request ID (formato tt:season:episode)
-    const fromRequest = this.extractEpisodeFromRequest(requestId);
-    if (fromRequest.isValid) {
-      return fromRequest;
-    }
-    
-    // 2. Se tem título do torrent, tenta dele
-    if (torrentTitle) {
-      const fromTitle = this.extractEpisodeInfo(torrentTitle);
-      if (fromTitle.season > 0 && fromTitle.episode > 0) {
-        return {
-          season: fromTitle.season,
-          episode: fromTitle.episode,
-          isValid: true
-        };
-      }
-    }
-    
-    // 3. Fallback (mas marca como não válido)
-    return { season: 1, episode: 1, isValid: false };
   }
 
   // ═══════════════════════════════════════════════════════════════

@@ -40,12 +40,7 @@ export class TitleFilter {
 
   /** Versão detalhada: retorna motivo, palavras encontradas PT/EN */
   verificarIdiomaDetalhado(titulo: string) {
-    return this.languageDetector.verificarIdioma(titulo, null, null);
-  }
-
-  /** Versão com TMDB: palavras do título PT batem contra set do TMDB */
-  verificarIdiomaComTMDB(titulo: string, tmdbPt: string | null, tmdbEn: string | null) {
-    return this.languageDetector.verificarIdioma(titulo, tmdbPt, tmdbEn);
+    return this.languageDetector.verificarIdioma(titulo);
   }
 
   /** Extrai ano do título (ex: "Matrix 1999" → 1999) */

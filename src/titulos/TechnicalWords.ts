@@ -204,15 +204,80 @@ export function isBrazilianReleaseGroup(word: string): boolean {
   return BRAZILIAN_RELEASE_GROUPS.includes(lowerWord);
 }
 
-// Função para obter apenas termos de idioma
-export function getLanguageTerms(): string[] {
-  return [
-    'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
-    'legendado', 'legendada', 'legenda', 'pt-br', 'ptbr', 'pt_br',
-    'pt.br', 'pt br', 'portugues', 'português', 'brazilian', 'multi',
-    'portuguese', 'brasileiro', 'latino', 'espanol', 'spanish'
-  ];
-}
+// ─── INDICADORES DE IDIOMA PARA TORRENTS ───
+// Palavras que indicam que um torrent eh brasileiro / PT-BR.
+// Fonte unica para LanguageDetector — sem duplicacao, sem filtro.
+
+export const INDICADORES_BRASIL_TORRENTS = [
+  // Dublagem (apenas variantes PT-BR — 'dub' e 'dubbed' sao universais)
+  'dublado', 'dublada', 'dublagem',
+  // Dual audio
+  'dual', 'dual audio',
+  // Legendas
+  'legendado', 'legendada', 'legenda',
+  // Nacional
+  'nacional',
+  // PT-BR codes
+  'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br',
+  // Portugues
+  'portugues', 'português', 'portuguese',
+  // Brasileiro
+  'brasileiro', 'brazilian', 'brasil',
+  // Audio (aparece em titulos BR tipo "Dual Audio")
+  'áudio', 'audio',
+];
+
+/** Palavras que indicam que um torrent eh internacional / nao-PT-BR */
+export const INDICADORES_INTERNACIONAL_TORRENTS = [
+  // Ingles (EN)
+  'eng', 'english', 'ingles', 'en',
+  // Espanhol (ES)
+  'spa', 'spanish', 'espanol', 'es', 'latino', 'latin', 'castellano', 'esp',
+  // Frances (FR)
+  'fra', 'fre', 'french', 'francais', 'francês', 'fr', 'vff', 'vfi', 'vfq', 'vostfr', 'vf',
+  // Alemao (DE)
+  'ger', 'deu', 'german', 'deutsch', 'alemão', 'de', 'omu',
+  // Italiano (IT)
+  'ita', 'italian', 'italiano', 'it',
+  // Japones (JA)
+  'jpn', 'japanese', 'japonês', 'ja', 'jap',
+  // Chines (ZH)
+  'chi', 'zho', 'chinese', 'chinês', 'zh', 'mandarim', 'mandarin', 'cantones',
+  // Coreano (KO)
+  'kor', 'korean', 'coreano', 'ko',
+  // Russo (RU)
+  'rus', 'russian', 'russo', 'ru',
+  // Arabe (AR)
+  'ara', 'arabic', 'arabe', 'ar',
+  // Hindi (HI)
+  'hin', 'hindi', 'indian', 'hi',
+  // Turco (TR)
+  'tur', 'turkish', 'tr',
+  // Holandes (NL)
+  'dut', 'nld', 'dutch', 'holandes', 'nl',
+  // Polones (PL)
+  'pol', 'polish', 'polones', 'pl',
+  // Sueco (SV)
+  'swe', 'swedish', 'sueco', 'sv',
+  // Dinamarques (DA)
+  'dan', 'danish', 'dinamarques', 'da',
+  // Finlandes (FI)
+  'fin', 'finnish', 'finlandes', 'fi',
+  // Noruegues (NO)
+  'nor', 'norwegian', 'noruegues', 'no',
+  // Tailandes (TH)
+  'tha', 'thai', 'th',
+  // Hungaro (HU)
+  'hun', 'hungarian', 'hungaro', 'hu',
+  // Multi / internacional (generico)
+  'multi', 'multilanguage', 'multiaudio', 'multisub',
+  'tri', 'triaudio', 'trilanguage',
+  'internacional', 'international', 'int',
+  // VO / OV (version original)
+  'vo', 'ov',
+];
+
+// ─── FUNCOES ───
 
 // Função para verificar se título contém indicadores internacionais
 export function containsInternationalIndicators(title: string): {
@@ -311,7 +376,7 @@ export function getTechnicalWordsStats() {
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
-    version: '1.2.0', // getPotentialSequelNumbers para delegar deteccao de sequencia
+    version: '1.3.0', // getPotentialSequelNumbers para delegar deteccao de sequencia
     description: 'Delegacao de deteccao de numeros de sequencia via contexto tecnico'
   };
 }
