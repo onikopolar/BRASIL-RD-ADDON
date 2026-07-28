@@ -238,6 +238,7 @@ export class StreamFormatter {
     descricao: string,
     magnet: string,
     apiKey: string,
+    provider: string,
     qualidade: string,
     tipo?: 'movie' | 'series',
     temporada?: number,
@@ -260,7 +261,6 @@ export class StreamFormatter {
     const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
     const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
     const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
-    const tracker = this.extrairTracker(magnet);
     
     const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
     const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
@@ -271,7 +271,7 @@ export class StreamFormatter {
       seeds,
       tamanho,
       idiomaDaDescricao,
-      tracker,
+      provider,       // FONTE DO SCRAPER (Comando, BLUDV, TorrentIndexer...)
       metadata,
       false // isDirect
     );
@@ -336,6 +336,7 @@ export class StreamFormatter {
       infoHash: stream.infoHash ? 'sim' : 'nao',
       fileIdx: stream.fileIdx,
       tem_url: !!stream.url,
+      fonte: provider,
       formato: 'torrentio_com_titulo_correto_e_url'
     });
 
@@ -432,6 +433,7 @@ export class StreamFormatter {
           descricaoBase,
           torrent.magnet,
           request.apiKey!,
+          torrent.provider || 'Torrent',  // fonte do scraper
           qualidade,
           tipo,
           temporada,
@@ -586,6 +588,7 @@ export class StreamFormatter {
       descricaoBase,
       torrent.magnet,
       request.apiKey!,
+      torrent.provider || 'Torrent',
       qualidade,
       'series',
       temporada,
@@ -616,6 +619,7 @@ export class StreamFormatter {
       descricaoBase,
       torrent.magnet,
       request.apiKey!,
+      torrent.provider || 'Torrent',
       qualidade,
       'movie',
       undefined,

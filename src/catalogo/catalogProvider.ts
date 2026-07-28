@@ -102,8 +102,8 @@ export class CatalogProvider {
     const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
     const cacheKey = this.generateCacheKey(request, season, episode);
 
-    const cached = this.getFromCache(cacheKey);
-    if (cached !== null) return cached;
+    // const cached = this.getFromCache(cacheKey);
+    // if (cached !== null) return cached;
 
     let allStreams: Stream[] = [];
 
@@ -117,7 +117,7 @@ export class CatalogProvider {
     if (uniqueStreams.length === 0) {
       const shouldScrape = await this.shouldAttemptScraping(request);
       if (!shouldScrape) {
-        this.saveToCache(cacheKey, []);
+        // this.saveToCache(cacheKey, []);
         return [];
       }
 
@@ -127,14 +127,14 @@ export class CatalogProvider {
         const scraped = await this.performIntelligentScraping(request, season, episode);
         const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
         scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
-        this.saveToCache(cacheKey, scrapedUnique);
+        // this.saveToCache(cacheKey, scrapedUnique);
         return scrapedUnique;
       } finally {
         this.markScrapingEnd(request);
       }
     }
 
-    this.saveToCache(cacheKey, uniqueStreams);
+    // this.saveToCache(cacheKey, uniqueStreams);
     return uniqueStreams;
   }
 
