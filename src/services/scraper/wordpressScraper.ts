@@ -35,6 +35,21 @@ class DnsAgent extends https.Agent {
 
 const dnsAgent = new DnsAgent({ keepAlive: true });
 
+export const agenteHttps = dnsAgent;
+
+// Funcao lookup customizada: usa dns.resolve4 para bypassar DNS do sistema
+// Axios/Node usa dns.lookup() (DNS do SO) antes de delegar ao httpsAgent.
+// Com lookup customizado, forçamos dns.resolve4 (Google DNS via setServers).
+function criarLookup() {
+  return (hostname: string, _opts: any, cb: any) => {
+    dns.resolve4(hostname, (err, addresses) => {
+      if (err) return cb(err);
+      cb(null, addresses[0], 4);
+    });
+  };
+}
+export const lookupCustomizado = criarLookup();
+
 interface WordPressSite {
   name: string;
   baseUrl: string;
@@ -72,9 +87,11 @@ const WP_SITES: WordPressSite[] = [
     timeout: 15000,
   },
   {
+    // DESATIVADO 2026-07-28: Cloudflare retorna 403 em todas as rotas
+    // (homepage + API). Bloqueio por IP/datacenter, sem solução via código.
     name: 'starckfilmes',
     baseUrl: 'https://www.starckfilmes.net',
-    priority: 12,
+    priority: 0,
     timeout: 15000,
   },
 ];
@@ -115,6 +132,7 @@ export class WordPressScraper {
     const config: AxiosRequestConfig = {
       timeout: site.timeout,
       httpsAgent: dnsAgent,
+      lookup: lookupCustomizado,
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
         'Accept': 'application/json',

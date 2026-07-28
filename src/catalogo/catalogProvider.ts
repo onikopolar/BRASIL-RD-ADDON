@@ -274,6 +274,12 @@ export class CatalogProvider {
     results.forEach((result, i) => {
       const torrent = ptTorrents[i];
       if (result.status === 'fulfilled' && result.value.matches) {
+        this.logger.debug('Torrent validado — auditoria de titulo', {
+          imdbId,
+          tituloOficial: imdbTitles?.portugueseTitle || imdbTitles?.originalTitle || 'N/A',
+          tituloTorrent: torrent.title.substring(0, 80),
+          infoHash: dadosMagnets[i]?.infoHash?.substring(0, 12) || 'N/A'
+        });
         valid.push(torrent);
       } else if (season && completePackRe.test(torrent.title)) {
         valid.push(torrent);

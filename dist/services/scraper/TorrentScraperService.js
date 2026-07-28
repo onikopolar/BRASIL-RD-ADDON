@@ -150,6 +150,8 @@ class TorrentScraperService {
                 params.year = targetYear.toString();
             const response = await axios_1.default.get(`${scraperProviders_js_1.torrentIndexerConfig.baseUrl}/search`, {
                 timeout: scraperProviders_js_1.torrentIndexerConfig.timeout,
+                httpsAgent: wordpressScraper_js_1.agenteHttps,
+                lookup: wordpressScraper_js_1.lookupCustomizado,
                 headers: { 'User-Agent': 'Brasil-RD-Addon/6.1.1', 'Accept': 'application/json' },
                 params
             });

@@ -5,7 +5,7 @@ import { TorrentResult } from './torrentTypes.js';
 import { torrentIndexerConfig, scraperProviders } from './scraperProviders.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
-import { WordPressScraper } from './wordpressScraper.js';
+import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
 
 const logger = new Logger('TorrentScraperService');
@@ -143,6 +143,8 @@ export class TorrentScraperService {
 
             const response = await axios.get(`${torrentIndexerConfig.baseUrl}/search`, {
                 timeout: torrentIndexerConfig.timeout,
+                httpsAgent: agenteHttps,
+                lookup: lookupCustomizado,
                 headers: { 'User-Agent': 'Brasil-RD-Addon/6.1.1', 'Accept': 'application/json' },
                 params
             });
