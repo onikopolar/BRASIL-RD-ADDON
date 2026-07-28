@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.File = exports.Torrent = exports.sequelize = void 0;
+exports.Torrent = exports.sequelize = void 0;
 const sequelize_1 = require("sequelize");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
@@ -16,51 +16,31 @@ if (!DATABASE_URL && process.env.NODE_ENV === 'production') {
 if (process.env.NODE_ENV !== 'production') {
     console.log('Database URL detectada:', DATABASE_URL ? 'Configurada' : 'Nao configurada');
     if (DATABASE_URL) {
-        const maskedUrl = DATABASE_URL.replace(/:[^:@]+@/, ':****@');
-        console.log('Database URL (mascarada):', maskedUrl);
+        console.log('Database URL (mascarada):', DATABASE_URL.replace(/:[^:@]+@/, ':****@'));
     }
 }
 const isRailway = DATABASE_URL?.includes('railway.app') || DATABASE_URL?.includes('railway.internal');
-const isRailwayInternal = DATABASE_URL?.includes('railway.internal');
-const isRailwayExternal = DATABASE_URL?.includes('railway.app') && !isRailwayInternal;
+const isRailwayExternal = DATABASE_URL?.includes('railway.app') && !DATABASE_URL?.includes('railway.internal');
 const sequelizeConfig = {
     logging: false,
     dialect: 'postgres',
     pool: {
-        max: 15,
-        min: 2,
+        max: 5,
+        min: 1,
         acquire: 30000,
         idle: 10000,
         evict: 10000
     },
-    retry: {
-        max: 3,
-        timeout: 10000
-    }
+    retry: { max: 3, timeout: 10000 }
 };
 if (DATABASE_URL?.includes('postgres')) {
-    sequelizeConfig.dialect = 'postgres';
     sequelizeConfig.dialectOptions = {
-        ssl: isRailwayExternal ? {
-            require: true,
-            rejectUnauthorized: false
-        } : false
+        ssl: isRailwayExternal ? { require: true, rejectUnauthorized: false } : false
     };
-    if (isRailwayInternal) {
-        sequelizeConfig.dialectOptions = {
-            ...sequelizeConfig.dialectOptions,
-            connectTimeout: 10000,
-            statement_timeout: 30000,
-            idle_in_transaction_session_timeout: 30000
-        };
-    }
 }
 const sequelize = DATABASE_URL
     ? new sequelize_1.Sequelize(DATABASE_URL, sequelizeConfig)
-    : new sequelize_1.Sequelize('sqlite::memory:', {
-        logging: false,
-        pool: { max: 30, min: 5, idle: 20 * 60 * 1000 }
-    });
+    : new sequelize_1.Sequelize('sqlite::memory:', { logging: false });
 exports.sequelize = sequelize;
 if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
     sequelize.authenticate()
@@ -70,19 +50,19 @@ if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
 class Torrent extends sequelize_1.Model {
 }
 exports.Torrent = Torrent;
-class File extends sequelize_1.Model {
-}
-exports.File = File;
 Torrent.init({
     infoHash: { type: sequelize_1.DataTypes.STRING(64), primaryKey: true },
-    provider: { type: sequelize_1.DataTypes.STRING(100) },
+    provider: { type: sequelize_1.DataTypes.STRING(50) },
     title: { type: sequelize_1.DataTypes.TEXT },
     size: { type: sequelize_1.DataTypes.BIGINT },
-    type: { type: sequelize_1.DataTypes.STRING(20) },
-    uploadDate: { type: sequelize_1.DataTypes.DATE },
+    type: { type: sequelize_1.DataTypes.STRING(10) },
+    imdbId: { type: sequelize_1.DataTypes.STRING(32) },
+    imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
     seeders: { type: sequelize_1.DataTypes.INTEGER },
     idioma: { type: sequelize_1.DataTypes.STRING(50) },
-    qualidade: { type: sequelize_1.DataTypes.STRING(20) }
+    qualidade: { type: sequelize_1.DataTypes.STRING(10) },
+    uploadDate: { type: sequelize_1.DataTypes.DATE },
+    lastSeen: { type: sequelize_1.DataTypes.DATE }
 }, {
     sequelize,
     modelName: 'Torrent',
@@ -91,32 +71,9 @@ Torrent.init({
     indexes: [
         { fields: ['seeders'] },
         { fields: ['type'] },
-        { fields: ['idioma'] }
+        { fields: ['idioma'] },
+        { fields: ['provider'] },
+        { fields: ['uploadDate'] },
+        { fields: ['imdbId', 'type'] }
     ]
 });
-File.init({
-    id: { type: sequelize_1.DataTypes.BIGINT, autoIncrement: true, primaryKey: true },
-    infoHash: {
-        type: sequelize_1.DataTypes.STRING(64),
-        allowNull: false,
-        references: { model: Torrent, key: 'infoHash' },
-        onDelete: 'CASCADE'
-    },
-    fileIndex: { type: sequelize_1.DataTypes.INTEGER },
-    title: { type: sequelize_1.DataTypes.STRING(256), allowNull: false },
-    size: { type: sequelize_1.DataTypes.BIGINT },
-    imdbId: { type: sequelize_1.DataTypes.STRING(32) },
-    imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
-    imdbEpisode: { type: sequelize_1.DataTypes.INTEGER, allowNull: true }
-}, {
-    sequelize,
-    modelName: 'File',
-    tableName: 'files',
-    timestamps: false,
-    indexes: [
-        { fields: ['infoHash'] },
-        { fields: ['imdbId', 'imdbSeason', 'imdbEpisode'] }
-    ]
-});
-Torrent.hasMany(File, { foreignKey: 'infoHash', constraints: false });
-File.belongsTo(Torrent, { foreignKey: 'infoHash', constraints: false });

@@ -5,7 +5,6 @@ import { Stream } from '../types/index.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { Logger } from '../utils/logger.js';
 import { MetadataExtractor } from '../titulos/MetadataExtractor.js';
-import { getImdbIdMovieEntries, getImdbIdSeriesEntries } from '../lib/repository.js';
 import { TorrentScraperService } from '../services/scraper/TorrentScraperService.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { TitleFilter } from '../titulos/titleFilter.js';

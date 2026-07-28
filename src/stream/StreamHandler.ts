@@ -5,7 +5,7 @@ import { CacheService } from '../debrid/CacheService.js';
 import { Logger } from '../utils/logger.js';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index.js';
 import { Op } from 'sequelize';
-import { Torrent, File } from '../database/models.js';
+import { Torrent } from '../database/models.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
 import { TitleFilter } from '../titulos/titleFilter.js';
@@ -269,43 +269,38 @@ export class StreamHandler {
       const imdbId = this.extractImdbIdFromRequest(request);
       if (!imdbId) return { success: false, streams: [], source: 'database', processingTime: Date.now() - startTime };
 
-      let fileEntries: any[] = [];
-      if (request.type === 'movie') {
-        fileEntries = await this.getImdbIdMovieEntries(imdbId);
-      } else if (request.type === 'series') {
+      // Query direta no Torrent (sem tabela File)
+      const where: any = { imdbId, seeders: { [Op.gte]: 5 } };
+      if (request.type === 'series') {
         const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
-        if (seasonMatch) {
-          const season = parseInt(seasonMatch[1]);
-          const episode = parseInt(seasonMatch[2]);
-          fileEntries = await this.getImdbIdSeriesEntries(imdbId, season, episode);
-        }
+        if (seasonMatch) where.imdbSeason = parseInt(seasonMatch[1]);
       }
 
-      // Validação paralela: verifica todos os títulos de uma vez (não sequencial)
-      const validatedEntries = await Promise.all(
-        fileEntries.map(async (fileEntry) => {
-          const torrent = fileEntry.torrent;
-          if (!torrent?.infoHash) return null;
+      const torrents = await Torrent.findAll({
+        where,
+        limit: request.type === 'movie' ? 20 : 30,
+        order: [['seeders', 'DESC']]
+      });
+
+      const validatedTorrents = await Promise.all(
+        torrents.map(async (t) => {
           const titleValid = await this.validateDatabaseEntry(
-            torrent.title, imdbId, request.type,
-            fileEntry.imdbSeason, fileEntry.imdbEpisode
+            t.title, imdbId, request.type, t.imdbSeason
           );
           if (!titleValid) {
-            this.logger.warn('Entrada do banco rejeitada por título', {
-              imdbId,
-              dbTitle: torrent.title?.substring(0, 60),
-              dbImdbId: fileEntry.imdbId
+            this.logger.warn('Entrada do banco rejeitada por titulo', {
+              imdbId, dbTitle: t.title?.substring(0, 60)
             });
             return null;
           }
-          return fileEntry;
+          return t;
         })
       );
 
       const streams: Stream[] = [];
-      for (const fileEntry of validatedEntries) {
-        if (!fileEntry) continue;
-        const stream = await this.convertDatabaseEntryToStream(fileEntry, fileEntry.torrent, request);
+      for (const t of validatedTorrents) {
+        if (!t) continue;
+        const stream = await this.convertTorrentToStream(t, request);
         if (stream) streams.push(stream);
       }
 
@@ -319,53 +314,19 @@ export class StreamHandler {
     }
   }
 
-  private async getImdbIdMovieEntries(imdbId: string) {
-    return File.findAll({
-      where: { imdbId: { [Op.eq]: imdbId } },
-      include: [{ model: Torrent, required: true, where: { seeders: { [Op.gte]: 5 } } }],
-      limit: 20,
-      order: [[Torrent, 'seeders', 'DESC']]
-    });
-  }
-
-  private async getImdbIdSeriesEntries(imdbId: string, season: number, episode: number) {
-    // Query única: busca episódio específico + packs (episode null) em um só round-trip
-    const entries = await File.findAll({
-      where: {
-        imdbId: { [Op.eq]: imdbId },
-        imdbSeason: { [Op.eq]: season },
-        [Op.or]: [
-          { imdbEpisode: { [Op.eq]: episode } },
-          { imdbEpisode: { [Op.is]: null } }
-        ]
-      },
-      include: [{ model: Torrent, required: true, where: { seeders: { [Op.gte]: 5 } } }],
-      limit: 30,
-      order: [[Torrent, 'seeders', 'DESC']]
-    });
-
-    // Prioriza episódios específicos primeiro, packs depois
-    const specific = entries.filter(e => e.imdbEpisode === episode);
-    const packs = entries.filter(e => e.imdbEpisode === null);
-    return specific.length > 0 ? specific : packs;
-  }
-
   /**
-   * Validação de segurança: verifica se o título do torrent realmente
-   * pertence ao IMDB solicitado. Evita que registros com IMDB errado
-   * (ex: Korra salva como Aang) sejam servidos do banco.
+   * Validacao de seguranca: verifica se o titulo do torrent realmente
+   * pertence ao IMDB solicitado.
    */
   private async validateDatabaseEntry(
     torrentTitle: string,
     imdbId: string,
     type: string,
-    season?: number,
-    episode?: number | null
+    season?: number
   ): Promise<boolean> {
     try {
-      const targetEpisode = episode === null ? undefined : episode;
       const match = await this.titleFilter.titulosCombinam(
-        torrentTitle, imdbId, season, targetEpisode
+        torrentTitle, imdbId, season, undefined
       );
       return match.matches;
     } catch {
@@ -373,13 +334,12 @@ export class StreamHandler {
     }
   }
 
-  private async convertDatabaseEntryToStream(fileEntry: any, torrent: any, request: StreamRequest): Promise<Stream | null> {
+  private async convertTorrentToStream(torrent: any, request: StreamRequest): Promise<Stream | null> {
     try {
       const magnetHash = torrent.infoHash;
-      const quality = this.qualityDetector.extractQualityFromFilename(torrent.title);
+      const quality = torrent.qualidade || this.qualityDetector.extractQualityFromFilename(torrent.title);
       const magnetLink = `magnet:?xt=urn:btih:${magnetHash}`;
 
-      let titleSuffix = '';
       let season: number | undefined;
       let episode: number | undefined;
 
@@ -388,30 +348,12 @@ export class StreamHandler {
         if (match) {
           season = parseInt(match[1]);
           episode = parseInt(match[2]);
-          titleSuffix = ` S${season.toString().padStart(2, '0')}E${episode.toString().padStart(2, '0')}`;
         }
-      }
-
-      const filename = fileEntry.title || 'video.mkv';
-      const fileIndex = fileEntry.fileIndex || 0;
-
-      // Para packs completos, o fileIndex pode ser ajustado pela ordem do episodio
-      let finalFileIndex = fileIndex;
-      if (fileEntry.imdbEpisode === null && episode !== undefined && season !== undefined) {
-        // Metodo conservador: assume que os episodios estao em ordem numerica no pack
-        finalFileIndex = episode - 1;
-        this.logger.warn('Ajuste de fileIndex para pack completo', {
-          infoHash: magnetHash,
-          season,
-          episode,
-          originalIndex: fileIndex,
-          adjustedIndex: finalFileIndex
-        });
       }
 
       const stream: Stream = {
         title: torrent.title,
-        name: `Brasil RD (${quality})${titleSuffix}`,
+        name: `Brasil RD (${quality})`,
         description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'}`,
         sources: [magnetLink],
         behaviorHints: { notWebReady: false, bingeGroup: `br-db-${request.id}` },
@@ -419,19 +361,14 @@ export class StreamHandler {
         infoHash: magnetHash,
         magnet: magnetLink,
         url: await gerarUrlResolve(
-          magnetLink,
-          request.apiKey!,
-          filename,
-          finalFileIndex,
-          request.type,
-          season,
-          episode
+          magnetLink, request.apiKey!, 'video.mkv', 0,
+          request.type, season, episode
         )
       };
 
       return stream;
     } catch (error) {
-      this.logger.error('Erro ao converter entrada do banco para stream', {
+      this.logger.error('Erro ao converter torrent para stream', {
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
       return null;

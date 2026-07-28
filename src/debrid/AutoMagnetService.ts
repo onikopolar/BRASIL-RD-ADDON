@@ -1,4 +1,4 @@
-import { getTorrent, createTorrent, createFile, File } from '../lib/repository.js';
+import { getTorrent, createTorrent, upsertTorrent } from '../lib/repository.js';
 import { TorboxService } from './RealDebridService.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { Logger } from '../utils/logger.js';
@@ -442,41 +442,15 @@ export class AutoMagnetService {
 
       // Log suprimido: muito verboso em producao
 
-      if (magnetData.category === 'serie' && magnetData.imdbSeason !== undefined) {
-        let existingEntry;
-        
-        if (magnetData.imdbEpisode === null) {
-          existingEntry = await File.findOne({
-            where: {
-              infoHash: magnetHash,
-              imdbId: magnetData.imdbId,
-              imdbSeason: magnetData.imdbSeason,
-              imdbEpisode: null
-            }
-          });
-        } else {
-          existingEntry = await File.findOne({
-            where: {
-              infoHash: magnetHash,
-              imdbId: magnetData.imdbId,
-              imdbSeason: magnetData.imdbSeason,
-              imdbEpisode: magnetData.imdbEpisode
-            }
-          });
-        }
-
-        if (existingEntry) {
-          return false;
-        }
-      } else {
-        const existingTorrent = await getTorrent(magnetHash);
-        if (existingTorrent) {
-          logger.debug('Magnet já existe', {
-            title: magnetData.title.substring(0, 60),
-            imdbId: magnetData.imdbId
-          });
-          return false;
-        }
+      // Verifica se ja existe no banco
+      const existingTorrent = await getTorrent(magnetHash);
+      if (existingTorrent) {
+        // Atualiza seeders e lastSeen
+        await upsertTorrent(magnetHash, {
+          seeders: magnetData.seeds || 0,
+          lastSeen: new Date()
+        });
+        return false;
       }
 
       if (!titleMatchResult.matches) {
@@ -488,7 +462,6 @@ export class AutoMagnetService {
         return false;
       }
 
-      const existingTorrent = await getTorrent(magnetHash);
       if (!existingTorrent) {
         await createTorrent({
           infoHash: magnetHash,
@@ -496,10 +469,13 @@ export class AutoMagnetService {
           title: magnetData.title,
           size: this.parseSizeToBytes(magnetData.size) || 0,
           type: magnetData.category === 'serie' ? 'series' : 'movie',
-          uploadDate: new Date(),
+          imdbId: magnetData.imdbId || null,
+          imdbSeason: magnetData.imdbSeason || null,
           seeders: magnetData.seeds || 0,
           idioma: magnetData.language,
-          qualidade: magnetData.quality
+          qualidade: magnetData.quality,
+          uploadDate: new Date(),
+          lastSeen: new Date()
         });
       }
 
