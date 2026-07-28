@@ -7,7 +7,7 @@ export const manifest = {
     id: 'org.brasilrd.addon',
 
     // Versionamento Semântico: 1.0.1 (minor update para compatibilidade)
-    version: '1.0.1',
+    version: '1.3.0',
     
     // Informações básicas
     name: 'Brasil RD',

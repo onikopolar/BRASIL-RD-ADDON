@@ -493,17 +493,13 @@ export class AutoMagnetService {
         await createTorrent({
           infoHash: magnetHash,
           provider: 'brasil-rd',
-          magnetLink: magnetData.magnet,
           title: magnetData.title,
           size: this.parseSizeToBytes(magnetData.size) || 0,
           type: magnetData.category === 'serie' ? 'series' : 'movie',
           uploadDate: new Date(),
           seeders: magnetData.seeds || 0,
-          languages: magnetData.language,
-          resolution: magnetData.quality,
-          metadata: allQualities.length > 1 ? JSON.stringify({ availableQualities: allQualities }) : null,
-          createdAt: new Date(),
-          updatedAt: new Date()
+          idioma: magnetData.language,
+          qualidade: magnetData.quality
         });
       }
 

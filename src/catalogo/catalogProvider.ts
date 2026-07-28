@@ -336,7 +336,7 @@ export class CatalogProvider {
         try {
           const episodeValue = isPackFallback ? null : episode;
           await this.autoMagnetService.autoAddMagnet(
-            torrent.magnet, torrent.title, imdbId, request.type,
+            torrent.magnet, torrent.canonicalName || torrent.title, imdbId, request.type,
             torrent.seeders, torrent.quality, torrent.size, season, episodeValue,
             torrent.magnetInfoHash
           );
