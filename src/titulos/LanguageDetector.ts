@@ -58,7 +58,7 @@ export class LanguageDetector {
   verificarIdioma(
     tituloTorrent: string,
     tituloPt: string | null,
-    tituloEn: string,
+    tituloEn: string | null,
   ): {
     ehPortugues: boolean;
     motivo: string;
@@ -76,7 +76,7 @@ export class LanguageDetector {
 
     const palavrasTorrent = normalizar(tituloTorrent);
     const setPt = new Set(tituloPt ? normalizar(tituloPt) : []);
-    const setEn = new Set(normalizar(tituloEn));
+    const setEn = new Set(tituloEn ? normalizar(tituloEn) : []);
 
     // ═══ LOOP ÚNICO ═══
     const encontradasPt: string[] = [];
@@ -180,8 +180,8 @@ export class LanguageDetector {
       }
     }
 
-    // Fallback: sem TMDB, compara consigo mesmo (heurística)
-    const resultado = this.verificarIdioma(tituloTorrent, null, tituloTorrent);
+    // Fallback: sem TMDB, verifica só indicadores explícitos (benefício da dúvida = PT)
+    const resultado = this.verificarIdioma(tituloTorrent, null, null);
     return resultado.ehPortugues;
   }
 
@@ -190,7 +190,9 @@ export class LanguageDetector {
    * Mantida para compatibilidade com callers que não podem ser async.
    */
   isPortugueseContent(tituloTorrent: string): boolean {
-    const resultado = this.verificarIdioma(tituloTorrent, null, tituloTorrent);
+    // Modo rápido: sem TMDB, verifica APENAS indicadores explícitos (Dual, Dublado, grupos BR)
+    // NÃO faz autocomparação (bug: título PT seria rejeitado como EN)
+    const resultado = this.verificarIdioma(tituloTorrent, null, null);
     return resultado.ehPortugues;
   }
 

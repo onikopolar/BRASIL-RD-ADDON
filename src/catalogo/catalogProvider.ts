@@ -15,6 +15,7 @@ import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.
 
 interface ScrapedTorrent {
   title: string;
+  canonicalName?: string; // nome do magnet (dn) via parse-torrent — fonte CANÔNICA
   magnet: string;
   seeders: number;
   leechers: number;
@@ -102,8 +103,8 @@ export class CatalogProvider {
     const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
     const cacheKey = this.generateCacheKey(request, season, episode);
 
-    // const cached = this.getFromCache(cacheKey);
-    // if (cached !== null) return cached;
+    const cached = this.getFromCache(cacheKey);
+    if (cached !== null) return cached;
 
     let allStreams: Stream[] = [];
 
@@ -117,7 +118,8 @@ export class CatalogProvider {
     if (uniqueStreams.length === 0) {
       const shouldScrape = await this.shouldAttemptScraping(request);
       if (!shouldScrape) {
-        // this.saveToCache(cacheKey, []);
+        this.saveToCache(cacheKey, []);
+        this.logger.info('📋 Catálogo: 0 streams (scraping bloqueado)', { imdbId: request.imdbId || request.id, season, episode });
         return [];
       }
 
@@ -127,14 +129,24 @@ export class CatalogProvider {
         const scraped = await this.performIntelligentScraping(request, season, episode);
         const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
         scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
-        // this.saveToCache(cacheKey, scrapedUnique);
+        this.logger.info('📋 Catálogo (scraped)', {
+          imdbId: request.imdbId || request.id, season, episode,
+          total: scrapedUnique.length,
+          qualidades: [...new Set(scrapedUnique.map(s => this.extractStreamQuality(s)))],
+        });
+        this.saveToCache(cacheKey, scrapedUnique);
         return scrapedUnique;
       } finally {
         this.markScrapingEnd(request);
       }
     }
 
-    // this.saveToCache(cacheKey, uniqueStreams);
+    this.logger.info('📋 Catálogo (cached)', {
+      imdbId: request.imdbId || request.id, season, episode,
+      total: uniqueStreams.length,
+      qualidades: [...new Set(uniqueStreams.map(s => this.extractStreamQuality(s)))],
+    });
+    this.saveToCache(cacheKey, uniqueStreams);
     return uniqueStreams;
   }
 
@@ -162,7 +174,10 @@ export class CatalogProvider {
     const torrentResults = await this.torrentScraper.searchTorrents(
       searchQuery, type, finalSeason, seasonYear ?? undefined, imdbId || undefined
     );
-    if (!torrentResults.length) return [];
+    if (!torrentResults.length) {
+      this.logger.info('📋 Scraping: 0 torrents encontrados nos scrapers', { searchQuery: searchQuery.substring(0, 60), imdbId });
+      return [];
+    }
 
     const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
     const { valid, invalid } = await this.filterAndValidateTorrents(
@@ -213,7 +228,13 @@ export class CatalogProvider {
       this.logger.debug('🔒 Torrentio fallback BLOQUEADO — apenas scrapers BR', { imdbId });
     }
 
-    if (valid.length === 0) return [];
+    if (valid.length === 0) {
+      this.logger.info('📋 Scraping: todos torrents filtrados — 0 válidos', {
+        imdbId, season: finalSeason, episode: finalEpisode,
+        totalScraped: uniqueTorrents.length, totalInvalid: invalid.length
+      });
+      return [];
+    }
 
     // Fallback para packs
     const hasExactEpisode = finalEpisode !== undefined && valid.some(t =>
@@ -238,6 +259,11 @@ export class CatalogProvider {
     return match ? parseInt(match[1]) : null;
   }
 
+  private extrairEpisodioDoTitulo(title: string): string | null {
+    const m = title.match(/S(\d+)\s*[Ee](\d+)/i);
+    return m ? `S${m[1]}E${m[2]}` : null;
+  }
+
   private async filterAndValidateTorrents(
     torrents: ScrapedTorrent[],
     imdbId: string | null,
@@ -248,40 +274,67 @@ export class CatalogProvider {
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
-    // Pre-filtro rapido: descarta torrents obviamente nao-PT (sem TMDB)
-    const ptTorrents = torrents.filter(t => this.titleFilter.conteudoEmPortugues(t.title));
-
-    // Extrai nomes canonicos dos magnets via parse-torrent (parametro "dn" do magnet)
-    // O nome canonico eh mais confiavel que titulo de scraper para o TitleFilter
+    // ═══ PASSO 1: Parse de TODOS os magnets (via parse-torrent) ═══
+    // Injeta canonicalName ANTES de qualquer filtro — o magnet é a fonte da verdade
     const dadosMagnets = await Promise.all(
-      ptTorrents.map(t => analisarMagnet(t.magnet).catch(() => null))
+      torrents.map(t => analisarMagnet(t.magnet).catch(() => null))
     );
+    torrents.forEach((t, i) => {
+      if (dadosMagnets[i]?.nome) t.canonicalName = dadosMagnets[i]!.nome!;
+    });
 
-    // Paralelo: valida titulo (similaridade) de todos os torrents PT
-    // Usa nome canonico do magnet quando disponivel, senao usa titulo do scraper
+    // ═══ PASSO 2: Pre-filtro PT-BR usando canonicalName (magnet) ═══
+    // Se o magnet tem nome canônico SEM indicadores PT-BR → REJEITADO
+    // mesmo que o scraper diga "Dual Áudio" (falso positivo)
+    const ptTorrents = torrents.filter(t =>
+      this.titleFilter.conteudoEmPortugues(t.canonicalName || t.title)
+    );
+    const falsoPositivo = torrents.filter(t =>
+      !ptTorrents.includes(t) && t.canonicalName
+    );
+    if (falsoPositivo.length > 0) {
+      this.logger.info('🧹 Magnet revelou falso-positivo PT-BR', {
+        imdbId,
+        count: falsoPositivo.length,
+        nomes: falsoPositivo.map(t => t.canonicalName?.substring(0, 60)),
+      });
+    }
+
+    // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
+    // Usa canonicalName do magnet quando disponível, scraper title como fallback
     const results = await Promise.allSettled(
-      ptTorrents.map((t, i) => {
-        const nomeCanonico = dadosMagnets[i]?.nome;
-        const tituloParaValidar = nomeCanonico || t.title;
+      ptTorrents.map((t) => {
+        const tituloParaValidar = t.canonicalName || t.title;
         return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
       })
     );
 
     const valid: ScrapedTorrent[] = [];
-    const invalid: ScrapedTorrent[] = torrents.filter(t => !ptTorrents.includes(t)); // não-PT já são inválidos
+    const invalid: ScrapedTorrent[] = torrents.filter(t => !ptTorrents.includes(t));
     const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
 
     results.forEach((result, i) => {
       const torrent = ptTorrents[i];
       if (result.status === 'fulfilled' && result.value.matches) {
-        this.logger.debug('Torrent validado — auditoria de titulo', {
+        const epExtraido = this.extrairEpisodioDoTitulo(torrent.title);
+        this.logger.info('🎯 EPISÓDIO ACEITO', {
           imdbId,
-          tituloOficial: imdbTitles?.portugueseTitle || imdbTitles?.originalTitle || 'N/A',
-          tituloTorrent: torrent.title.substring(0, 80),
-          infoHash: dadosMagnets[i]?.infoHash?.substring(0, 12) || 'N/A'
+          alvo: `S${season || '?'}E${episode || '?'}`,
+          torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+          canonical: !!torrent.canonicalName,
+          episodioTorrent: epExtraido || 'N/A',
+          provider: torrent.provider,
+          infoHash: dadosMagnets[torrents.indexOf(torrent)]?.infoHash?.substring(0, 12) || 'N/A'
         });
         valid.push(torrent);
       } else if (season && completePackRe.test(torrent.title)) {
+        this.logger.info('📦 PACK COMPLETO aceito (bypass episódio)', {
+          imdbId,
+          alvo: `S${season}E${episode || '?'}`,
+          torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+          canonical: !!torrent.canonicalName,
+          provider: torrent.provider,
+        });
         valid.push(torrent);
       } else {
         invalid.push(torrent);
@@ -302,9 +355,7 @@ export class CatalogProvider {
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 
-    // 🔒 BLOQUEADO PARA TESTE
-    this.logger.debug('🔒 DB BLOQUEADO (teste) — saveValidTorrentsToCatalog ignorado', { count: torrents.length, imdbId });
-    /* await Promise.allSettled(torrents.map(async torrent => {
+    await Promise.allSettled(torrents.map(async torrent => {
       try {
         const episodeValue = isPackFallback ? null : episode;
         await this.autoMagnetService.autoAddMagnet(
@@ -314,7 +365,7 @@ export class CatalogProvider {
       } catch (error) {
         this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
       }
-    })); */
+    }));
   }
 
   private async processTorrentsWithOptimization(
@@ -422,8 +473,13 @@ export class CatalogProvider {
     const seen = new Set<string>();
     const unique: Stream[] = [];
     for (const s of streams) {
-      // Usa infoHash, url, ou title como chave de dedup
-      const hash = s.infoHash || s.url || s.title || Math.random().toString();
+      // Extrai infoHash do stream ou da URL lazy (/resolve/torbox/.../INFOHASH/...)
+      let hash = s.infoHash;
+      if (!hash && s.url) {
+        const m = s.url.match(/\/resolve\/torbox\/[^/]+\/([a-f0-9]{40})\//i);
+        if (m) hash = m[1];
+      }
+      if (!hash) hash = s.title || Math.random().toString();
       const quality = this.extractStreamQuality(s);
       const key = `${hash}|${quality}`;
       if (seen.has(key)) continue;
@@ -471,11 +527,19 @@ export class CatalogProvider {
 
   private async deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): Promise<ScrapedTorrent[]> {
     const seen = new Set<string>();
+    const seenTitles = new Set<string>();
     const unique: ScrapedTorrent[] = [];
+    const packRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
     for (const t of torrents) {
       const hash = (await analisarMagnet(t.magnet))?.infoHash;
       if (hash && seen.has(hash.toLowerCase())) continue;
       if (hash) seen.add(hash.toLowerCase());
+      // Para packs, dedup também por título normalizado (ignora SxxExx)
+      if (packRe.test(t.title)) {
+        const tituloNormalizado = t.title.replace(/\s*\(?\s*S\d{1,2}\s*[Ee]\d{1,2}\s*\)?\s*$/g, '').trim().toLowerCase();
+        if (seenTitles.has(tituloNormalizado)) continue;
+        seenTitles.add(tituloNormalizado);
+      }
       unique.push(t);
     }
     return unique;

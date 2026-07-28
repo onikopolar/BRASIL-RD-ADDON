@@ -156,7 +156,7 @@ export const TECHNICAL_ACRONYMS = [
 export const INTERNATIONAL_RELEASE_GROUPS = [
   'skgtv', 'rartv', 'ettv', 'eztv', 'vtv', 'yts', 'yify', 'rarbg',
   'turbo', 'cakes', 'galaxyrg', 'ctrlhd', 'framestor', 'tayto', 'ntb',
-  'cmrg', 'evolve', 'mteam', 'chd', 'hds', 'fum', 'tbs', 'flux',
+  'cmrg', 'evolve', 'mteam', 'chd', 'hds', 'fum', 'tbs', 'flux', 'tgx',
   'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws', 'xforce',
   'sva', 'exc', 'phd', 'grym', 'jyk', 'kings', 'dimension', 'sparks',
   'geckos', 'loki', 'memento', 'quid', 'mazemaze', 'kognitiv',
@@ -177,7 +177,7 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'cmdtv', 'cmdb',
   'dhg', 'divulgahd', 'legiahd', 'baixar', 'download', 'brasil',
   'brrip', 'br-rip', 'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
-  'webdlbr', 'torrentbr',
+  'webdlbr', 'torrentbr', 'starck', 'starckfilmes'
 ];
 
 // Função auxiliar para verificar se uma palavra é técnica

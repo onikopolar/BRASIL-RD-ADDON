@@ -183,7 +183,8 @@ export class RdTorrentCacheService {
     apiKey: string,
     season?: number,
     episode?: number,
-    torboxService?: TorboxService
+    torboxService?: TorboxService,
+    quality?: string
   ): Promise<{ streamLink: string | null; fromCache: boolean }> {
     const cacheKey = this.getStreamLinkCacheKey(torrentId, season, episode);
     const advancedCacheKey = `stream:${torrentId}:${season || 'all'}:${episode || 'all'}`;
@@ -234,7 +235,7 @@ export class RdTorrentCacheService {
     }
     
     // Buscar no RD
-    const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode);
+    const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality);
     
     if (streamLink) {
       // Salvar no cache avançado

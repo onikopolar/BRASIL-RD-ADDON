@@ -207,7 +207,7 @@ export class TorboxService {
   }
 
   async getStreamLinkForTorrent(
-    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number
+    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string
   ): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
@@ -229,17 +229,33 @@ export class TorboxService {
 
       for (const f of files) {
         if (!this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext))) continue;
-        let score = f.size;
+        let score = 0;
+        // Prioridade 1: Episódio correto (+100B — sempre vence arquivos de outros episódios)
         if (targetSeason !== undefined && targetEpisode !== undefined) {
           const { temporada, episodio } = this.extrairTemporadaEpisodio(f.name);
-          if (temporada === targetSeason && episodio === targetEpisode) score += 10_000_000_000;
+          if (temporada === targetSeason && episodio === targetEpisode) score += 100_000_000_000;
         }
+        // Prioridade 2: Qualidade correta (+50B — vence arquivos de qualidade diferente)
+        if (targetQuality && f.name.toLowerCase().includes(targetQuality.toLowerCase())) {
+          score += 50_000_000_000;
+        }
+        // Prioridade 3: Tamanho (desempate entre arquivos do mesmo episódio e qualidade)
+        score += f.size;
         if (score > bestScore) { bestScore = score; bestFile = f; }
       }
 
       if (!bestFile) {
         throw new StreamStatusException(StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
       }
+
+      this.logger.info('Arquivo selecionado por qualidade', {
+        torrentId,
+        targetQuality: targetQuality || 'N/A',
+        totalFiles: files.length,
+        escolhido: bestFile.name,
+        fileId: bestFile.id,
+        tamanhoMB: Math.round(bestFile.size / 1048576),
+      });
 
       return this.buildStreamPermalink(torrentId, bestFile.id, apiKey);
     } catch (error) {

@@ -185,16 +185,16 @@ export class SimilarityCalculator {
         melhor = score;
       }
 
-      // DEBUG: score individual de cada titulo TMDB
-      this.logger.debug('Score por titulo TMDB', {
-        titulo: score.titulo,
-        encontradas: `${score.encontradas}/${score.totalTmdb}`,
-        completo: score.tmdbCompleto,
-        faltando: score.faltando.join(' ') || '(nenhuma)',
-        estranhas: score.estranhas.join(' ') || '(nenhuma)',
-        proporcao: score.proporcao.toFixed(2),
-        escolhido: melhor === score ? 'SIM' : 'nao',
-      });
+      // // DEBUG: score individual de cada titulo TMDB
+      // this.logger.debug('Score por titulo TMDB', {
+      //   titulo: score.titulo,
+      //   encontradas: `${score.encontradas}/${score.totalTmdb}`,
+      //   completo: score.tmdbCompleto,
+      //   faltando: score.faltando.join(' ') || '(nenhuma)',
+      //   estranhas: score.estranhas.join(' ') || '(nenhuma)',
+      //   proporcao: score.proporcao.toFixed(2),
+      //   escolhido: melhor === score ? 'SIM' : 'nao',
+      // });
 
       t++;
     }
@@ -259,29 +259,28 @@ export class SimilarityCalculator {
       resultado = { matches: true, similarity: melhor.proporcao, reason: `Match parcial: [${melhor.encontradas}/${melhor.totalTmdb}]` };
     }
 
-    // ── DEBUG: log completo da comparacao ─────────────────────────────
-
-    this.logger.debug('Similaridade calculada', {
-      torrent: tituloTorrent.substring(0, 60),
-      palavrasTorrent: palavrasTorrent.join(' '),
-      tituloVencedor: melhor.titulo || 'N/A',
-      palavrasTmdb: Array.from(new Set(
-        titulosValidos.flatMap(tv =>
-          this.normalizarParaComparacao(tv).split(' ').filter(w => w.length > 0)
-        )
-      )).join(' '),
-      encontradas: melhor.encontradas,
-      totalTmdb: melhor.totalTmdb,
-      faltando: melhor.faltando.join(' '),
-      estranhas: melhor.estranhas.join(' '),
-      anoBate,
-      anoProximo,
-      temPt: temIndicadorPt,
-      temTemporada,
-      mediaType: movieInfo.mediaType || 'N/A',
-      resultado: resultado.matches ? 'ACEITO' : 'REJEITADO',
-      motivo: resultado.reason
-    });
+    // // ── DEBUG: log completo da comparacao ─────────────────────────────
+    // this.logger.debug('Similaridade calculada', {
+    //   torrent: tituloTorrent.substring(0, 60),
+    //   palavrasTorrent: palavrasTorrent.join(' '),
+    //   tituloVencedor: melhor.titulo || 'N/A',
+    //   palavrasTmdb: Array.from(new Set(
+    //     titulosValidos.flatMap(tv =>
+    //       this.normalizarParaComparacao(tv).split(' ').filter(w => w.length > 0)
+    //     )
+    //   )).join(' '),
+    //   encontradas: melhor.encontradas,
+    //   totalTmdb: melhor.totalTmdb,
+    //   faltando: melhor.faltando.join(' '),
+    //   estranhas: melhor.estranhas.join(' '),
+    //   anoBate,
+    //   anoProximo,
+    //   temPt: temIndicadorPt,
+    //   temTemporada,
+    //   mediaType: movieInfo.mediaType || 'N/A',
+    //   resultado: resultado.matches ? 'ACEITO' : 'REJEITADO',
+    //   motivo: resultado.reason
+    // });
 
     resultado.mediaType = movieInfo.mediaType;
     return resultado;

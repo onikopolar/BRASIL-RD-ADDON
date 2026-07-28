@@ -24,7 +24,7 @@ export class StreamFormatter {
     this.qualityDetector = QualityDetector.getInstance();
     this.metadataExtractor = MetadataExtractor.getInstance();
     // Versionamento Semântico v2.0.0 - MAJOR: Formato de título corrigido igual Torrentio
-    this.logger.debug('StreamFormatter ready');
+    this.logger.debug('StreamFormatter ready'); // versão silenciosa
   }
 
   // Formato Torrentio-style com nossos emojis (identidade Brasil RD)
@@ -40,7 +40,8 @@ export class StreamFormatter {
     metadata?: EnhancedSeriesMetadata,
     isDirect: boolean = false
   ): string {
-    // PRIMEIRA LINHA: Titulo completo do torrent
+    // PRIMEIRA LINHA: Titulo canonico do magnet (dn do parse-torrent)
+    // Nao precisa de regex de strip — o nome canonico ja eh limpo
     let result = torrentTitle.trim();
     
     // SEGUNDA LINHA: seeds, tamanho, tracker (estilo Torrentio, sem |)
@@ -175,12 +176,14 @@ export class StreamFormatter {
     metadata?: EnhancedSeriesMetadata,
     fileIdx?: number
   ): Promise<Stream> {
+    /* DEBUG SILENCIOSO
     this.logger.debug('CRIANDO_STREAM_DIRETO', { 
       qualidade: qualidade, 
       tipo: tipo, 
       temporada: temporada, 
       episodio: episodio 
     });
+    */
 
     // Extrai informações da descrição para usar nos emojis
     const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
@@ -221,6 +224,7 @@ export class StreamFormatter {
       };
     }
 
+    /* DEBUG SILENCIOSO
     this.logger.debug('STREAM_DIRETO_CRIADO', {
       titulo: tituloFinal.substring(0, 80).replace(/\n/g, '\\n'),
       infoHash: stream.infoHash ? 'sim' : 'nao',
@@ -228,6 +232,7 @@ export class StreamFormatter {
       tem_url: !!stream.url,
       formato: 'torrentio_com_titulo_correto'
     });
+    */
 
     return stream;
   }
@@ -247,12 +252,14 @@ export class StreamFormatter {
     metadata?: EnhancedSeriesMetadata,
     fileIdx?: number
   ): Promise<Stream> {
+    /* DEBUG SILENCIOSO
     this.logger.debug('CRIANDO_STREAM_LAZY', { 
       qualidade: qualidade, 
       tipo: tipo, 
       temporada: temporada, 
       episodio: episodio 
     });
+    */
 
     const dadosMagnet = await analisarMagnet(magnet);
     const magnetHash = dadosMagnet?.infoHash;
@@ -287,15 +294,18 @@ export class StreamFormatter {
         fileIdx || 0,
         tipo,
         temporada,
-        episodio
+        episodio,
+        qualidade
       );
       
+      /* DEBUG SILENCIOSO
       this.logger.debug('URL_LAZY_GERADA', {
         formato: 'torrentio_rd',
         url_preview: resolveUrl.substring(0, 100),
         filename: filename,
         fileIdx: fileIdx || 0
       });
+      */
     } catch (error) {
       this.logger.error('ERRO_GERAR_URL_LAZY', {
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -331,6 +341,7 @@ export class StreamFormatter {
       (stream.behaviorHints as any).packageContent = true;
     }
 
+    /* DEBUG SILENCIOSO
     this.logger.debug('STREAM_LAZY_CRIADO', {
       titulo: tituloFinal.substring(0, 80).replace(/\n/g, '\\n'),
       infoHash: stream.infoHash ? 'sim' : 'nao',
@@ -339,6 +350,7 @@ export class StreamFormatter {
       fonte: provider,
       formato: 'torrentio_com_titulo_correto_e_url'
     });
+    */
 
     return stream;
   }
@@ -372,19 +384,23 @@ export class StreamFormatter {
     disponivelNoRD: boolean = false,
     fileIdx?: number
   ): Promise<Stream[]> {
-    const todasQualidades = this.extrairTodasQualidades(torrent.title);
+    // NOME CANÔNICO do parse-torrent (dn) como fonte principal; scraper title só como fallback
+    const tituloFonte = torrent.canonicalName || torrent.title;
+    const todasQualidades = this.extrairTodasQualidades(tituloFonte);
     
+    /* DEBUG SILENCIOSO
     this.logger.debug('PROCESSANDO_MULTIPLAS_QUALIDADES', {
-      titulo_torrent: torrent.title.substring(0, 80),
+      titulo_torrent: tituloFonte.substring(0, 80),
       qualidades_encontradas: todasQualidades.length,
       tipo: tipo,
       temporada: temporada,
       episodio: episodio
     });
+    */
 
     // Se não encontrou qualidades, usa detector padrão
     if (todasQualidades.length === 0) {
-      const qualidadePadrao = this.qualityDetector.extractBestQuality(torrent.title);
+      const qualidadePadrao = this.qualityDetector.extractBestQuality(tituloFonte);
       if (qualidadePadrao && qualidadePadrao !== 'unknown') {
         todasQualidades.push(qualidadePadrao);
       } else {
@@ -393,7 +409,7 @@ export class StreamFormatter {
     }
 
     const streams: Stream[] = [];
-    const metadata = this.metadataExtractor.extractEnhancedMetadata(torrent.title);
+    const metadata = this.metadataExtractor.extractEnhancedMetadata(tituloFonte);
     const tagEpisodio = tipo === 'series' && temporada && episodio 
       ? `S${temporada.toString().padStart(2, '0')}E${episodio.toString().padStart(2, '0')}`
       : '';
@@ -401,13 +417,13 @@ export class StreamFormatter {
     // Cria stream SEPARADO para cada qualidade
     for (const qualidade of todasQualidades) {
       // DESCRIÇÃO base com seeds, tamanho e idioma
-      const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+      const descricaoBase = `${tituloFonte}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
       
       // NOME do stream com qualidade específica
       const nomeStream = `Brasil RD (${qualidade})`;
       
       // TÍTULO COMPLETO do torrent (não modificado)
-      const tituloCompletoTorrent = torrent.title;
+      const tituloCompletoTorrent = tituloFonte;
       
       if (disponivelNoRD && linkDireto) {
         // Stream direto do Real-Debrid
@@ -421,7 +437,7 @@ export class StreamFormatter {
           episodio,
           {
             bingeGroup: `br-${request.id}-${qualidade}`,
-            filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
+            filename: this.sanitizarNomeArquivo(`${tituloFonte} ${tagEpisodio}`)
           },
           metadata,
           fileIdx
@@ -440,13 +456,14 @@ export class StreamFormatter {
           episodio,
           {
             bingeGroup: `br-${request.id}-${qualidade}`,
-            filename: this.sanitizarNomeArquivo(`${torrent.title} ${tagEpisodio}`)
+            filename: this.sanitizarNomeArquivo(`${tituloFonte} ${tagEpisodio}`)
           },
           metadata,
           fileIdx
         ));
       }
       
+      /* DEBUG SILENCIOSO
       this.logger.debug('QUALIDADE_STREAM_CRIADA', {
         qualidade: qualidade,
         tipo: tipo,
@@ -455,17 +472,20 @@ export class StreamFormatter {
         tem_link_direto: !!(disponivelNoRD && linkDireto),
         formato: 'torrentio_corrigido'
       });
+      */
     }
 
+    /* DEBUG SILENCIOSO
     this.logger.info('STREAMS_CRIADOS_COM_SUCESSO', {
       total: streams.length,
       qualidades: todasQualidades,
-      torrent: torrent.title.substring(0, 60),
+      torrent: tituloFonte.substring(0, 60),
       streams_com_url: streams.filter(s => s.url).length,
       streams_sem_url: streams.filter(s => !s.url).length,
       versao: '2.0.0',
       formato: 'torrentio_corrigido_com_url'
     });
+    */
 
     return streams;
   }

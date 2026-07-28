@@ -26,7 +26,7 @@ async function analisarMagnet(magnet) {
         return null;
     }
 }
-async function gerarUrlResolve(magnet, chaveApi, nomeArquivo = 'video.mkv', indiceArquivo = 0, tipo, temporada, episodio) {
+async function gerarUrlResolve(magnet, chaveApi, nomeArquivo = 'video.mkv', indiceArquivo = 0, tipo, temporada, episodio, qualidade) {
     const dados = await analisarMagnet(magnet);
     if (!dados) {
         throw new Error('Nao foi possivel extrair infoHash do magnet');
@@ -45,6 +45,8 @@ async function gerarUrlResolve(magnet, chaveApi, nomeArquivo = 'video.mkv', indi
         if (episodio !== undefined)
             parametros.append('episode', episodio.toString());
     }
+    if (qualidade)
+        parametros.append('quality', qualidade);
     const consulta = parametros.toString();
     if (consulta)
         url += `?${consulta}`;

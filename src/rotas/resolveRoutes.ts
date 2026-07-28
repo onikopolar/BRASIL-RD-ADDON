@@ -65,7 +65,7 @@ async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
 
 // Essa função NUNCA rejeita – sempre retorna um objeto com status
 async function processMagnetWithTorbox(
-    magnet: string, apiKey: string, season?: number, episode?: number, type: string = 'movie'
+    magnet: string, apiKey: string, season?: number, episode?: number, type: string = 'movie', quality?: string
 ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string; torrentId?: string }> {
     const magnetHash = await extrairInfoHashDoMagnet(magnet);
     if (!magnetHash) return { success: false, status: 'error', message: 'Magnet link inválido' };
@@ -87,7 +87,7 @@ async function processMagnetWithTorbox(
         if (torrentInfo.torrentId) {
             // Paralelo: getStreamLink e getTorrentInfo são independentes
             const [streamLinkResult, torrentDetails] = await Promise.all([
-                rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, torboxService),
+                rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, torboxService, quality),
                 torboxService.getTorrentInfo(torrentInfo.torrentId, apiKey)
             ]);
             if (torrentInfo.status !== torrentDetails.download_state) {
@@ -136,6 +136,7 @@ export const setupResolveRoutes = (app: any) => {
         const filename = decodeURIComponent(req.params.filename);
         const season = req.query.season ? parseInt(req.query.season as string) : undefined;
         const episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
+        const quality = req.query.quality as string | undefined;
         const type = req.query.type as string || (season !== undefined ? 'series' : 'movie');
 
         // URL base dinamica a partir do request
@@ -153,6 +154,7 @@ export const setupResolveRoutes = (app: any) => {
             filename: filename?.substring(0, 80),
             season,
             episode,
+            quality,
             type,
             client: req.headers['user-agent']?.substring(0, 80),
             origin: req.get('origin'),
@@ -186,7 +188,7 @@ export const setupResolveRoutes = (app: any) => {
             }
 
             const magnetLink = `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
-            const tbResult = await processMagnetWithTorbox(magnetLink, apiKey, season, episode, type);
+            const tbResult = await processMagnetWithTorbox(magnetLink, apiKey, season, episode, type, quality);
 
             resolveLogger.info('📊 RESULTADO TORBOX', {
                 requestId: req._ultraDebugId,

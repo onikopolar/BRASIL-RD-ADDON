@@ -521,8 +521,7 @@ export class AutoMagnetService {
 
       const existingTorrent = await getTorrent(magnetHash);
       if (!existingTorrent) {
-        // 🔒 BLOQUEADO PARA TESTE: await createTorrent({
-        /* await createTorrent({
+        await createTorrent({
           infoHash: magnetHash,
           provider: 'brasil-rd',
           magnetLink: magnetData.magnet,
@@ -536,15 +535,8 @@ export class AutoMagnetService {
           metadata: allQualities.length > 1 ? JSON.stringify({ availableQualities: allQualities }) : null,
           createdAt: new Date(),
           updatedAt: new Date()
-        }); */
-        logger.debug('🔒 DB BLOQUEADO (teste) — createTorrent ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
+        });
       }
-
-      // 🔒 BLOQUEADO PARA TESTE: await createFile({
-      /* await createFile({
-        ...
-      }); */
-      logger.debug('🔒 DB BLOQUEADO (teste) — createFile ignorado', { infoHash: magnetHash, title: magnetData.title.substring(0, 60) });
 
       logger.info('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),

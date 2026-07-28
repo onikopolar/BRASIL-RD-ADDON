@@ -5,6 +5,6 @@ exports.scraperProviders = [];
 exports.torrentIndexerConfig = {
     baseUrl: 'https://torrent-indexer.darklyn.org',
     timeout: 15000,
-    enabled: true,
+    enabled: false,
     priority: 5
 };

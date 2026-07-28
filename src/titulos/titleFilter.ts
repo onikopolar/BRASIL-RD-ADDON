@@ -78,9 +78,9 @@ export class TitleFilter {
             tituloTorrent, metadados.episode, episodioAlvo, temporadaAlvo
           );
           if (!compat.compativel) {
-            this.logger.warn('Episódio incompatível', {
-              tituloTorrent: tituloTorrent.substring(0, 60), episodioAlvo, motivo: compat.motivo
-            });
+            // this.logger.warn('Episódio incompatível', {
+            //   tituloTorrent: tituloTorrent.substring(0, 60), episodioAlvo, motivo: compat.motivo
+            // });
             return { matches: false, similarity: 0, torrentMetadata: metadados, reason: compat.motivo };
           }
         }

@@ -96,10 +96,10 @@ function buildTypeScript() {
     console.log('Verificando arquivos compilados...');
     const requiredFiles = [
         'dist/server.js',
-        'dist/services/StreamHandler.js',
+        'dist/stream/StreamHandler.js',
         'dist/utils/logger.js',
         'dist/types/index.js',
-        'dist/services/StaticResponseService.js'
+        'dist/stream/StaticResponseService.js'
     ];
 
     let missingFiles = [];
