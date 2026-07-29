@@ -9,6 +9,7 @@
 
 ---
 
+> [!IMPORTANT]
 > **O Problema que eu Percebi**
 >
 > A comunidade brasileira enfrenta uma carencia gritante de conteudo dublado em varios addons que existem atualmente, ficamos a merce deles, muitas vezes sao addons gringos. Enquanto isso, servicos de streaming tradicionais nos submetem a triste realidade: multiplas assinaturas carissimas, catalogos fragmentados e a indignidade de ainda incluir anuncios em servicos pagos.
@@ -66,4 +67,5 @@ Diferente de outros addons como Torrentio e seus derivados, eu priorizo:
 3. Salve as configuracoes
 4. Clique em install e ele vai automaticamente te redirecionar para o stremio
 
+> [!TIP]
 > Logo apos o Stremio abrir, e voce adicionar, seu addon ja vai funcionar.
