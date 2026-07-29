@@ -22,7 +22,7 @@ jobs:
           node-version: 22
 
       - name: Build
-        run: npm install && npm run build
+        run: npm install --ignore-scripts && node build.js
 
       - name: Instalar zip
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zip
