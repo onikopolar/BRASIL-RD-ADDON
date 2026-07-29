@@ -68,28 +68,12 @@ export class StreamFormatter {
       result += '\n' + segundaLinha;
     }
     
-    // TERCEIRA LINHA: 🌐 idioma + metadados + status (estilo Torrentio)
+    // TERCEIRA LINHA: 🌐 idioma
     const terceiraParts: string[] = [];
     
-    // 🌐 idioma na terceira linha (como Torrentio poe bandeiras)
+    // 🌐 idioma na terceira linha
     const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
     terceiraParts.push(`🌐 ${idiomaFormatado}`);
-    
-    // Metadados
-    if (metadata) {
-      if (metadata.isCompleteSeason) terceiraParts.push('📦');
-      if (metadata.isPackage) terceiraParts.push('🎬');
-      if (metadata.hasMultiEpisode) terceiraParts.push('👥');
-      if (metadata.source && metadata.source !== 'unknown') terceiraParts.push('🎞️');
-      if (metadata.codec && metadata.codec !== 'unknown') terceiraParts.push('🔧');
-    }
-    
-    // Status (⏳ lazy ou 🚀 direto)
-    if (isDirect) {
-      terceiraParts.push('🚀');
-    } else {
-      terceiraParts.push('⏳');
-    }
     
     if (terceiraParts.length > 0) {
       result += '\n' + terceiraParts.join(' ');
@@ -359,9 +343,9 @@ export class StreamFormatter {
   // Extrai idioma da descrição
   private extrairIdiomaDaDescricao(descricao: string): string {
     const padroesIdioma = [
-      /(PT-BR|Dual|EN|Multi|ES|FR)/i,
-      /(portuguese|english|spanish|french)/i,
-      /(dublado|legendado|subtitled)/i
+      /\b(PT-BR|Dual|EN|Multi|ES|FR)\b/i,
+      /\b(portuguese|english|spanish|french)\b/i,
+      /\b(dublado|legendado|subtitled)\b/i
     ];
     
     for (const padrao of padroesIdioma) {
