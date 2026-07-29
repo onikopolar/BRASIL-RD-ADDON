@@ -3,7 +3,6 @@ name: Release
 on:
   push:
     branches: [master]
-    paths-ignore: ['package.json']
   workflow_dispatch:
 
 jobs:
@@ -45,16 +44,48 @@ jobs:
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
+
+          # Pega a versao atual do package.json
           CURRENT=$(node -p "require('./package.json').version")
-          if git rev-parse "v$CURRENT" >/dev/null 2>&1; then
-            IFS='.' read -r MAJ MIN PAT <<< "$CURRENT"
-            NEW="$MAJ.$MIN.$((PAT + 1))"
+          echo "Versao atual no package.json: $CURRENT"
+
+          # Encontra a MAIOR tag existente (nao apenas a do CURRENT)
+          LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -1 | sed 's/^v//')
+          echo "Maior tag existente: v${LATEST_TAG:-nenhuma}"
+
+          # Decide a nova versao: max(package.json, latest_tag) + 1 patch
+          if [ -n "$LATEST_TAG" ]; then
+            # Usa o maior entre CURRENT e LATEST_TAG
+            if printf "%s\n%s" "$CURRENT" "$LATEST_TAG" | sort -V | tail -1 | grep -q "$LATEST_TAG"; then
+              BASE="$LATEST_TAG"
+            else
+              BASE="$CURRENT"
+            fi
           else
-            NEW="$CURRENT"
+            BASE="$CURRENT"
           fi
-          echo "VERSION=$NEW" >> $GITHUB_ENV
+
+          IFS='.' read -r MAJ MIN PAT <<< "$BASE"
+          NEW="$MAJ.$MIN.$((PAT + 1))"
+          echo "Nova versao: $NEW"
+
+          # Atualiza package.json com a nova versao
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '$NEW';
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          # Commit e push da atualizacao do package.json
+          git add package.json
+          git commit -m "chore: bump version to $NEW [skip ci]" || echo "Sem mudancas no package.json"
+          git push origin master
+
+          # Cria a tag
           git tag "v$NEW"
           git push origin "v$NEW"
+
+          echo "VERSION=$NEW" >> $GITHUB_ENV
 
       - name: Release
         run: |
