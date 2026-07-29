@@ -1,32 +1,35 @@
-// starck-oficial.com HTML Scraper — 2-passos: busca → página de post → magnet base64
-// Usa o mesmo DNS bypass do WordPress/TPB scraper
-// Apenas entrega dados brutos do HTML (igual TPB/RARGB scraper)
+// hdrtorrent.com HTML Scraper — 2-passos: busca → página de post → magnet
+// Magnets estão diretos no HTML (sem ofuscação), diferente do Starck
+// Usa o mesmo DNS bypass do WordPress/TPB/Starck scraper
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 
-const logger = new Logger('StarckScraper');
+const logger = new Logger('HdrScraper');
 
-const STARCK_BASE = 'https://www.starck-oficial.com';
+const HDR_BASE = 'https://hdrtorrent.com';
 
 // ── Tipos ─────────────────────────────────────────────────────────────
 
-export interface StarckTorrent {
+export interface HdrTorrent {
+  title: string;
   magnet: string;
   infoHash: string;
+  seeders: number;
+  size: string;
 }
 
-// ── Config do axios (igual TPB/WordPress) ─────────────────────────────
+// ── Config do axios ───────────────────────────────────────────────────
 const axiosConfig = {
   timeout: 15000,
   httpsAgent: agenteHttps,
   lookup: lookupCustomizado,
   headers: {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
-    'Accept': 'text/html,application/xhtml+xml',
-    'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.5',
+    'Accept': 'text/html',
+    'Accept-Language': 'pt-BR,pt;q=0.9',
   },
 };
 
@@ -39,8 +42,8 @@ interface SearchResultItem {
   postUrl: string;
 }
 
-async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
-  const searchUrl = `${STARCK_BASE}/?s=${encodeURIComponent(query)}`;
+async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
+  const searchUrl = `${HDR_BASE}/index.php?s=${encodeURIComponent(query)}`;
 
   try {
     const res = await axios.get(searchUrl, axiosConfig);
@@ -49,59 +52,58 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
     const results: SearchResultItem[] = [];
     const seen = new Set<string>();
 
-    $('a[href*="/catalog/"]').each((_i, el) => {
+    // Links de posts — tipicamente dentro de h2/h3 com classe de post
+    $('a[href]').each((_i, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
-      if (!href || !text || text.length < 5 || text === 'Detalhes') return;
+      if (!href || !text || text.length < 10) return;
+      // Filtra links que parecem posts (não categorias, tags, etc)
+      if (href.includes('/categoria/') || href.includes('/tag/') || href === '/' || href.includes('#')) return;
       if (seen.has(href)) return;
       seen.add(href);
 
-      results.push({
-        title: text,
-        postUrl: href.startsWith('http') ? href : `${STARCK_BASE}${href}`,
-      });
+      const fullUrl = href.startsWith('http') ? href : `${HDR_BASE}${href}`;
+      results.push({ title: text, postUrl: fullUrl });
     });
 
     return results.slice(0, 20);
   } catch (err: any) {
-    logger.warn('Starck busca falhou', { query: query.substring(0, 50), error: err.message });
+    logger.warn('HDR busca falhou', { query: query.substring(0, 50), error: err.message });
     return [];
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Extrai magnets base64 da página de post
+//  PASSO 2: Extrai magnets de uma página de post
 // ═══════════════════════════════════════════════════════════════════════
 
-function decodeBase64Magnets(html: string): StarckTorrent[] {
-  const results: StarckTorrent[] = [];
-  const seen = new Set<string>();
+function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
+  const $ = cheerio.load(html);
+  const results: HdrTorrent[] = [];
 
-  const b64Regex = /[A-Za-z0-9+/]{60,}={0,2}/g;
-  let match;
+  // Título da página (fallback do postTitle da busca)
+  const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
 
-  while ((match = b64Regex.exec(html)) !== null) {
-    const b64 = match[0];
-    if (seen.has(b64)) continue;
-    seen.add(b64);
+  $('a[href^="magnet:"]').each((_i, el) => {
+    const href = $(el).attr('href');
+    if (!href) return;
 
-    try {
-      const decoded = Buffer.from(b64, 'base64').toString('latin1')
-        .replace(/&amp;/gi, '&');
+    const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
+    if (!btihMatch) return;
 
-      if (!decoded.startsWith('magnet:?')) continue;
+    // Tenta extrair informações de qualidade do texto próximo
+    const parentText = $(el).parent().text().trim();
+    const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
+    const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
 
-      const btihMatch = decoded.match(/btih:([a-fA-F0-9]{40})/i);
-      if (!btihMatch) continue;
-
-      results.push({
-        magnet: decoded,
-        infoHash: btihMatch[1].toLowerCase(),
-      });
-    } catch {
-      // Base64 inválido, ignora
-    }
-  }
+    results.push({
+      title: pageTitle,
+      magnet: href,
+      infoHash: btihMatch[1].toLowerCase(),
+      seeders: 0,
+      size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
+    });
+  });
 
   return results;
 }
@@ -110,20 +112,20 @@ function decodeBase64Magnets(html: string): StarckTorrent[] {
 //  API PÚBLICA
 // ═══════════════════════════════════════════════════════════════════════
 
-export async function searchStarck(
+export async function searchHdr(
   query: string,
   type: 'movie' | 'series' = 'movie'
-): Promise<StarckTorrent[]> {
+): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
   try {
     // PASSO 1: Busca → URLs de posts
-    const links = await searchStarckLinks(query);
+    const links = await searchHdrLinks(query);
     if (links.length === 0) return [];
 
     // PASSO 2: Para cada post, extrai magnets (paralelo, max 8)
     const batchSize = 8;
-    const allResults: StarckTorrent[] = [];
+    const allResults: HdrTorrent[] = [];
 
     for (let i = 0; i < links.length; i += batchSize) {
       const batch = links.slice(i, i + batchSize);
@@ -131,7 +133,7 @@ export async function searchStarck(
         batch.map(async (item) => {
           try {
             const res = await axios.get(item.postUrl, axiosConfig);
-            return decodeBase64Magnets(res.data);
+            return extractMagnetsFromPost(res.data, item.title);
           } catch {
             return [];
           }
@@ -144,11 +146,11 @@ export async function searchStarck(
     }
 
     const duration = Date.now() - startTime;
-    logger.info(`Starck: ${allResults.length} magnets em ${duration}ms para "${query.substring(0, 50)}"`);
+    logger.info(`HDR: ${allResults.length} magnets em ${duration}ms para "${query.substring(0, 50)}"`);
 
     return allResults;
   } catch (err: any) {
-    logger.error('Starck erro', { query: query.substring(0, 50), error: err.message });
+    logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });
     return [];
   }
 }

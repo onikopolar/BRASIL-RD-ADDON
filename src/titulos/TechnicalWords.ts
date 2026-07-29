@@ -585,7 +585,28 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
   'legendado', 'legendada', 'legenda', 'dub', 'dubbed',
   // Grupos release comuns (ruído visual)
-  'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'tpb',
+  'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'comando1', 'tpb', 'starck', 'starckfilmes',
+  // Grupos release encontrados nos scrapers
+  'btm', 'sujaidr', 'xebec', 'douglasvip', 'deejayahmed', 'jeremiah', 'leroy', 'pitt',
+  'ethel', 'coyote', 'reenc', 'psa',
+  // Domínios/URLs que poluem o dn do magnet
+  'www', 'com', 'org', 'net', 'tv', 'xyz', 'info', 'io', 'to', 'cc',
+  // Tags de sites WordPress (Listão Filmes, etc)
+  'download', 'listao', 'filmes', 'terror', 'acao', 'aventura', 'drama', 'comedia', 'guerra',
+  'classicos', 'acesse', 'original',
+  // Metadados de temporada
+  'temporada', 'completa', 'season', 'complete', 'parts', 
+  // Codecs e variantes
+  '10bit', '10bits', 'hdr10p', 'dd', 'ddp', 'ddp5', 'sdr', 'blu', 'extras',
+  'remastered', '3d',
+  // Spam de sites nos DNs de magnet
+  'site', 'visite', 'www',
+  // Metadados soltos
+  'movie', 'film', 'series', 'vol', 'volume', 'extended',
+  // Entidades HTML numéricas que escapam da normalização
+  '8211', '8230', '038',
+  // Lançamentos multi (ex: "S01E01-02-03")
+  's01', 's02', 's03', 's04', 's05', 's06', 's07', 's08',
 ]);
 
 // Regex de qualidade/codec (padrões que não são palavras isoladas)

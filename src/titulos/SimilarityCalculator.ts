@@ -99,6 +99,12 @@ export class SimilarityCalculator {
     // Quebra titulo do torrent em palavras (sem numeros soltos, sem SxxExx)
     const palavrasTorrent = this.normalizarParaComparacao(tituloTorrent)
       .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w) && !/^s\d{1,2}e\d{1,3}$/i.test(w));
+
+    // Titulo vazio depois da normalizacao = lixo (ex: "Download" stripado)
+    if (palavrasTorrent.length === 0) {
+      return { matches: false, similarity: 0, reason: 'Título vazio após normalização' };
+    }
+
     const setTorrent = new Set(palavrasTorrent);
 
     // Compara contra cada titulo TMDB (PT e EN) e escolhe o melhor
@@ -132,6 +138,12 @@ export class SimilarityCalculator {
     // Conectores que & vira em titulos reais (TMDB stripou o &, torrent usa "e"/"and")
     vocabularioTmdb.add('e');
     vocabularioTmdb.add('and');
+    // Artigos comuns PT/EN que aparecem em DNs de magnet
+    vocabularioTmdb.add('o');
+    vocabularioTmdb.add('a');
+    vocabularioTmdb.add('os');
+    vocabularioTmdb.add('as');
+    vocabularioTmdb.add('the');
 
     // Palavras do torrent fora do vocabulario TMDB unificado
     const estranhas: string[] = [];
@@ -202,8 +214,8 @@ export class SimilarityCalculator {
     const temTemporada = !!(temporadaAlvo && this.temTemporadaExplicita(tituloTorrent, temporadaAlvo));
     const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
 
-    // Filme tolera 1 ano de diferenca, serie tolera 3
-    const toleranciaAno = tipoMidia === 'tv' ? 3 : 1;
+    // Filme tolera 2 anos de diferenca, serie tolera 3
+    const toleranciaAno = tipoMidia === 'tv' ? 3 : 2;
 
     const condicaoA = this.validarPalavrasMinimas(melhor, titulosValidos);
     const condicaoB = this.validarTituloCompleto(melhor, titulosValidos, temIndicadorPt, palavrasTorrent, tituloTorrent);

@@ -47,6 +47,7 @@ const wordpressScraper_js_1 = require("./wordpressScraper.js");
 const tpbScraper_js_1 = require("./tpbScraper.js");
 const rargbScraper_js_1 = require("./rargbScraper.js");
 const starckScraper_js_1 = require("./starckScraper.js");
+const hdrScraper_js_1 = require("./hdrScraper.js");
 const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
@@ -118,10 +119,25 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapStarckResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise
+            const hdrQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const hdrQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const hdrPromise = Promise.all([
+                (0, hdrScraper_js_1.searchHdr)(hdrQueryEn, type),
+                hdrQueryPt !== hdrQueryEn ? (0, hdrScraper_js_1.searchHdr)(hdrQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set();
+                const merged = [...en, ...pt].filter(t => {
+                    if (seen.has(t.infoHash))
+                        return false;
+                    seen.add(t.infoHash);
+                    return true;
+                });
+                return merged.map(r => this.mapHdrResult(r, type)).filter((r) => r !== null);
+            }).catch(() => []);
+            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults, hdrResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise, hdrPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults, ...hdrResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
@@ -377,7 +393,7 @@ class TorrentScraperService {
             confidence: 0.75
         };
     }
-    mapStarckResult(r, type) {
+    mapHdrResult(r, type) {
         if (!r.title || !r.magnet)
             return null;
         const quality = this.qualityDetector.extractQualityFromFilename(r.title);
@@ -387,15 +403,39 @@ class TorrentScraperService {
         return {
             title: this.cleanTitle(r.title),
             magnet: r.magnet,
-            seeders: 0,
+            seeders: r.seeders,
             leechers: 0,
             size: r.size || 'N/A',
             quality,
-            provider: 'Starck',
+            provider: 'HDR Torrent',
             language: this.extractLanguage(r.title),
             type,
             relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
             sizeInBytes: this.calculateSizeInBytes(r.size),
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.70
+        };
+    }
+    mapStarckResult(r, type) {
+        if (!r.magnet)
+            return null;
+        const quality = this.qualityDetector.extractQualityFromFilename(r.magnet);
+        if (!this.qualityDetector.isValidQuality(quality))
+            return null;
+        const season = this.extractSeasonNumber(r.magnet);
+        return {
+            title: r.magnet,
+            magnet: r.magnet,
+            seeders: 0,
+            leechers: 0,
+            size: 'N/A',
+            quality,
+            provider: 'Starck',
+            language: this.extractLanguage(r.magnet),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.magnet, season, this.extractLanguage(r.magnet)),
+            sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.70

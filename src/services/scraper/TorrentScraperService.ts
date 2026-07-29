@@ -9,6 +9,7 @@ import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScr
 import { searchTpb } from './tpbScraper.js';
 import { searchRargb } from './rargbScraper.js';
 import { searchStarck } from './starckScraper.js';
+import { searchHdr } from './hdrScraper.js';
 import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
 
 const logger = new Logger('TorrentScraperService');
@@ -104,10 +105,26 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapStarckResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise
+            // HDR Torrent: busca EN + PT (HTML scraper, magnets diretos no HTML)
+            const hdrQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const hdrQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const hdrPromise = Promise.all([
+                searchHdr(hdrQueryEn, type),
+                hdrQueryPt !== hdrQueryEn ? searchHdr(hdrQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set<string>();
+                const merged = [...en, ...pt].filter(t => {
+                  if (seen.has(t.infoHash)) return false;
+                  seen.add(t.infoHash);
+                  return true;
+                });
+                return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
+            }).catch(() => [] as TorrentResult[]);
+
+            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults, hdrResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise, hdrPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults, ...hdrResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
@@ -376,8 +393,7 @@ export class TorrentScraperService {
             confidence: 0.75
         };
     }
-
-    private mapStarckResult(r: { title: string; magnet: string; infoHash: string; size: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.title || !r.magnet) return null;
         const quality = this.qualityDetector.extractQualityFromFilename(r.title);
         if (!this.qualityDetector.isValidQuality(quality)) return null;
@@ -385,15 +401,38 @@ export class TorrentScraperService {
         return {
             title: this.cleanTitle(r.title),
             magnet: r.magnet,
-            seeders: 0,
+            seeders: r.seeders,
             leechers: 0,
             size: r.size || 'N/A',
             quality,
-            provider: 'Starck',
+            provider: 'HDR Torrent',
             language: this.extractLanguage(r.title),
             type,
             relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
             sizeInBytes: this.calculateSizeInBytes(r.size),
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.70
+        };
+    }
+    private mapStarckResult(r: { magnet: string; infoHash: string }, type: 'movie' | 'series'): TorrentResult | null {
+        if (!r.magnet) return null;
+        // Usa o proprio magnet como titulo — catalogProvider extrai o nome real via parse-torrent
+        const quality = this.qualityDetector.extractQualityFromFilename(r.magnet);
+        if (!this.qualityDetector.isValidQuality(quality)) return null;
+        const season = this.extractSeasonNumber(r.magnet);
+        return {
+            title: r.magnet, // catalogProvider substitui pelo canonicalName do parse-torrent
+            magnet: r.magnet,
+            seeders: 0,
+            leechers: 0,
+            size: 'N/A',
+            quality,
+            provider: 'Starck',
+            language: this.extractLanguage(r.magnet),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.magnet, season, this.extractLanguage(r.magnet)),
+            sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.70
