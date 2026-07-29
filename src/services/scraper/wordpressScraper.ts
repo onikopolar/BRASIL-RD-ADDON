@@ -75,21 +75,21 @@ function createProxyAgent(proxyUrl: string): any {
 
 const WP_SITES: WordPressSite[] = [
   {
-    name: 'BLUDV Filmes',
-    baseUrl: 'https://bludvfilmes.xyz',
-    priority: 10,
+    name: 'Comando Torrents',
+    baseUrl: 'https://comando1.com',
+    priority: 1,
     timeout: 15000,
   },
   {
-    name: 'Comando Torrents',
-    baseUrl: 'https://comando1.com',
-    priority: 8,
+    name: 'BLUDV Filmes',
+    baseUrl: 'https://bludvfilmes.xyz',
+    priority: 2,
     timeout: 15000,
   },
   {
     name: 'Starck Oficial',
     baseUrl: 'https://www.starck-oficial.com',
-    priority: 9,
+    priority: 3,
     timeout: 15000,
   },
 ];

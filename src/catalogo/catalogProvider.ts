@@ -247,7 +247,17 @@ export class CatalogProvider {
     // O dn do magnet ja contem o idioma real do torrent.
     const ptTorrents = torrents.filter(t => {
       const nome = t.canonicalName || t.title;
-      const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
+      let resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
+
+      // Fallback: se canonicalName (dn do magnet) nao revelou PT, tenta o title do scraper
+      // Ex: Comando poe "comando1.com" no dn, mas o titulo do post tem "Dublado/Dual"
+      if (!resultado.ehPortugues && t.canonicalName && t.title && t.canonicalName !== t.title) {
+        const resultadoTitle = this.titleFilter.verificarIdiomaDetalhado(t.title);
+        if (resultadoTitle.ehPortugues) {
+          resultado = resultadoTitle;
+        }
+      }
+
       const ehPt = resultado.ehPortugues;
 
       if (/liga da justi[cç]|ponto de igni[cç]|brasil|dublado(?!.*dual)/.test(nome.toLowerCase())) {

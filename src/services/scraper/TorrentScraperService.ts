@@ -137,7 +137,7 @@ export class TorrentScraperService {
             const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults, hdrResults] = await Promise.all([
                 indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise, hdrPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults, ...hdrResults);
+            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
