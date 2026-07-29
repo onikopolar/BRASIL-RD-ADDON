@@ -45,6 +45,7 @@ const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
 const tpbScraper_js_1 = require("./tpbScraper.js");
+const rargbScraper_js_1 = require("./rargbScraper.js");
 const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
@@ -86,10 +87,25 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapTpbResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            const [indexerResults, webResults, wpResults, tpbResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise
+            const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const rargbPromise = Promise.all([
+                (0, rargbScraper_js_1.searchRargb)(rargbQueryEn, type),
+                rargbQueryPt !== rargbQueryEn ? (0, rargbScraper_js_1.searchRargb)(rargbQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set();
+                const merged = [...en, ...pt].filter(t => {
+                    if (seen.has(t.infoHash))
+                        return false;
+                    seen.add(t.infoHash);
+                    return true;
+                });
+                return merged.map(r => this.mapRargbResult(r, type)).filter((r) => r !== null);
+            }).catch(() => []);
+            const [indexerResults, webResults, wpResults, tpbResults, rargbResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
@@ -319,6 +335,30 @@ class TorrentScraperService {
             season: season ?? undefined,
             lastUpdated: new Date(r.date || Date.now()),
             confidence: 0.8
+        };
+    }
+    mapRargbResult(r, type) {
+        if (!r.title || !r.magnet)
+            return null;
+        const quality = this.qualityDetector.extractQualityFromFilename(r.title);
+        if (!this.qualityDetector.isValidQuality(quality))
+            return null;
+        const season = this.extractSeasonNumber(r.title);
+        return {
+            title: this.cleanTitle(r.title),
+            magnet: r.magnet,
+            seeders: r.seeders,
+            leechers: r.leechers,
+            size: r.size || 'N/A',
+            quality,
+            provider: 'RARGB',
+            language: this.extractLanguage(r.title),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            sizeInBytes: this.calculateSizeInBytes(r.size),
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.75
         };
     }
     mapTpbResult(r, type) {

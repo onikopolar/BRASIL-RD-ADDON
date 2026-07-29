@@ -1,23 +1,15 @@
 import { TorboxService } from '../debrid/RealDebridService.js';
 import { CuratedMagnetService } from '../catalogo/CuratedMagnetService.js';
-import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { CacheService } from '../debrid/CacheService.js';
 import { Logger } from '../utils/logger.js';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index.js';
 import { Op } from 'sequelize';
 import { Torrent } from '../database/models.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
-import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
-import { TitleFilter } from '../titulos/titleFilter.js';
-import { StreamFormatter } from '../stream/streamFormatter.js';
 import { CatalogProvider } from '../catalogo/catalogProvider.js';
+import { StreamFormatter } from '../stream/streamFormatter.js';
 import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
 import { StreamStatusException } from './StreamStatusException.js';
-
-interface StreamProcessingConfig {
-  maxConcurrentTorrents: number;
-  delayBetweenTorrents: number;
-}
 
 interface DatabaseStreamResult {
   success: boolean;
@@ -30,24 +22,18 @@ export class StreamHandler {
   private static instance: StreamHandler;
   private readonly torboxService: TorboxService;
   private readonly magnetService: CuratedMagnetService;
-  private readonly autoMagnetService: AutoMagnetService;
   private readonly cacheService: CacheService;
   private readonly logger: Logger;
   private staticResponseService: StaticResponseService;
   private readonly qualityDetector: QualityDetector;
-  private readonly titleFilter: TitleFilter;
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
-
-  // Apenas evita scraping simultâneo para o mesmo conteúdo (sem cooldown)
-  private readonly inFlightScraping: Set<string> = new Set();
 
   // Estatísticas globais
   private stats = {
     totalRequests: 0,
     servedFromDatabase: 0,
     servedFromCatalog: 0,
-    servedFromScraping: 0,
     duplicatesRemoved: 0,
     servedInformativeStreams: 0
   };
@@ -55,12 +41,10 @@ export class StreamHandler {
   private constructor(baseUrl?: string) {
     this.torboxService = new TorboxService(baseUrl);
     this.magnetService = new CuratedMagnetService();
-    this.autoMagnetService = new AutoMagnetService();
     this.cacheService = new CacheService();
     this.logger = new Logger('StreamHandler');
     this.staticResponseService = new StaticResponseService(baseUrl);
     this.qualityDetector = QualityDetector.getInstance();
-    this.titleFilter = TitleFilter.getInstance();
     this.streamFormatter = StreamFormatter.getInstance();
     this.catalogProvider = new CatalogProvider(this.magnetService);
   }
@@ -148,28 +132,9 @@ export class StreamHandler {
         return { streams: this.deduplicateStreamsByInfoHash(catalogResult.streams) };
       }
 
-      const shouldScrape = await this.shouldAttemptScraping(request);
-      if (!shouldScrape) {
-        const informativeStream = this.createInformativeStreamIfNoContent(request);
-        return { streams: informativeStream ? [informativeStream] : [] };
-      }
-
-      try {
-        this.markScrapingStart(request);
-        const scrapedStreams = await this.performScrapingThroughCatalog(request);
-        const deduped = this.deduplicateStreamsByInfoHash(scrapedStreams);
-        if (deduped.length > 0) this.stats.servedFromScraping++;
-        return { streams: deduped };
-      } catch (error) {
-        if (error instanceof StreamStatusException) {
-          const informativeStream = this.createInformativeStreamFromException(error, requestId);
-          this.stats.servedInformativeStreams++;
-          return { streams: [informativeStream] };
-        }
-        throw error;
-      } finally {
-        this.markScrapingEnd(request);
-      }
+      // Sem streams no DB nem no catálogo → stream informativo
+      const informativeStream = this.createInformativeStreamIfNoContent(request);
+      return { streams: informativeStream ? [informativeStream] : [] };
     } catch (error) {
       this.logger.error('Falha no processamento', {
         requestId,
@@ -187,44 +152,6 @@ export class StreamHandler {
         requestId
       );
       return { streams: [this.convertToStreamFormat(errorStream)] };
-    }
-  }
-
-  private async performScrapingThroughCatalog(request: StreamRequest): Promise<Stream[]> {
-    try {
-      const imdbId = this.extractImdbIdFromRequest(request);
-      const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
-      let season: number | undefined;
-      let episode: number | undefined;
-
-      if (seasonMatch) {
-        season = parseInt(seasonMatch[1]);
-        episode = parseInt(seasonMatch[2]);
-      }
-
-      const catalogRequest = {
-        id: request.id,
-        type: request.type,
-        imdbId: imdbId,
-        apiKey: request.apiKey,
-        season: season,
-        episode: episode,
-        config: request.config || {
-          quality: 'Todas as Qualidades',
-          language: 'pt-BR',
-          streamType: 'direct',
-          maxResults: '25'
-        }
-      };
-
-      const streams = await this.catalogProvider.getStreamsFromCatalog(catalogRequest);
-      return streams;
-    } catch (error) {
-      this.logger.error('Erro no scraping via CatalogProvider', {
-        requestId: request.id,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
-      });
-      return [];
     }
   }
 
@@ -270,7 +197,7 @@ export class StreamHandler {
       if (!imdbId) return { success: false, streams: [], source: 'database', processingTime: Date.now() - startTime };
 
       // Query direta no Torrent (sem tabela File)
-      const where: any = { imdbId, seeders: { [Op.gte]: 5 } };
+      const where: any = { imdbId };
       if (request.type === 'series') {
         const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
         if (seasonMatch) where.imdbSeason = parseInt(seasonMatch[1]);
@@ -279,27 +206,13 @@ export class StreamHandler {
       const torrents = await Torrent.findAll({
         where,
         limit: request.type === 'movie' ? 20 : 30,
-        order: [['seeders', 'DESC']]
+        order: [['seeders', 'DESC']],
+        raw: true
       });
 
-      const validatedTorrents = await Promise.all(
-        torrents.map(async (t) => {
-          const titleValid = await this.validateDatabaseEntry(
-            t.title, imdbId, request.type, t.imdbSeason
-          );
-          if (!titleValid) {
-            this.logger.warn('Entrada do banco rejeitada por titulo', {
-              imdbId, dbTitle: t.title?.substring(0, 60)
-            });
-            return null;
-          }
-          return t;
-        })
-      );
-
+      // Converte direto — validação já foi feita no save (SimilarityCalculator)
       const streams: Stream[] = [];
-      for (const t of validatedTorrents) {
-        if (!t) continue;
+      for (const t of torrents) {
         const stream = await this.convertTorrentToStream(t, request);
         if (stream) streams.push(stream);
       }
@@ -314,31 +227,9 @@ export class StreamHandler {
     }
   }
 
-  /**
-   * Validacao de seguranca: verifica se o titulo do torrent realmente
-   * pertence ao IMDB solicitado.
-   */
-  private async validateDatabaseEntry(
-    torrentTitle: string,
-    imdbId: string,
-    type: string,
-    season?: number
-  ): Promise<boolean> {
-    try {
-      const match = await this.titleFilter.titulosCombinam(
-        torrentTitle, imdbId, season, undefined
-      );
-      return match.matches;
-    } catch {
-      return true;
-    }
-  }
-
   private async convertTorrentToStream(torrent: any, request: StreamRequest): Promise<Stream | null> {
     try {
-      const magnetHash = torrent.infoHash;
       const quality = torrent.qualidade || this.qualityDetector.extractQualityFromFilename(torrent.title);
-      const magnetLink = `magnet:?xt=urn:btih:${magnetHash}`;
 
       let season: number | undefined;
       let episode: number | undefined;
@@ -351,22 +242,26 @@ export class StreamHandler {
         }
       }
 
-      const stream: Stream = {
-        title: torrent.title,
-        name: `Brasil RD (${quality})`,
-        description: `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'}`,
-        sources: [magnetLink],
-        behaviorHints: { notWebReady: false, bingeGroup: `br-db-${request.id}` },
-        status: 'available',
-        infoHash: magnetHash,
-        magnet: magnetLink,
-        url: await gerarUrlResolve(
-          magnetLink, request.apiKey!, 'video.mkv', 0,
-          request.type, season, episode
-        )
+      // Prepara objeto torrent com magnet (StreamFormatter precisa)
+      const torrentWithMagnet = {
+        ...torrent,
+        magnet: `magnet:?xt=urn:btih:${torrent.infoHash}`,
+        magnet_link: `magnet:?xt=urn:btih:${torrent.infoHash}`,
       };
 
-      return stream;
+      // Delega ao StreamFormatter (formato Torrentio com emojis, compatível com Stremio)
+      const streams = await this.streamFormatter.createMultipleQualityStreams(
+        torrentWithMagnet,
+        request,
+        null, // sem directLink (vai gerar URL de resolve)
+        request.type,
+        season,
+        episode,
+        false, // isAvailableOnRD
+        0     // fileIdx
+      );
+
+      return streams[0] || null;
     } catch (error) {
       this.logger.error('Erro ao converter torrent para stream', {
         error: error instanceof Error ? error.message : 'Erro desconhecido'
@@ -383,37 +278,6 @@ export class StreamHandler {
     } catch (error) {
       return { success: false, streams: [], source: 'catalog', processingTime: Date.now() - startTime };
     }
-  }
-
-  /**
-   * Permite scraping SEMPRE, a menos que já exista um scraping em andamento
-   * para o mesmo conteúdo (evita requisições simultâneas duplicadas).
-   */
-  private async shouldAttemptScraping(request: StreamRequest): Promise<boolean> {
-    const imdbId = this.extractImdbIdFromRequest(request);
-    const requestKey = `${imdbId || request.id}:${request.type}`;
-
-    // Se já tem scraping em andamento, não inicia outro
-    if (this.inFlightScraping.has(requestKey)) {
-      this.logger.debug(' Scraping já em andamento, aguardando...', { requestKey });
-      return false;
-    }
-
-    return true;
-  }
-
-  /** Marca início do scraping para evitar duplicação simultânea */
-  private markScrapingStart(request: StreamRequest): void {
-    const imdbId = this.extractImdbIdFromRequest(request);
-    const requestKey = `${imdbId || request.id}:${request.type}`;
-    this.inFlightScraping.add(requestKey);
-  }
-
-  /** Marca fim do scraping (sucesso ou falha) */
-  private markScrapingEnd(request: StreamRequest): void {
-    const imdbId = this.extractImdbIdFromRequest(request);
-    const requestKey = `${imdbId || request.id}:${request.type}`;
-    this.inFlightScraping.delete(requestKey);
   }
 
   private extractImdbIdFromRequest(request: StreamRequest): string | null {
@@ -435,7 +299,6 @@ export class StreamHandler {
 
   public clearCache(): void {
     this.cacheService.clear();
-    this.inFlightScraping.clear();
     this.catalogProvider.clearTmdbCache();
   }
 
@@ -453,10 +316,8 @@ export class StreamHandler {
       totalRequests: this.stats.totalRequests,
       servedFromDatabase: this.stats.servedFromDatabase,
       servedFromCatalog: this.stats.servedFromCatalog,
-      servedFromScraping: this.stats.servedFromScraping,
       servedInformativeStreams: this.stats.servedInformativeStreams,
-      duplicatesRemoved: this.stats.duplicatesRemoved,
-      inFlightScraping: this.inFlightScraping.size
+      duplicatesRemoved: this.stats.duplicatesRemoved
     };
   }
 }

@@ -220,59 +220,17 @@ export const INDICADORES_BRASIL_TORRENTS = [
   // PT-BR codes
   'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br',
   // Portugues
-  'portugues', 'português', 'portuguese',
+  'portugues', 'português', 'portuguese', 'PORTUGUESE', 'Episodio', 'episodio',
   // Brasileiro
   'brasileiro', 'brazilian', 'brasil',
   // Audio (aparece em titulos BR tipo "Dual Audio")
   'áudio', 'audio',
+  // Abreviacoes comuns em releases (ex: ITA.POR.SUBS)
+  'por', 'pb',
 ];
 
 /** Palavras que indicam que um torrent eh internacional / nao-PT-BR */
 export const INDICADORES_INTERNACIONAL_TORRENTS = [
-  // Ingles (EN)
-  'eng', 'english', 'ingles',
-  // Espanhol (ES)
-  'spa', 'spanish', 'espanol', 'latino', 'latin', 'castellano', 'esp',
-  // Frances (FR)
-  'fra', 'fre', 'french', 'francais', 'francês', 'vff', 'vfi', 'vfq', 'vostfr', 'vf',
-  // Alemao (DE)
-  'ger', 'deu', 'german', 'deutsch', 'alemão', 'omu',
-  // Italiano (IT)
-  'ita', 'italian', 'italiano',
-  // Japones (JA)
-  'jpn', 'japanese', 'japonês', 'jap',
-  // Chines (ZH)
-  'chi', 'zho', 'chinese', 'chinês', 'mandarim', 'mandarin', 'cantones',
-  // Coreano (KO)
-  'kor', 'korean', 'coreano',
-  // Russo (RU)
-  'rus', 'russian', 'russo',
-  // Arabe (AR)
-  'ara', 'arabic', 'arabe',
-  // Hindi (HI)
-  'hin', 'hindi', 'indian',
-  // Turco (TR)
-  'tur', 'turkish',
-  // Holandes (NL)
-  'dut', 'nld', 'dutch', 'holandes',
-  // Polones (PL)
-  'pol', 'polish', 'polones',
-  // Sueco (SV)
-  'swe', 'swedish', 'sueco',
-  // Dinamarques (DA)
-  'dan', 'danish', 'dinamarques',
-  // Finlandes (FI)
-  'fin', 'finnish', 'finlandes',
-  // Noruegues (NO)
-  'nor', 'norwegian', 'noruegues',
-  // Tailandes (TH)
-  'tha', 'thai',
-  // Hungaro (HU)
-  'hun', 'hungarian', 'hungaro',
-  // Multi / internacional (generico)
-  'multi', 'multilanguage', 'multiaudio', 'multisub',
-  'tri', 'triaudio', 'trilanguage',
-  'internacional', 'international', 'int',
   // VO / OV (version original)
   'vo', 'ov',
   // Abreviacoes comuns de fansub

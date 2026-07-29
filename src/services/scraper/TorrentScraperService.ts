@@ -7,6 +7,7 @@ import { QualityDetector } from '../../lib/qualityDetector.js';
 import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { searchTpb } from './tpbScraper.js';
+import { searchRargb } from './rargbScraper.js';
 import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
 
 const logger = new Logger('TorrentScraperService');
@@ -70,10 +71,26 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapTpbResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            const [indexerResults, webResults, wpResults, tpbResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise
+            // RARGB: busca em inglês E português (mesmo padrão do TPB)
+            const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const rargbPromise = Promise.all([
+                searchRargb(rargbQueryEn, type),
+                rargbQueryPt !== rargbQueryEn ? searchRargb(rargbQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set<string>();
+                const merged = [...en, ...pt].filter(t => {
+                  if (seen.has(t.infoHash)) return false;
+                  seen.add(t.infoHash);
+                  return true;
+                });
+                return merged.map(r => this.mapRargbResult(r, type)).filter((r): r is TorrentResult => r !== null);
+            }).catch(() => [] as TorrentResult[]);
+
+            const [indexerResults, webResults, wpResults, tpbResults, rargbResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
@@ -317,6 +334,29 @@ export class TorrentScraperService {
             season: season ?? undefined,
             lastUpdated: new Date(r.date || Date.now()),
             confidence: 0.8
+        };
+    }
+
+    private mapRargbResult(r: { title: string; magnet: string; seeders: number; leechers: number; size: string; infoHash: string }, type: 'movie' | 'series'): TorrentResult | null {
+        if (!r.title || !r.magnet) return null;
+        const quality = this.qualityDetector.extractQualityFromFilename(r.title);
+        if (!this.qualityDetector.isValidQuality(quality)) return null;
+        const season = this.extractSeasonNumber(r.title);
+        return {
+            title: this.cleanTitle(r.title),
+            magnet: r.magnet,
+            seeders: r.seeders,
+            leechers: r.leechers,
+            size: r.size || 'N/A',
+            quality,
+            provider: 'RARGB',
+            language: this.extractLanguage(r.title),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            sizeInBytes: this.calculateSizeInBytes(r.size),
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.75
         };
     }
 
