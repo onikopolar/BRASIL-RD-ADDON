@@ -58,6 +58,8 @@ Torrent.init({
     type: { type: sequelize_1.DataTypes.STRING(10) },
     imdbId: { type: sequelize_1.DataTypes.STRING(32) },
     imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
+    imdbEpisodeStart: { type: sequelize_1.DataTypes.INTEGER },
+    imdbEpisodeEnd: { type: sequelize_1.DataTypes.INTEGER },
     seeders: { type: sequelize_1.DataTypes.INTEGER },
     idioma: { type: sequelize_1.DataTypes.STRING(50) },
     qualidade: { type: sequelize_1.DataTypes.STRING(10) },

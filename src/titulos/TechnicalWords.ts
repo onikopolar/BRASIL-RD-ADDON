@@ -370,9 +370,13 @@ export function getPotentialSequelNumbers(title: string): number[] {
   }
 
   // Filtra: mantem só os que NAO estao em contexto tecnico
+  const episodeRange = extrairRangeEpisodios(title);
   const result: number[] = [];
   for (const num of candidates) {
-    if (!_isInTechnicalContext(lower, num, allTokens)) {
+    // Dentro do range de episódios → não é número de sequência
+    if (episodeRange && num >= episodeRange.episodeStart && num <= episodeRange.episodeEnd) continue;
+    if (!_isInTechnicalContext(lower, num, allTokens) &&
+        !_isAudioChannelInOriginal(title, num)) {
       result.push(num);
     }
   }
@@ -419,9 +423,201 @@ function _isInTechnicalContext(
     if (Number(m[1]) === num) return true;
   }
 
+  // e) Audio channel dentro de spec no título ORIGINAL (antes de normalizar dots)
+  //    Ex: "DUAL.5.1" → "5" e "1" são canais. Mas "Velozes 5 DUAL" → "5" é sequência.
+  //    Busca o número em patterns como .5.1, .7.1ch, -5.1, etc no título com dots originais
+  //    Passamos o título original como parâmetro extra
+  
+  return false;
+}
+
+/** 
+ * Verifica se um número está em contexto de spec de áudio no título ORIGINAL.
+ * Chamada externamente por getPotentialSequelNumbers com o título antes da normalização.
+ */
+function _isAudioChannelInOriginal(originalTitle: string, num: number): boolean {
+  const numStr = String(num);
+  // Patterns de spec de áudio no título original (com dots):
+  //   "5.1", "7.1ch", "2.0" → spec completo (dois números)
+  //   ".5.", "-5.", " 5."  → número isolado entre delimitadores de spec
+  const audioSpecRe = /[.\-(\s](\d+)\s*\.\s*(\d+)\s*(?:ch)?/gi;
+  let m;
+  while ((m = audioSpecRe.exec(originalTitle)) !== null) {
+    if (parseInt(m[1]) === num || parseInt(m[2]) === num) return true;
+  }
+  // Spec incompleto: número entre dots/delimitadores perto de palavra de audio
+  // Ex: "DUAL.5." → "5" é canal mesmo sem o ".1"
+  const incompleteSpecRe = /(?:dual|audio|dublado|dolby|ac3|aac|dts|eac3|ddp?|ch|channel)\s*[.\-]\s*(\d+)\s*[.\-]/gi;
+  while ((m = incompleteSpecRe.exec(originalTitle)) !== null) {
+    if (parseInt(m[1]) === num) return true;
+  }
   return false;
 }
 
 // Log de atualizacao da versao
 console.log('[INFO] [TechnicalWords] Versao 1.2.0 carregada - Deteccao de sequencia delegada');
+
+// ═══════════════════════════════════════════════════════════════════════
+//  EXTRAIR RANGE DE EPISÓDIOS — para filtro no banco de dados
+// ═══════════════════════════════════════════════════════════════════════
+
+export interface EpisodeRange {
+  season: number;
+  episodeStart: number;
+  episodeEnd: number;
+}
+
+/**
+ * Extrai o range de episódios de um título de torrent.
+ * 
+ * Padrões suportados:
+ *   S02E04              → season=2, start=4, end=4
+ *   S02E01-02-03        → season=2, start=1, end=3
+ *   S02E01-10           → season=2, start=1, end=10
+ *   S02E01 E02 E03      → season=2, start=1, end=3
+ *   2x04                → season=2, start=4, end=4
+ *   Season 2 Episode 4  → season=2, start=4, end=4
+ *   2ª Temporada Ep 4   → season=2, start=4, end=4
+ * 
+ * Retorna null para:
+ *   - Packs completos (1ª Temporada Completa, Complete Season, Season Pack)
+ *   - Títulos sem informação de episódio
+ *   - Filmes
+ */
+export function extrairRangeEpisodios(title: string): EpisodeRange | null {
+  const t = title
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .trim();
+
+  // ═══ Packs completos — retorna null (temporada inteira) ═══
+  const isFullSeason = /\b(?:temporada\s*completa|season\s*pack|complete\s*season|complete\s*pack|pack\s*completo)\b/i;
+  if (isFullSeason.test(t)) return null;
+
+  // ═══ Padrão 1: SxxExx (S02E04, S02E01-02-03, S02E01-10) ═══
+  // Captura season e PRIMEIRO episódio, depois varre por todos os números de episódio
+  const sxxExx = t.match(/s(\d{1,2})\s*e(\d{1,3})/i);
+  if (sxxExx) {
+    const season = parseInt(sxxExx[1]);
+    const firstEp = parseInt(sxxExx[2]);
+
+    // Pega a parte DEPOIS do match SxxExx para extrair ranges tipo -02-03, -10
+    const afterMatch = t.substring(sxxExx.index! + sxxExx[0].length);
+
+    // Extrai episódios adicionais em formato de range: -02, -03, E04, E05
+    // Só captura números que estão claramente em posição de episódio:
+    //   "-02" (hífen + número), " 03" após hífen anterior, "E04" (E + número)
+    const epNums: number[] = [firstEp];
+    
+    // Range com hífen: S02E01-02-03 → captura -02, -03
+    const hyphenRange = afterMatch.match(/-(\d{1,3})\b/g);
+    if (hyphenRange) {
+      hyphenRange.forEach(h => epNums.push(parseInt(h.replace('-', ''))));
+    }
+    
+    // Range com vírgula ou espaço após hífen: S02E01-02,03 ou S02E01-02 03
+    const commaRange = afterMatch.match(/(?:-|\s)\d{1,3}\s*[,]\s*(\d{1,3})\b/g);
+    if (commaRange) {
+      commaRange.forEach(c => {
+        const n = c.match(/(\d{1,3})\s*$/);
+        if (n) epNums.push(parseInt(n[1]));
+      });
+    }
+    
+    // Episódios explícitos E02, E03 — podem ser adjacentes (E01E02E03)
+    const explicitEps = afterMatch.match(/e(\d{1,3})(?=\s|$|\.|e|E|-)/gi);
+    if (explicitEps) {
+      explicitEps.forEach(e => epNums.push(parseInt(e.replace(/e/i, '').match(/\d+/)?.[0] || '0')));
+    }
+
+    epNums.sort((a, b) => a - b);
+    // Dedup
+    const unique = [...new Set(epNums)];
+    return {
+      season,
+      episodeStart: unique[0],
+      episodeEnd: unique[unique.length - 1],
+    };
+  }
+
+  // ═══ Padrão 2: 2x04 (Season x Episode) ═══
+  const seasonXEp = t.match(/\b(\d{1,2})x(\d{1,3})\b/i);
+  if (seasonXEp) {
+    return {
+      season: parseInt(seasonXEp[1]),
+      episodeStart: parseInt(seasonXEp[2]),
+      episodeEnd: parseInt(seasonXEp[2]),
+    };
+  }
+
+  // ═══ Padrão 3: Season 2 Episode 4, Temporada 2 Episódio 4 ═══
+  const seasonEpText = t.match(/\b(?:season|temporada)\s*(\d{1,2})\s*(?:episode|epis[oó]dio|ep|e)\s*(\d{1,3})\b/i);
+  if (seasonEpText) {
+    return {
+      season: parseInt(seasonEpText[1]),
+      episodeStart: parseInt(seasonEpText[2]),
+      episodeEnd: parseInt(seasonEpText[2]),
+    };
+  }
+
+  return null;
+}
 console.log('[DEBUG] [TechnicalWords] Iniciada verificação de grupos internacionais/brasileiros');
+
+// ═══════════════════════════════════════════════════════════════════════
+//  NORMALIZAÇÃO DE TÍTULOS — remove SÓ palavras técnicas
+//  Deixa temporada/episódio para outros métodos lidarem com regex próprio
+// ═══════════════════════════════════════════════════════════════════════
+
+/** Palavras puramente técnicas que devem ser removidas na normalização */
+const TECHNICAL_STRIP_WORDS = new Set([
+  // Extensões
+  'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv', 'rmvb', 'm2ts', 'ts', 'm4v', 'vob', 'ogv', '3gp',
+  // Qualidades
+  '720p', '1080p', '2160p', '4k', '480p', '360p', 'sd', 'hd', 'fhd', 'uhd', 'hdr', 'fullhd', '8k', '2k',
+  // Codecs vídeo
+  'x264', 'x265', 'h264', 'h265', 'avc', 'hevc', 'xvid', 'divx', 'vp9', 'av1',
+  // Codecs áudio
+  'ac3', 'aac', 'dts', 'eac3', 'mp3', 'ogg', 'opus', 'flac', 'truehd', 'atmos', 'dtshd', 'dts-hd',
+  // Fontes
+  'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'remux', 'web', 'dl', 'bd', 'dvd',
+  // Áudio canais (5.1, 7.1, etc — o regex também pega)
+  '5.1', '7.1', '2.0', '2ch', '6ch', '5.1ch', '7.1ch',
+  // Grupos release comuns (ruído visual)
+  'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'tpb',
+]);
+
+// Regex de qualidade/codec (padrões que não são palavras isoladas)
+const TECHNICAL_STRIP_REGEX = [
+  /\b\d{3,4}[pi]\b/gi,          // 1080p, 720p, 2160p, 480p
+  /\b\d+k\b/gi,                 // 4K, 8K
+  /\b[hx]\d{3}\b/gi,            // x264, h265
+  /\b\d+\.\d+(?:ch)?\b/gi,      // 5.1, 2.0ch
+  /\b(?:19|20)\d{2}\b/g,        // anos (deixa pra validarAno)
+];
+
+/**
+ * Normaliza título de torrent removendo SÓ palavras técnicas.
+ * NÃO remove SxxExx, temporada, episódio — isso é responsabilidade
+ * de outros métodos (extrairRangeEpisodios, validarTemporada, etc).
+ */
+export function normalizarTituloTorrent(title: string): string {
+  let result = title
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  // Remove palavras técnicas
+  const words = result.split(' ');
+  const filtered = words.filter(w => !TECHNICAL_STRIP_WORDS.has(w));
+  result = filtered.join(' ');
+
+  // Remove padrões regex (qualidade, codec, ano — mas NÃO SxxExx)
+  for (const re of TECHNICAL_STRIP_REGEX) {
+    result = result.replace(re, ' ').replace(/\s+/g, ' ').trim();
+  }
+
+  return result;
+}

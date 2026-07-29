@@ -63,6 +63,8 @@ interface TorrentAttributes {
   type: string;
   imdbId?: string;
   imdbSeason?: number;
+  imdbEpisodeStart?: number;
+  imdbEpisodeEnd?: number;
   seeders?: number;
   idioma?: string;
   qualidade?: string;
@@ -78,6 +80,8 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public type!: string;
   public imdbId?: string;
   public imdbSeason?: number;
+  public imdbEpisodeStart?: number;
+  public imdbEpisodeEnd?: number;
   public seeders?: number;
   public idioma?: string;
   public qualidade?: string;
@@ -94,6 +98,8 @@ Torrent.init(
     type:       { type: DataTypes.STRING(10) },
     imdbId:     { type: DataTypes.STRING(32) },
     imdbSeason: { type: DataTypes.INTEGER },
+    imdbEpisodeStart: { type: DataTypes.INTEGER },
+    imdbEpisodeEnd:   { type: DataTypes.INTEGER },
     seeders:    { type: DataTypes.INTEGER },
     idioma:     { type: DataTypes.STRING(50) },
     qualidade:  { type: DataTypes.STRING(10) },

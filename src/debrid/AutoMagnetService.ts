@@ -6,6 +6,7 @@ import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../titulos/titleF
 import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
+import { extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -465,6 +466,9 @@ export class AutoMagnetService {
       }
 
       if (!existingTorrent) {
+        // Extrai range de episódios do título (ex: S02E01-03 → start=1, end=3)
+        const episodeRange = extrairRangeEpisodios(magnetData.title);
+        
         await createTorrent({
           infoHash: magnetHash,
           provider: provider,
@@ -473,6 +477,8 @@ export class AutoMagnetService {
           type: magnetData.category === 'serie' ? 'series' : 'movie',
           imdbId: magnetData.imdbId || null,
           imdbSeason: magnetData.imdbSeason || null,
+          imdbEpisodeStart: episodeRange?.episodeStart ?? null,
+          imdbEpisodeEnd: episodeRange?.episodeEnd ?? null,
           seeders: magnetData.seeds || 0,
           idioma: magnetData.language,
           qualidade: magnetData.quality,
