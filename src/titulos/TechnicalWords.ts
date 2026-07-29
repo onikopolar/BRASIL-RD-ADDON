@@ -588,16 +588,19 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'comando1', 'tpb', 'starck', 'starckfilmes',
   // Grupos release encontrados nos scrapers
   'btm', 'sujaidr', 'xebec', 'douglasvip', 'deejayahmed', 'jeremiah', 'leroy', 'pitt',
-  'ethel', 'coyote', 'reenc', 'psa',
+  'ethel', 'coyote', 'reenc', 'psa', 'mang0', 'rdnyb', 'grace', 'bone', 'syncup', 'pong',
   // Domínios/URLs que poluem o dn do magnet
   'www', 'com', 'org', 'net', 'tv', 'xyz', 'info', 'io', 'to', 'cc',
+  'hidratorrents', 'hdr',
+  // Códigos de idioma em releases multi (ex: ESP-ENG, ITA, FRE)
+  'esp', 'eng', 'ita', 'fre', 'ger', 'jpn', 'kor', 'rus', 'por',
   // Tags de sites WordPress (Listão Filmes, etc)
   'download', 'listao', 'filmes', 'terror', 'acao', 'aventura', 'drama', 'comedia', 'guerra',
   'classicos', 'acesse', 'original',
   // Metadados de temporada
   'temporada', 'completa', 'season', 'complete', 'parts', 
   // Codecs e variantes
-  '10bit', '10bits', 'hdr10p', 'dd', 'ddp', 'ddp5', 'sdr', 'blu', 'extras',
+  '10bit', '10bits', 'hdr10', 'hdr10p', 'dd', 'ddp', 'ddp5', 'sdr', 'blu', 'extras',
   'remastered', '3d',
   // Spam de sites nos DNs de magnet
   'site', 'visite', 'www',
