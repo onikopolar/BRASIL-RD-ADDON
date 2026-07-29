@@ -82,7 +82,8 @@ export class AutoMagnetService {
     size?: string,
     imdbSeason?: number,
     imdbEpisode?: number | null,
-    infoHash?: string // cacheado do parse-torrent (evita re-parse)
+    infoHash?: string, // cacheado do parse-torrent (evita re-parse)
+    provider?: string  // fonte original do scraper (BLUDV, RARGB, TPB...)
   ): Promise<AutoMagnetResult> {
     const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
     
@@ -210,7 +211,7 @@ export class AutoMagnetService {
         matchedLanguage: titleMatchResult.matchedLanguage
       };
 
-      const saved = await this.saveToDatabaseOptimized(magnetData, imdbTitles, allQualities, titleMatchResult, infoHash);
+      const saved = await this.saveToDatabaseOptimized(magnetData, imdbTitles, allQualities, titleMatchResult, infoHash, provider);
 
       if (saved) {
         let validationMessage = 'Título validado';
@@ -431,7 +432,8 @@ export class AutoMagnetService {
     imdbTitles: ImdbTitles, 
     allQualities: string[] = [],
     titleMatchResult: TitleMatchResult,
-    infoHash?: string // cacheado do parse-torrent
+    infoHash?: string, // cacheado do parse-torrent
+    provider?: string  // fonte original do scraper
   ): Promise<boolean> {
     try {
       // Usa infoHash cacheado do parse-torrent, evita re-parse
@@ -465,7 +467,7 @@ export class AutoMagnetService {
       if (!existingTorrent) {
         await createTorrent({
           infoHash: magnetHash,
-          provider: 'brasil-rd',
+          provider: provider,
           title: magnetData.title,
           size: this.parseSizeToBytes(magnetData.size) || 0,
           type: magnetData.category === 'serie' ? 'series' : 'movie',

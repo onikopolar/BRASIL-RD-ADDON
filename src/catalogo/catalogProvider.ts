@@ -337,7 +337,7 @@ export class CatalogProvider {
           await this.autoMagnetService.autoAddMagnet(
             torrent.magnet, torrent.canonicalName || torrent.title, imdbId, request.type,
             torrent.seeders, torrent.quality, torrent.size, season, episodeValue,
-            torrent.magnetInfoHash
+            torrent.magnetInfoHash, torrent.provider
           );
         } catch (error) {
           this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });
