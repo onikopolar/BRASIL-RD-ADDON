@@ -8,6 +8,7 @@ import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { searchTpb } from './tpbScraper.js';
 import { searchRargb } from './rargbScraper.js';
+import { searchStarck } from './starckScraper.js';
 import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
 
 const logger = new Logger('TorrentScraperService');
@@ -87,10 +88,26 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapRargbResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            const [indexerResults, webResults, wpResults, tpbResults, rargbResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise
+            // Starck Oficial: busca em inglês E português (HTML scraper, não WordPress API)
+            const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const starckPromise = Promise.all([
+                searchStarck(starckQueryEn, type),
+                starckQueryPt !== starckQueryEn ? searchStarck(starckQueryPt, type) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set<string>();
+                const merged = [...en, ...pt].filter(t => {
+                  if (seen.has(t.infoHash)) return false;
+                  seen.add(t.infoHash);
+                  return true;
+                });
+                return merged.map(r => this.mapStarckResult(r, type)).filter((r): r is TorrentResult => r !== null);
+            }).catch(() => [] as TorrentResult[]);
+
+            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults] = await Promise.all([
+                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise
             ]);
-            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults);
+            allResults.push(...indexerResults, ...webResults, ...wpResults, ...tpbResults, ...rargbResults, ...starckResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
@@ -357,6 +374,29 @@ export class TorrentScraperService {
             season: season ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.75
+        };
+    }
+
+    private mapStarckResult(r: { title: string; magnet: string; infoHash: string; size: string }, type: 'movie' | 'series'): TorrentResult | null {
+        if (!r.title || !r.magnet) return null;
+        const quality = this.qualityDetector.extractQualityFromFilename(r.title);
+        if (!this.qualityDetector.isValidQuality(quality)) return null;
+        const season = this.extractSeasonNumber(r.title);
+        return {
+            title: this.cleanTitle(r.title),
+            magnet: r.magnet,
+            seeders: 0,
+            leechers: 0,
+            size: r.size || 'N/A',
+            quality,
+            provider: 'Starck',
+            language: this.extractLanguage(r.title),
+            type,
+            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            sizeInBytes: this.calculateSizeInBytes(r.size),
+            season: season ?? undefined,
+            lastUpdated: new Date(),
+            confidence: 0.70
         };
     }
 

@@ -87,10 +87,10 @@ const WP_SITES: WordPressSite[] = [
     timeout: 15000,
   },
   {
-    name: 'Starck Filmes',
-    baseUrl: 'https://www.starckfilmes-v23.com',
-    priority: 7,
-    timeout: 20000,
+    name: 'Starck Oficial',
+    baseUrl: 'https://www.starck-oficial.com',
+    priority: 9,
+    timeout: 15000,
   },
 ];
 

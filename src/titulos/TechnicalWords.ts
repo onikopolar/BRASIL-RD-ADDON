@@ -223,8 +223,6 @@ export const INDICADORES_BRASIL_TORRENTS = [
   'portugues', 'português', 'portuguese', 'PORTUGUESE', 'Episodio', 'episodio',
   // Brasileiro
   'brasileiro', 'brazilian', 'brasil',
-  // Audio (aparece em titulos BR tipo "Dual Audio")
-  'áudio', 'audio',
   // Abreviacoes comuns em releases (ex: ITA.POR.SUBS)
   'por', 'pb',
 ];

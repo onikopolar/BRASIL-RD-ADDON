@@ -7,6 +7,7 @@ import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
+import { LanguageDetector } from '../titulos/LanguageDetector.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -419,13 +420,24 @@ export class AutoMagnetService {
   private detectLanguage(title: string): string {
     const lowerTitle = title.toLowerCase();
 
-    if (lowerTitle.includes('dual')) return 'pt-BR,en';
-    if (lowerTitle.includes('dublado')) return 'pt-BR';
-    if (lowerTitle.includes('legendado')) return 'pt';
-    if (lowerTitle.includes('english') || lowerTitle.includes('eng')) return 'en';
-    if (lowerTitle.includes('español') || lowerTitle.includes('spanish')) return 'es';
+    // Indicadores fortes de PT-BR
+    if (lowerTitle.includes('dublado') || lowerTitle.includes('dublada') || lowerTitle.includes('dublagem')) return 'pt-BR';
+    if (lowerTitle.includes('dual audio') || lowerTitle.includes('dual áudio')) return 'pt-BR,en';
+    if (lowerTitle.includes('legendado') || lowerTitle.includes('legendada')) return 'pt-BR';
+    if (lowerTitle.includes('nacional')) return 'pt-BR';
 
-    return 'pt-BR';
+    // Indicadores fortes de EN
+    if (/\b(english|eng)\b/i.test(lowerTitle)) return 'en';
+    if (/\b(español|spanish|espanol)\b/i.test(lowerTitle)) return 'es';
+    if (/\b(french|francês|frances)\b/i.test(lowerTitle)) return 'fr';
+
+    // Nenhum indicador claro → delega ao LanguageDetector
+    const langResult = LanguageDetector.getInstance().verificarIdioma(title);
+    if (langResult.palavrasPt.length > 0) return 'pt-BR';
+    if (langResult.palavrasEn.length > 0) return 'en';
+
+    // Sem indicadores → desconhecido (streamFormatter vai mostrar como PT-BR por default)
+    return 'unknown';
   }
 
   private async saveToDatabaseOptimized(
