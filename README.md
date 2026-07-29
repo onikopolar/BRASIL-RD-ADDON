@@ -1,58 +1,69 @@
-# Brasil RD Addon
+<p align="center">
+  <br>
+  <img src="https://img.shields.io/badge/Stremio-Addon-blueviolet?style=for-the-badge" alt="Stremio Addon">
+  <img src="https://img.shields.io/badge/Torbox-Debrid-orange?style=for-the-badge" alt="Torbox Debrid">
+  <img src="https://img.shields.io/badge/TypeScript-Ready-3178c6?style=for-the-badge&logo=typescript" alt="TypeScript">
+  <br><br>
+  <b>Addon para Stremio com foco em conteudo brasileiro via Debrid.</b>
+</p>
 
-Addon para Stremio com foco em conteúdo brasileiro via Real-Debrid.
+---
 
-## O Problema que eu Percebi
+> **O Problema que eu Percebi**
+>
+> A comunidade brasileira enfrenta uma carencia gritante de conteudo dublado em varios addons que existem atualmente, ficamos a merce deles, muitas vezes sao addons gringos. Enquanto isso, servicos de streaming tradicionais nos submetem a triste realidade: multiplas assinaturas carissimas, catalogos fragmentados e a indignidade de ainda incluir anuncios em servicos pagos.
+>
+> Esta situacao e completamente inaceitavel nos dias atuais e representa uma opressao financeira prejudicial ao povo brasileiro.
 
-A comunidade brasileira enfrenta uma carência gritante de conteúdo dublado em vários addons que existem atualmente, ficamos a mercê deles, muitas vezes são addons gringos. Enquanto isso, serviços de streaming tradicionais nos submetem a uma realidade absurda: múltiplas assinaturas caríssimas, catálogos fragmentados e a indignidade de ainda incluir anúncios em serviços pagos.
+---
 
-Esta situação é completamente inacreditável nos dias atuais e representa uma opressão financeira prejudicial ao povo brasileiro.
+## A Minha Solucao
 
-## A Minha Solução
+### Torbox: Um servico debrid atual melhor do que torrents P2P comuns.
 
-### Real-Debrid: Melhor alternativa do P2P original
+Por apenas 13 reais mensais, voce acessa um servico que substitui com vantagem quatro ou mais servicos de streaming que custariam quase 60 reais cada. O Torbox oferece:
 
-Por apenas 25 reais mensais, você acessa um serviço que substitui com vantagem quatro ou mais serviços de streaming que custariam quase 60 reais cada. O Real-Debrid oferece:
+| Beneficio       | Descricao                                                     |
+|-----------------|---------------------------------------------------------------|
+| Velocidade      | Servidores otimizados para entrega rapida de conteudo         |
+| Seguranca       | Protecao durante o acesso aos conteudos                       |
+| Confiabilidade  | Uptime garantido e suporte tecnico especializado              |
+| Custo-beneficio | Um unico valor acessivel substituindo multiplas assinaturas   |
 
-- **Velocidade superior**: Servidores otimizados para entrega rápida de conteúdo
-- **Segurança**: Proteção durante o acesso aos conteúdos
-- **Confiabilidade**: Uptime garantido e suporte técnico especializado
-- **Custo-benefício**: Um único valor acessível substituindo múltiplas assinaturas
+---
 
-### Foco no Conteúdo Brasileiro
+### Foco no Conteudo Brasileiro
 
 Diferente de outros addons como Torrentio e seus derivados, eu priorizo:
 
-- **Provedores nacionais**: BLUDV, COMANDO e STARCK FILMES
-- **Conteúdo dublado e legendado**: Prioridade absoluta no áudio em português
-- **Dual audio**: Opção de alternar para áudio original quando desejado
-- **Qualidade garantida**: Curadoria cuidadosa de cada magnet link, verificado e aprovado por mim.
+| Prioridade                  | Detalhe                                                                |
+|-----------------------------|------------------------------------------------------------------------|
+| Provedores nacionais        | BLUDV, COMANDO e entre outros.                                         |
+| Conteudo dublado/legendado  | Prioridade absoluta no audio em portugues                              |
+| Dual audio                  | Opcao de alternar para audio original quando desejado                  |
+| Qualidade garantida         | Curadoria cuidadosa de cada magnet link, verificado e aprovado por mim. |
 
-## Características Técnicas
+---
 
-- Integração completa com Real-Debrid
-- Magnet links curados e revisados pessoalmente
-- Sistema de cache inteligente para performance
-- Desenvolvido em TypeScript com tipagem forte
-- Logging profissional para diagnóstico
-- Testes automatizados
-- Configuração por ambiente
-- Interface web para configuração simplificada
+## Caracteristicas Tecnicas
 
-## Configuração Rápida
+| Recurso                        | Descricao                                            |
+|--------------------------------|------------------------------------------------------|
+| Integracao Torbox              | Completa com suporte a Debrid                        |
+| Cache inteligente              | Performance otimizada com sistema de cache           |
+| TypeScript                     | Tipagem forte para robustez e manutencao              |
+| Logging profissional           | Diagnostico detalhado para troubleshooting           |
+| Testes automatizados           | Qualidade de codigo garantida                        |
+| Configuracao por ambiente      | Flexibilidade entre dev e producao                   |
+| Interface web                  | Painel de configuracao simplificado                  |
 
-1. Acesse o painel de configuração: https://brasil-rd-addon.up.railway.app/configure
-2. Cole sua API Key do Real-Debrid
-3.  Salve as configurações
-4.  Clique em install e ele vai automaticamente te redirecionar pro stremio
+---
 
-Logo após o Stremio abrir, e você adicionar, seu addon já vai funcionar.
+## Configuracao Rapida
 
-## Solicitação de Conteúdo Exclusivo
+1. Acesse o painel de configuracao: [brasil-rd-oficial.oniko.org/configure](https://brasil-rd-oficial.oniko.org/configure)
+2. Cole sua API Key do Torbox
+3. Salve as configuracoes
+4. Clique em install e ele vai automaticamente te redirecionar para o stremio
 
-Reconheço que algum conteúdo específico pode estar faltando. Por isso:
-
-- Conteúdo não disponível pode ser solicitado exclusivamente por mim
-- Cada pedido será revisado e curado pessoalmente
-- O conteúdo estará disponível assim que possível
-- Solicitações devem ser feitas diretamente pelo Instagram: @gu.dwn
+> Logo apos o Stremio abrir, e voce adicionar, seu addon ja vai funcionar.

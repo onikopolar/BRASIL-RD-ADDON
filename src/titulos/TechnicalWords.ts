@@ -230,51 +230,53 @@ export const INDICADORES_BRASIL_TORRENTS = [
 /** Palavras que indicam que um torrent eh internacional / nao-PT-BR */
 export const INDICADORES_INTERNACIONAL_TORRENTS = [
   // Ingles (EN)
-  'eng', 'english', 'ingles', 'en',
+  'eng', 'english', 'ingles',
   // Espanhol (ES)
-  'spa', 'spanish', 'espanol', 'es', 'latino', 'latin', 'castellano', 'esp',
+  'spa', 'spanish', 'espanol', 'latino', 'latin', 'castellano', 'esp',
   // Frances (FR)
-  'fra', 'fre', 'french', 'francais', 'francês', 'fr', 'vff', 'vfi', 'vfq', 'vostfr', 'vf',
+  'fra', 'fre', 'french', 'francais', 'francês', 'vff', 'vfi', 'vfq', 'vostfr', 'vf',
   // Alemao (DE)
-  'ger', 'deu', 'german', 'deutsch', 'alemão', 'de', 'omu',
+  'ger', 'deu', 'german', 'deutsch', 'alemão', 'omu',
   // Italiano (IT)
-  'ita', 'italian', 'italiano', 'it',
+  'ita', 'italian', 'italiano',
   // Japones (JA)
-  'jpn', 'japanese', 'japonês', 'ja', 'jap',
+  'jpn', 'japanese', 'japonês', 'jap',
   // Chines (ZH)
-  'chi', 'zho', 'chinese', 'chinês', 'zh', 'mandarim', 'mandarin', 'cantones',
+  'chi', 'zho', 'chinese', 'chinês', 'mandarim', 'mandarin', 'cantones',
   // Coreano (KO)
-  'kor', 'korean', 'coreano', 'ko',
+  'kor', 'korean', 'coreano',
   // Russo (RU)
-  'rus', 'russian', 'russo', 'ru',
+  'rus', 'russian', 'russo',
   // Arabe (AR)
-  'ara', 'arabic', 'arabe', 'ar',
+  'ara', 'arabic', 'arabe',
   // Hindi (HI)
-  'hin', 'hindi', 'indian', 'hi',
+  'hin', 'hindi', 'indian',
   // Turco (TR)
-  'tur', 'turkish', 'tr',
+  'tur', 'turkish',
   // Holandes (NL)
-  'dut', 'nld', 'dutch', 'holandes', 'nl',
+  'dut', 'nld', 'dutch', 'holandes',
   // Polones (PL)
-  'pol', 'polish', 'polones', 'pl',
+  'pol', 'polish', 'polones',
   // Sueco (SV)
-  'swe', 'swedish', 'sueco', 'sv',
+  'swe', 'swedish', 'sueco',
   // Dinamarques (DA)
-  'dan', 'danish', 'dinamarques', 'da',
+  'dan', 'danish', 'dinamarques',
   // Finlandes (FI)
-  'fin', 'finnish', 'finlandes', 'fi',
+  'fin', 'finnish', 'finlandes',
   // Noruegues (NO)
-  'nor', 'norwegian', 'noruegues', 'no',
+  'nor', 'norwegian', 'noruegues',
   // Tailandes (TH)
-  'tha', 'thai', 'th',
+  'tha', 'thai',
   // Hungaro (HU)
-  'hun', 'hungarian', 'hungaro', 'hu',
+  'hun', 'hungarian', 'hungaro',
   // Multi / internacional (generico)
   'multi', 'multilanguage', 'multiaudio', 'multisub',
   'tri', 'triaudio', 'trilanguage',
   'internacional', 'international', 'int',
   // VO / OV (version original)
   'vo', 'ov',
+  // Abreviacoes comuns de fansub
+  'yg',
 ];
 
 // ─── FUNCOES ───

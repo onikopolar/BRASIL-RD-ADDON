@@ -51,15 +51,15 @@ export class LanguageDetector {
     for (const palavra of palavras) {
       if (/^\d+$/.test(palavra)) continue;
 
-      // PT: palavra individual (TechnicalWords) OU grupo BR (TechnicalWords)
-      if (this.indicadoresPt.has(palavra) || isBrazilianReleaseGroup(palavra)) {
-        encontradasPt.push(palavra);
-        continue;
-      }
-
       // EN: palavra individual (TechnicalWords) OU grupo internacional (TechnicalWords)
       if (this.indicadoresEn.has(palavra) || isInternationalReleaseGroup(palavra)) {
         encontradasEn.push(palavra);
+        continue;
+      }
+
+      // PT: palavra individual (TechnicalWords) OU grupo BR (TechnicalWords)
+      if (this.indicadoresPt.has(palavra) || isBrazilianReleaseGroup(palavra)) {
+        encontradasPt.push(palavra);
         continue;
       }
 
@@ -68,23 +68,24 @@ export class LanguageDetector {
       desconhecidas.push(palavra);
     }
 
-    if (encontradasPt.length > 0) {
+    // DECISAO: EN sempre vence (se tem indicador internacional, nao eh PT)
+    if (encontradasEn.length > 0) {
       return {
-        ehPortugues: true,
-        motivo: encontradasEn.length > 0
-          ? `PT detectado (${encontradasPt.join(', ')}) com EN (${encontradasEn.join(', ')})`
-          : `PT detectado: ${encontradasPt.join(', ')}`,
+        ehPortugues: false,
+        motivo: encontradasPt.length > 0
+          ? `EN detectado (${encontradasEn.join(', ')}) — ignora PT (${encontradasPt.join(', ')})`
+          : `EN detectado: ${encontradasEn.join(', ')}`,
         palavrasPt: encontradasPt,
         palavrasEn: encontradasEn,
         desconhecidas,
       };
     }
 
-    if (encontradasEn.length > 0) {
+    if (encontradasPt.length > 0) {
       return {
-        ehPortugues: false,
-        motivo: `Apenas EN: ${encontradasEn.join(', ')}. Desconhecidas: ${desconhecidas.join(', ')}`,
-        palavrasPt: [],
+        ehPortugues: true,
+        motivo: `PT detectado: ${encontradasPt.join(', ')}`,
+        palavrasPt: encontradasPt,
         palavrasEn: encontradasEn,
         desconhecidas,
       };
@@ -92,7 +93,7 @@ export class LanguageDetector {
 
     return {
       ehPortugues: false,
-      motivo: `Nenhum indicador PT-BR. Desconhecidas: ${desconhecidas.join(', ')}`,
+      motivo: `Nenhum indicador. Desconhecidas: ${desconhecidas.join(', ')}`,
       palavrasPt: [],
       palavrasEn: [],
       desconhecidas,
