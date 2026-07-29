@@ -581,6 +581,9 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'remux', 'web', 'dl', 'bd', 'dvd',
   // Áudio canais (5.1, 7.1, etc — o regex também pega)
   '5.1', '7.1', '2.0', '2ch', '6ch', '5.1ch', '7.1ch',
+  // Palavras de áudio/legenda (ruído na comparação de títulos)
+  'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
+  'legendado', 'legendada', 'legenda', 'dub', 'dubbed',
   // Grupos release comuns (ruído visual)
   'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'tpb',
 ]);

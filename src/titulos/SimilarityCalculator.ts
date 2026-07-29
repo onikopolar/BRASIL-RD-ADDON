@@ -96,9 +96,9 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
-    // Quebra titulo do torrent em palavras (sem numeros soltos)
+    // Quebra titulo do torrent em palavras (sem numeros soltos, sem SxxExx)
     const palavrasTorrent = this.normalizarParaComparacao(tituloTorrent)
-      .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
+      .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w) && !/^s\d{1,2}e\d{1,3}$/i.test(w));
     const setTorrent = new Set(palavrasTorrent);
 
     // Compara contra cada titulo TMDB (PT e EN) e escolhe o melhor
@@ -122,6 +122,23 @@ export class SimilarityCalculator {
       proporcao: 0,
     };
 
+    // Vocabulario UNIFICADO de todos os titulos TMDB (PT + EN)
+    const vocabularioTmdb = new Set<string>();
+    for (const tv of titulosValidos) {
+      const palavras = this.normalizarParaComparacao(tv)
+        .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
+      for (const p of palavras) vocabularioTmdb.add(p);
+    }
+    // Conectores que & vira em titulos reais (TMDB stripou o &, torrent usa "e"/"and")
+    vocabularioTmdb.add('e');
+    vocabularioTmdb.add('and');
+
+    // Palavras do torrent fora do vocabulario TMDB unificado
+    const estranhas: string[] = [];
+    for (const palavra of palavrasTorrent) {
+      if (!vocabularioTmdb.has(palavra)) estranhas.push(palavra);
+    }
+
     let t = 0;
     while (t < titulosValidos.length) {
       const palavrasTitulo = this.normalizarParaComparacao(titulosValidos[t])
@@ -135,33 +152,20 @@ export class SimilarityCalculator {
         else { falt.push(palavra); }
       }
 
-      const estr: string[] = [];
-      for (const palavra of palavrasTorrent) {
-        if (!setTitulo.has(palavra)) { estr.push(palavra); }
-      }
-
       const total = setTitulo.size;
-      const completo = falt.length === 0;
-      const prop = total > 0 ? enc / total : 0;
 
       const score: ScoreTitulo = {
         titulo: titulosValidos[t].substring(0, 40),
         encontradas: enc,
         faltando: falt,
-        estranhas: estr,
+        estranhas: estranhas, // unificado: torrent vs TODOS os titulos TMDB
         totalTmdb: total,
-        tmdbCompleto: completo,
-        proporcao: prop,
+        tmdbCompleto: falt.length === 0,
+        proporcao: total > 0 ? enc / total : 0,
       };
 
-      // Criterio: completo > menos extras > mais palavras
-      if (t === 0) {
-        melhor = score;
-      } else if (
-        (score.tmdbCompleto && !melhor.tmdbCompleto) ||
-        (score.tmdbCompleto === melhor.tmdbCompleto && score.estranhas.length < melhor.estranhas.length) ||
-        (score.tmdbCompleto === melhor.tmdbCompleto && score.estranhas.length === melhor.estranhas.length && score.encontradas > melhor.encontradas)
-      ) {
+      // Criterio: mais palavras TMDB encontradas
+      if (t === 0 || score.encontradas > melhor.encontradas) {
         melhor = score;
       }
 
@@ -241,28 +245,35 @@ export class SimilarityCalculator {
     return resultado;
   }
 
-  /** A: Exige palavras minimas do TMDB no torrent usando for...of */
+  /** A: Toda palavra do torrent deve existir em pelo menos 1 titulo TMDB (PT ou EN).
+   *    Unifica o vocabulario TMDB e verifica se o torrent tem palavras fora dele. */
   private validarPalavrasMinimas(
-    melhor: { encontradas: number; totalTmdb: number; faltando: string[] },
-    titulosValidos: string[]
+    melhor: { estranhas: string[]; encontradas: number; totalTmdb: number },
+    _titulosValidos: string[]
   ): { passou: boolean; motivo: string } {
-    // Minimo de palavras: o menor entre 2 e o menor título TMDB
-    let minimo = 2;
-    for (const t of titulosValidos) {
-      const palavras = this.normalizarParaComparacao(t).split(' ').filter(w => w.length > 0 && !(/^\d+$/.test(w)));
-      if (palavras.length < minimo) minimo = palavras.length;
-    }
-    const passou = melhor.encontradas >= minimo;
-    return { passou, motivo: passou ? `Palavras OK: ${melhor.encontradas}/${melhor.totalTmdb}` : `Palavras insuficientes: ${melhor.encontradas}/${melhor.totalTmdb} (minimo ${minimo})` };
+    // B ja computou estranhas = palavras do torrent fora do vocabulario TMDB
+    const passou = melhor.estranhas.length === 0;
+    return {
+      passou,
+      motivo: passou
+        ? `Vocabulario OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras`
+        : `Palavras fora do TMDB: [${melhor.estranhas.join(', ')}]`
+    };
   }
 
-  /** B: Todas as palavras TMDB devem estar no torrent */
+  /** B: Reporta palavras do torrent ausentes no TMDB.
+   *    NAO rejeita — C (ano), D (sequencia) e E (temporada) fazem essa validacao. */
   private validarTituloCompleto(
-    melhor: { tmdbCompleto: boolean; faltando: string[]; totalTmdb: number },
+    melhor: { estranhas: string[]; encontradas: number; totalTmdb: number },
     _a: string[], _b: boolean, _c: string[], _d: string
   ): { passou: boolean; motivo: string } {
-    const passou = melhor.tmdbCompleto;
-    return { passou, motivo: passou ? `Titulo completo: ${melhor.totalTmdb}/${melhor.totalTmdb}` : `Faltam palavras do TMDB: [${melhor.faltando.join(', ')}]` };
+    const passou = true;
+    return {
+      passou,
+      motivo: melhor.estranhas.length === 0
+        ? `Titulo compativel: ${melhor.encontradas}/${melhor.totalTmdb} palavras`
+        : `Palavras nao-TMDB: [${melhor.estranhas.join(', ')}] — validado por C/D/E`
+    };
   }
 
   /** C: Ano do torrent deve ser compativel com TMDB */
