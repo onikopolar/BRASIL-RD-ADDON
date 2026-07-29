@@ -1,13 +1,12 @@
 // Manifest do Addon Brasil RD
-// Version: 1.0.1 - Foco em compatibilidade Web/Mobile
-// Fix: configurationRequired: false para funcionar no Stremio Web
+// Versao sincronizada automaticamente com package.json
+
+import { version as versaoProjeto } from '../../package.json';
 
 export const manifest = {
-    // Identificação única do addon
     id: 'org.brasilrd.addon',
 
-    // Versionamento Semântico: 1.0.1 (minor update para compatibilidade)
-    version: '1.3.0',
+    version: versaoProjeto,
     
     // Informações básicas
     name: 'Brasil RD',

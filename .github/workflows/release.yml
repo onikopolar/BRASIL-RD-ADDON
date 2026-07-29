@@ -1,0 +1,82 @@
+name: Release
+
+on:
+  push:
+    branches: [master]
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Build
+        run: |
+          npm install
+          npm run build
+
+      - name: Zip dist
+        run: zip -r dist.zip dist/
+
+      - name: Gerar changelog dos commits
+        id: changelog
+        run: |
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -z "$LAST_TAG" ]; then
+            echo "## Commits" > CHANGELOG.md
+            git log --oneline >> CHANGELOG.md
+          else
+            echo "## Mudancas desde $LAST_TAG" > CHANGELOG.md
+            echo "" >> CHANGELOG.md
+            git log ${LAST_TAG}..HEAD --pretty=format:"- %s" >> CHANGELOG.md
+          fi
+          cat CHANGELOG.md
+
+      - name: Definir versao (auto-bump patch ou manual)
+        id: bump
+        run: |
+          CURRENT=$(node -p "require('./package.json').version")
+
+          if git rev-parse "v$CURRENT" >/dev/null 2>&1; then
+            IFS='.' read -r MAJ MIN PAT <<< "$CURRENT"
+            NEW="$MAJ.$MIN.$((PAT + 1))"
+            echo "Auto-bump patch: $CURRENT -> $NEW"
+          else
+            NEW="$CURRENT"
+            echo "Versao manual: $NEW"
+          fi
+          echo "VERSION=$NEW" >> $GITHUB_OUTPUT
+
+      - name: Atualizar package.json
+        run: |
+          node -e "
+            const pkg = require('./package.json');
+            pkg.version = '${{ steps.bump.outputs.VERSION }}';
+            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+      - name: Commit da nova versao
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@github.com"
+          git add package.json
+          git commit -m "chore: bump to v${{ steps.bump.outputs.VERSION }}"
+          git tag v${{ steps.bump.outputs.VERSION }}
+          git push origin master --tags
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.bump.outputs.VERSION }}
+          name: Release v${{ steps.bump.outputs.VERSION }}
+          body_path: CHANGELOG.md
+          files: dist.zip
