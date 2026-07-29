@@ -601,7 +601,8 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'temporada', 'completa', 'season', 'complete', 'parts', 
   // Codecs e variantes
   '10bit', '10bits', 'hdr10', 'hdr10p', 'dd', 'ddp', 'ddp5', 'sdr', 'blu', 'extras',
-  'remastered', '3d',
+  'remastered', '3d', 'imax', 'dv', 'hdr10plus', 'dovi', 'BAIXARAPIDO.COM', 'COMOEUBAIXO.COM', 'BRRip',
+  'WWW.RAPIDOTORRENTS.COM', 'RAPIDOTORRENTS', '.com', '.COM', 'www.', 'rapidotorrents',
   // Spam de sites nos DNs de magnet
   'site', 'visite', 'www',
   // Metadados soltos

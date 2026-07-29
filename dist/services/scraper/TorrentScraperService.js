@@ -73,7 +73,21 @@ class TorrentScraperService {
                 : Promise.resolve([]);
             const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
-            const wpPromise = this.wpScraper.search(query, type).catch(() => []);
+            const wpQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
+            const wpQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            const wpPromise = Promise.all([
+                this.wpScraper.search(wpQueryEn, type).catch(() => []),
+                wpQueryPt !== wpQueryEn ? this.wpScraper.search(wpQueryPt, type).catch(() => []) : Promise.resolve([])
+            ]).then(([en, pt]) => {
+                const seen = new Set();
+                const merged = [...en, ...pt].filter(t => {
+                    if (seen.has(t.magnet))
+                        return false;
+                    seen.add(t.magnet);
+                    return true;
+                });
+                return merged;
+            }).catch(() => []);
             const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
             const tpbPromise = Promise.all([

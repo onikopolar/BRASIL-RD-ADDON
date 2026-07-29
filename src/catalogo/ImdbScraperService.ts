@@ -1,7 +1,32 @@
 import { Logger } from '../utils/logger.js';
 import axios from 'axios';
+import * as cheerio from 'cheerio';
+import dns from 'dns';
+import https from 'https';
+import tls from 'tls';
 
 const logger = new Logger('TMDBScraper');
+
+// DNS bypass (igual aos scrapers)
+dns.setServers(['8.8.8.8', '1.1.1.1']);
+class DnsAgent extends https.Agent {
+  createConnection(options: any, cb: any): any {
+    const hostname = options.hostname || options.host || '';
+    dns.resolve4(hostname, (err, addresses) => {
+      if (err) return cb(err);
+      const sock = tls.connect({ host: addresses[0], port: options.port || 443, servername: hostname, rejectUnauthorized: false }, () => cb(null, sock));
+      sock.on('error', cb);
+    });
+    return undefined;
+  }
+}
+const dnsAgent = new DnsAgent({ keepAlive: true });
+const lookupImdb = (hostname: string, _opts: any, cb: any) => {
+  dns.resolve4(hostname, (err, addresses) => {
+    if (err) return cb(err);
+    cb(null, addresses[0], 4);
+  });
+};
 
 export interface ImdbTitles {
   originalTitle: string;
@@ -61,8 +86,8 @@ export class ImdbScraperService {
       const tmdbInfo = await this.findInTMDB(imdbId);
       
       if (!tmdbInfo) {
-        logger.warn('TMDB: não encontrado', { imdbId });
-        return this.createEmptyResult(imdbId);
+        logger.warn('TMDB: não encontrado, tentando fallback IMDb HTML', { imdbId });
+        return await this.scrapeImdbTitle(imdbId);
       }
 
       const { tmdbId: tmdbIdNum, mediaType } = tmdbInfo;
@@ -288,6 +313,53 @@ export class ImdbScraperService {
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
       throw error;
+    }
+  }
+
+  /** Fallback: scrape IMDb HTML quando TMDB nao conhece o ID */
+  private async scrapeImdbTitle(imdbId: string): Promise<ImdbTitles> {
+    try {
+      const url = `https://www.imdb.com/title/${imdbId}/`;
+      const res = await axios.get(url, {
+        timeout: 10000,
+        httpsAgent: dnsAgent,
+        lookup: lookupImdb,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.5',
+        },
+      });
+
+      const $ = cheerio.load(res.data);
+      // Título do <title> (ex: "Project Hail Mary (2026) - IMDb")
+      const rawTitle = $('title').text().replace(/\s*-\s*IMDb\s*$/i, '').trim();
+      // Extrai ano
+      const yearMatch = rawTitle.match(/\((\d{4})\)/);
+      const year = yearMatch ? parseInt(yearMatch[1]) : undefined;
+
+      // Título limpo sem o ano
+      const cleanTitle = rawTitle.replace(/\s*\(\d{4}\)\s*/, '').trim();
+      const normalized = this.normalizeTitle(cleanTitle);
+
+      if (!normalized || normalized.length < 2) {
+        return this.createEmptyResult(imdbId);
+      }
+
+      logger.info('IMDb HTML fallback', { imdbId, title: cleanTitle.substring(0, 50), year });
+
+      return {
+        originalTitle: normalized,
+        portugueseTitle: null,
+        portugueseTitleRaw: null,
+        allTitles: [normalized],
+        foundInPortuguese: false,
+        portuguesePriority: false,
+        year,
+        mediaType: undefined,
+      };
+    } catch (err: any) {
+      logger.warn('IMDb HTML fallback falhou', { imdbId, error: err.message });
+      return this.createEmptyResult(imdbId);
     }
   }
 

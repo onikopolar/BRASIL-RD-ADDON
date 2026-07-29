@@ -283,7 +283,6 @@ export class CatalogProvider {
 
     const valid: ScrapedTorrent[] = [];
     const invalid: ScrapedTorrent[] = torrents.filter(t => !ptTorrents.includes(t));
-    const completePackRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
 
     results.forEach((result, i) => {
       const torrent = ptTorrents[i];
@@ -297,15 +296,6 @@ export class CatalogProvider {
           episodioTorrent: epExtraido || 'N/A',
           provider: torrent.provider,
           infoHash: dadosMagnets[torrents.indexOf(torrent)]?.infoHash?.substring(0, 12) || 'N/A'
-        });
-        valid.push(torrent);
-      } else if (season && completePackRe.test(torrent.title)) {
-        this.logger.info('📦 PACK COMPLETO aceito (bypass episódio)', {
-          imdbId,
-          alvo: `S${season}E${episode || '?'}`,
-          torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
-          canonical: !!torrent.canonicalName,
-          provider: torrent.provider,
         });
         valid.push(torrent);
       } else {
