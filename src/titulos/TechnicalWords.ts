@@ -225,6 +225,8 @@ export const INDICADORES_BRASIL_TORRENTS = [
   'brasileiro', 'brazilian', 'brasil',
   // Abreviacoes comuns em releases (ex: ITA.POR.SUBS)
   'por', 'pb',
+  // Marcadores de temporada (PT-BR)
+  'temporada', 'completa', 'completo',
 ];
 
 /** Palavras que indicam que um torrent eh internacional / nao-PT-BR */
@@ -526,6 +528,15 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     const explicitEps = afterMatch.match(/e(\d{1,3})(?=\s|$|\.|e|E|-)/gi);
     if (explicitEps) {
       explicitEps.forEach(e => epNums.push(parseInt(e.replace(/e/i, '').match(/\d+/)?.[0] || '0')));
+    }
+    
+    // Português: "S01E01 e 02", "S01E01 e 02 e 03" ("e" separado por espaços)
+    const ptEpRange = afterMatch.match(/\s+e\s+(\d{1,3})\b/gi);
+    if (ptEpRange) {
+      ptEpRange.forEach(m => {
+        const n = m.match(/(\d{1,3})$/);
+        if (n) epNums.push(parseInt(n[1]));
+      });
     }
 
     epNums.sort((a, b) => a - b);

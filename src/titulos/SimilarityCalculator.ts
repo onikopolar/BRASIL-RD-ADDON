@@ -196,7 +196,7 @@ export class SimilarityCalculator {
 
     const condicaoA = this.validarPalavrasMinimas(melhor);
     const condicaoB = this.validarTituloCompleto(melhor);
-    const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent);
+    const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent, temIndicadorPt);
     const condicaoD = this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent);
     const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
 
@@ -284,17 +284,19 @@ export class SimilarityCalculator {
     tolerancia: number,
     _tipoMidia: string,
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
-    tituloTorrent: string
+    tituloTorrent: string,
+    temIndicadorPt: boolean
   ): { passou: boolean; motivo: string } {
-    // TMDB 1 palavra sem ano nem SxxExx → rejeita
+    // TMDB 1 palavra sem ano, SxxExx, nem indicadores PT → rejeita (ambiguo)
+    // Se tem indicador PT (dublado, temporada, etc), é release BR legitimo
     let minWords = 99;
     for (const t of movieInfo.allTitles) {
       const palavras = this.normalizarParaComparacao(t).split(' ').filter(w => w.length > 0 && !(/^\d+$/.test(w)));
       if (palavras.length < minWords) minWords = palavras.length;
     }
     const temSxxExx = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
-    if (anoTorrent === null && minWords <= 1 && !temSxxExx) {
-      return { passou: false, motivo: `TMDB de 1 palavra sem ano nem SxxExx — ambiguo` };
+    if (anoTorrent === null && minWords <= 1 && !temSxxExx && !temIndicadorPt) {
+      return { passou: false, motivo: `TMDB de 1 palavra sem ano, SxxExx, nem indicador PT — ambiguo` };
     }
     if (anoTorrent === null || anoTmdb === undefined) {
       return { passou: true, motivo: `Sem ano para comparar` };
