@@ -15,8 +15,7 @@
     "test": "jest",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",
-    "add-magnet": "ts-node scripts/add-magnet.ts",
-    "add-magnet:dev": "ts-node --transpile-only scripts/add-magnet.ts",
+    "add-magnet": "npx tsx scripts/add-magnet.ts",
     "migrate": "node scripts/migrate-database.js",
     "migrate:dev": "node scripts/migrate-database.js"
   },
