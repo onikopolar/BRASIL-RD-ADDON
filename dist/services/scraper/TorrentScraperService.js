@@ -148,10 +148,20 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults, hdrResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise, hdrPromise
+            const [wpResults, starckResults] = await Promise.all([
+                wpPromise, starckPromise
             ]);
-            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            const highPriorityResults = [...wpResults, ...starckResults];
+            if (highPriorityResults.length > 0) {
+                allResults.push(...highPriorityResults);
+            }
+            else {
+                logger.debug('Prioritarios vazios — caindo pra fallback (HDR, TPB, RARGB, etc)');
+                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
+                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
+                ]);
+                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            }
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;

@@ -134,10 +134,22 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            const [indexerResults, webResults, wpResults, tpbResults, rargbResults, starckResults, hdrResults] = await Promise.all([
-                indexerPromise, webScrapersPromise, wpPromise, tpbPromise, rargbPromise, starckPromise, hdrPromise
+            // ═══ PRIORIDADE 1: Comando, BLUDV, Starck (WordPress + HTML) ═══
+            const [wpResults, starckResults] = await Promise.all([
+                wpPromise, starckPromise
             ]);
-            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            const highPriorityResults = [...wpResults, ...starckResults];
+
+            if (highPriorityResults.length > 0) {
+                allResults.push(...highPriorityResults);
+            } else {
+                // ═══ FALLBACK: HDR, TorrentIndexer, WebScrapers, RARGB, TPB ═══
+                logger.debug('Prioritarios vazios — caindo pra fallback (HDR, TPB, RARGB, etc)');
+                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
+                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
+                ]);
+                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            }
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);

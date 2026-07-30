@@ -174,7 +174,7 @@ export const INTERNATIONAL_TRACKERS = [
 // Lista específica de grupos de release brasileiros conhecidos
 // Uso: para dar bônus a releases em português
 export const BRAZILIAN_RELEASE_GROUPS = [
-  'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'cmdtv', 'cmdb',
+  'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'comando1', 'cmdtv', 'cmdb',
   'dhg', 'divulgahd', 'legiahd', 'baixar', 'download', 'brasil',
   'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes'
