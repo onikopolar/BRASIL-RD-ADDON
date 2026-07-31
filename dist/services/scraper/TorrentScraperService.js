@@ -58,7 +58,7 @@ class TorrentScraperService {
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
     }
-    async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
+    async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId, skipPriority = false) {
         const startTime = Date.now();
         try {
             let tmdbData = null;
@@ -148,20 +148,12 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            const [wpResults, starckResults] = await Promise.all([
-                wpPromise, starckPromise
+            const [wpResults, starckResults, hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
+                skipPriority ? Promise.resolve([]) : wpPromise,
+                skipPriority ? Promise.resolve([]) : starckPromise,
+                hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
             ]);
-            const highPriorityResults = [...wpResults, ...starckResults];
-            if (highPriorityResults.length > 0) {
-                allResults.push(...highPriorityResults);
-            }
-            else {
-                logger.debug('Prioritarios vazios — caindo pra fallback (HDR, TPB, RARGB, etc)');
-                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
-                ]);
-                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
-            }
+            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;

@@ -234,7 +234,7 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   // VO / OV (version original)
   'vo', 'ov',
   // Abreviacoes comuns de fansub
-  'yg',
+  'yg', 'KyoGo', 'kyogo',
 ];
 
 // ─── FUNCOES ───

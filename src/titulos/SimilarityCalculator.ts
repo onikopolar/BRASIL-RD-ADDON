@@ -246,15 +246,17 @@ export class SimilarityCalculator {
       };
     }
 
-    // Edge-gap: tolera 1 palavra consecutiva na ponta esquerda ou direita
-    // Só para títulos com 3+ palavras (2 palavras = 50% perdido = inaceitável)
+    // Edge-gap: tolera 1 palavra na ponta, mas só se for "cola" (≤ 3 chars)
+    // Palavras-core (≥ 4 chars) sao obrigatorias — identificam o titulo
     if (melhor.faltando.length === 1 && melhor.palavrasTmdb.length >= 3) {
-      const idx = melhor.palavrasTmdb.indexOf(melhor.faltando[0]);
-      if (idx === 0 || idx === melhor.palavrasTmdb.length - 1) {
+      const palavra = melhor.faltando[0];
+      const idx = melhor.palavrasTmdb.indexOf(palavra);
+      const ehCola = palavra.length <= 3;
+      if (ehCola && (idx === 0 || idx === melhor.palavrasTmdb.length - 1)) {
         const ponta = idx === 0 ? 'esquerda' : 'direita';
         return {
           passou: true,
-          motivo: `Edge-gap: "${melhor.faltando[0]}" na ponta ${ponta}, ${melhor.encontradas}/${melhor.totalTmdb}`
+          motivo: `Edge-gap: "${palavra}" (cola) na ponta ${ponta}, ${melhor.encontradas}/${melhor.totalTmdb}`
         };
       }
     }

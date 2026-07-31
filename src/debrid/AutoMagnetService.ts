@@ -603,25 +603,30 @@ export class AutoMagnetService {
       });
 
       const torrentId = await torboxService.addMagnet(magnetData.magnet, apiKey);
-      // Torbox não precisa de selectFiles — processa automaticamente
-
-      const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
 
       let streamLink: string | null = null;
-      if (torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached') {
-        streamLink = await torboxService.getStreamLinkForTorrent(
-          torrentId,
-          apiKey,
-          magnetData.imdbSeason,
-          magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
-        );
+      let downloadState = 'queued';
+      try {
+        const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
+        downloadState = torrentInfo.download_state;
+        if (downloadState === 'completed' || downloadState === 'cached') {
+          streamLink = await torboxService.getStreamLinkForTorrent(
+            torrentId,
+            apiKey,
+            magnetData.imdbSeason,
+            magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
+          );
+        }
+      } catch {
+        // Torbox recebeu o magnet mas ainda nao processou — normal
+        logger.info('Torrent adicionado, aguardando processamento', { torrentId });
       }
 
       return {
         success: true,
-        status: torrentInfo.download_state,
+        status: downloadState,
         streamLink: streamLink || undefined,
-        message: `Torrent adicionado: ${torrentInfo.download_state}`
+        message: `Torrent adicionado: ${downloadState}`
       };
 
     } catch (error) {

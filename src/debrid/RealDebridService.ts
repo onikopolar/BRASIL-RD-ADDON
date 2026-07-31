@@ -135,6 +135,26 @@ export class TorboxService {
     }
   }
 
+  async airlockTorrent(torrentId: string, apiKey: string, enabled: boolean): Promise<void> {
+    const client = this.createHttpClient(apiKey);
+    try {
+      await this.retryableRequest(
+        () => client.put('/torrents/edittorrent', {
+          torrent_id: parseInt(torrentId),
+          airlocked: enabled
+        }),
+        'airlockTorrent'
+      );
+      this.logger.info(`AirLock ${enabled ? 'ATIVADO' : 'DESATIVADO'}`, { torrentId });
+    } catch (error) {
+      this.logger.warn('Falha ao configurar AirLock', {
+        torrentId,
+        error: (error as Error).message
+      });
+      // Não propaga erro — AirLock é bônus, não obrigatório
+    }
+  }
+
   async getTorrentInfo(torrentId: string, apiKey: string): Promise<TorboxTorrentInfo> {
     this.validateTorrentId(torrentId);
     const client = this.createHttpClient(apiKey);

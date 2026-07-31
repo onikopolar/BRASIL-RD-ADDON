@@ -32,7 +32,8 @@ export class TorrentScraperService {
         type: 'movie' | 'series' = 'movie',
         targetSeason?: number,
         targetYear?: number,
-        imdbId?: string
+        imdbId?: string,
+        skipPriority = false
     ): Promise<TorrentResult[]> {
         const startTime = Date.now();
         try {
@@ -134,22 +135,13 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // ═══ PRIORIDADE 1: Comando, BLUDV, Starck (WordPress + HTML) ═══
-            const [wpResults, starckResults] = await Promise.all([
-                wpPromise, starckPromise
+            // Todos scrapers rodam em paralelo. Se skipPriority=true, só roda fallback.
+            const [wpResults, starckResults, hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
+                skipPriority ? Promise.resolve([]) : wpPromise,
+                skipPriority ? Promise.resolve([]) : starckPromise,
+                hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
             ]);
-            const highPriorityResults = [...wpResults, ...starckResults];
-
-            if (highPriorityResults.length > 0) {
-                allResults.push(...highPriorityResults);
-            } else {
-                // ═══ FALLBACK: HDR, TorrentIndexer, WebScrapers, RARGB, TPB ═══
-                logger.debug('Prioritarios vazios — caindo pra fallback (HDR, TPB, RARGB, etc)');
-                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
-                ]);
-                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
-            }
+            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);

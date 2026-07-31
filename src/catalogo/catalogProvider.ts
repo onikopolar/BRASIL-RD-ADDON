@@ -174,16 +174,34 @@ export class CatalogProvider {
     const torrentResults = await this.torrentScraper.searchTorrents(
       searchQuery, type, finalSeason, seasonYear ?? undefined, imdbId || undefined
     );
-    if (!torrentResults.length) {
-      this.logger.info('📋 Scraping: 0 torrents encontrados nos scrapers', { searchQuery: searchQuery.substring(0, 60), imdbId });
-      return [];
-    }
 
-    const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
-    const { valid, invalid } = await this.filterAndValidateTorrents(
+    // ═══ FASE 1: Prioridade (Comando, BLUDV, Starck) ═══
+    let uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
+    let { valid, invalid } = await this.filterAndValidateTorrents(
       uniqueTorrents, imdbId, request, finalSeason, finalEpisode,
       tmdb.imdbTitles
     );
+
+    // ═══ FASE 2: Se 0 válidos, chama fallback (HDR, TPB, RARGB) ═══
+    if (valid.length === 0) {
+      this.logger.info('Prioritarios sem resultados validos — acionando fallback (HDR, TPB, RARGB)');
+      const fallbackResults = await this.torrentScraper.searchTorrents(
+        searchQuery, type, finalSeason, seasonYear ?? undefined, imdbId || undefined,
+        true // skipPriority
+      );
+      if (fallbackResults.length > 0) {
+        const fallbackUnique = await this.deduplicateTorrentsByMagnet(fallbackResults);
+        const fallbackValidated = await this.filterAndValidateTorrents(
+          fallbackUnique, imdbId, request, finalSeason, finalEpisode,
+          tmdb.imdbTitles
+        );
+        if (fallbackValidated.valid.length > 0) {
+          uniqueTorrents = fallbackUnique;
+          valid = fallbackValidated.valid;
+          invalid = [...invalid, ...fallbackValidated.invalid];
+        }
+      }
+    }
 
     if (valid.length === 0) {
       this.logger.info('📋 Scraping: todos torrents filtrados — 0 válidos', {

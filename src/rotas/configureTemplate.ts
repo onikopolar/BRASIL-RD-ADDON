@@ -10,6 +10,7 @@ export const configureTemplate = (manifest: any) => {
     <html style="background-image: url(${background});">
     <head>
         <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
         <title>${manifest.name} - Stremio Addon</title>
         
         <style>
@@ -23,7 +24,7 @@ export const configureTemplate = (manifest: any) => {
                 box-shadow: inset 0 0 0 2000px rgb(0 0 0 / 60%); 
             }
             body { display: flex; font-family: 'Open Sans', Arial, sans-serif; color: white; }
-            h1 { font-size: 4.5vh; font-weight: 700; margin: 0; }
+            h1 { font-size: 3.8vh; font-weight: 700; margin: 0; }
             h2 { font-size: 2.2vh; font-weight: normal; font-style: italic; opacity: 0.8; margin:0; }
             h3 { font-size: 2.2vh; margin: 0; }
             p { font-size: 1.75vh; margin: 0; text-shadow: 0 0 1vh rgba(0, 0, 0, 0.15); }
@@ -46,8 +47,9 @@ export const configureTemplate = (manifest: any) => {
             #addon { width: 40vh; margin: auto; }
             .logo { height: 14vh; width: 14vh; margin: auto; margin-bottom: 3vh; }
             .logo img { width: 100%; }
-            .name { line-height: 5vh; }
-            .version { line-height: 5vh; opacity: 0.8; margin-bottom: 2vh; }
+            .name { line-height: 5vh; text-align: center; }
+            .version { line-height: 5vh; opacity: 0.8; margin-bottom: 2vh; text-align: center; }
+            .description { text-align: center; }
             .separator { margin-bottom: 4vh; }
             .form-element { margin-bottom: 2vh; }
             
@@ -69,6 +71,27 @@ export const configureTemplate = (manifest: any) => {
             }
             
             .warning-text strong { color: #fce729ff; }
+
+            /* Mobile */
+            @media (max-width: 768px) {
+                body { padding: 2.5vh 2vh; }
+                #addon { width: 100%; max-width: 50vh; }
+                h1 { font-size: 4.2vh; }
+                h2, h3 { font-size: 2.2vh; }
+                p, ul, .info-text { font-size: 1.8vh; }
+                .warning-text { font-size: 1.7vh; }
+                button { width: 100%; padding: 1.6vh; font-size: 2.2vh; }
+                input[type="text"] { padding: 1.3vh; font-size: 2vh; }
+                .logo { height: 11vh; width: 11vh; }
+                .separator { margin-bottom: 2.5vh; }
+            }
+
+            @media (max-width: 375px) {
+                h1 { font-size: 3.6vh; }
+                h2, h3 { font-size: 2vh; }
+                button { font-size: 2vh; padding: 1.3vh; }
+                .logo { height: 9vh; width: 9vh; }
+            }
         </style>
         
         <link href="https://fonts.googleapis.com/css?family=Open+Sans:400,600,700&display=swap" rel="stylesheet">

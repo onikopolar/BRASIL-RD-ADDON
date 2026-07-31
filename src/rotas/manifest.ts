@@ -12,8 +12,8 @@ export const manifest = {
     name: 'Brasil RD',
     description: 'Addon brasileiro com suporte ao Torbox',
     
-    // Imagens (placeholders do Stremio)
-    logo: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/icon-256.png',
+    // Imagens
+    logo: `${process.env.BASE_URL || 'http://localhost:7000'}/videos/logo.png`,
     background: 'https://raw.githubusercontent.com/Stremio/stremio-art/main/placeholder/background-1920x1080.jpg',
     contactEmail: '',
     
