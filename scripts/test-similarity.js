@@ -203,6 +203,63 @@ const testCases = [
     season: 1,
     expected: true, // tem S01E07 → evidência suficiente
   },
+
+  // ═══ BUGS REAIS DO BANCO ═══
+  {
+    label: '"Mestres do Assalto" NAO e "Mestres do Ar" (tt0427340)',
+    tmdbTitles: ['Mestres do Ar', 'Masters of the Air'],
+    tmdbYear: 2024,
+    tmdbMediaType: 'tv',
+    torrentTitle: 'Mestres.do.Assalto.2025.1080p.x264.WEB-DL.DUAL.5.1-SF',
+    torrentYear: 2025,
+    expected: false, // C:X (ano 2025≠2024) + F:X (assalto ≠ ar)
+  },
+  {
+    label: '"Mestres do Universo" NAO e "Mestres do Ar" (tt0427340)',
+    tmdbTitles: ['Mestres do Ar', 'Masters of the Air'],
+    tmdbYear: 2024,
+    tmdbMediaType: 'tv',
+    torrentTitle: 'Mestres.do.Universo.2026.WEB-DL.2160p.x265.DV.HDR10.DUAL.5.1-STARCKFILMES',
+    torrentYear: 2026,
+    expected: false, // C:X (ano 2026≠2024) + F:X (universo ≠ ar)
+  },
+  {
+    label: '"Master of the Air S01E06" DEVE ser "Mestres do Ar"',
+    tmdbTitles: ['Mestres do Ar', 'Masters of the Air'],
+    tmdbYear: 2024,
+    tmdbMediaType: 'tv',
+    torrentTitle: 'Masters.of.the.Air.S01E06.1080p.WEB-DL.DUAL',
+    torrentYear: 2024,
+    season: 1,
+    expected: true, // titulo quase igual + SxxExx
+  },
+  {
+    label: '"Joy Ride 2021" NAO e "Joy Ride 2023/Loucas em Apuros" (tt15268244)',
+    tmdbTitles: ['Loucas em Apuros', 'Joy Ride'],
+    tmdbYear: 2023,
+    tmdbMediaType: 'movie',
+    torrentTitle: 'Joy.Ride.2021.1080p.WEBRip.Legendado.mkv',
+    torrentYear: 2021,
+    expected: false, // C:X (ano 2021≠2023)
+  },
+  {
+    label: '"Loucas em Apuros 2023" DEVE ser "Joy Ride" (tt15268244)',
+    tmdbTitles: ['Loucas em Apuros', 'Joy Ride'],
+    tmdbYear: 2023,
+    tmdbMediaType: 'movie',
+    torrentTitle: 'Loucas em Apuros.2023.BluRay.1080p.x264.DUAL.5.1',
+    torrentYear: 2023,
+    expected: true,
+  },
+  {
+    label: 'Vingadores EXTRAS NAO deveria estar no catalogo',
+    tmdbTitles: ['Vingadores Guerra Infinita', 'Avengers Infinity War'],
+    tmdbYear: 2018,
+    tmdbMediaType: 'movie',
+    torrentTitle: 'Vingadores - Guerra Infinita - EXTRAS 2018 (1080p)',
+    torrentYear: 2018,
+    expected: false, // F:X ("extras" fora do padrao TMDB)
+  },
 ];
 
 // ─── Execução ───

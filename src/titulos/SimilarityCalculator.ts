@@ -191,8 +191,8 @@ export class SimilarityCalculator {
     const temTemporada = !!(temporadaAlvo && this.temTemporadaExplicita(tituloTorrent, temporadaAlvo));
     const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
 
-    // Filme tolera 2 anos de diferenca, serie tolera 3
-    const toleranciaAno = tipoMidia === 'tv' ? 3 : 2;
+    // Filme tolera 1 ano de diferenca, serie tolera 3
+    const toleranciaAno = tipoMidia === 'tv' ? 3 : 1;
 
     const condicaoA = this.validarPalavrasMinimas(melhor);
     const condicaoB = this.validarTituloCompleto(melhor);
@@ -416,7 +416,8 @@ export class SimilarityCalculator {
     };
   }
 
-  /** F: Palavras do torrent com comprimento fora do padrão TMDB indicam título diferente */
+  /** F: Palavras do torrent com comprimento fora do padrão TMDB indicam título diferente.
+   *    Se comprimento bate, verifica sobreposição de caracteres com TMDB (evita "assalto" ≈ "mestres"). */
   private validarComprimentoPalavras(
     palavrasTorrent: string[],
     palavrasTmdb: string[]
@@ -432,6 +433,20 @@ export class SimilarityCalculator {
     for (const w of extras) {
       if (!tmdbLengths.has(w.length)) {
         anomalas.push(w);
+      } else {
+        // Comprimento bate com TMDB — verifica conjunto de caracteres
+        const tmdbSameLen = palavrasTmdb.filter(t => t.length === w.length);
+        let similar = false;
+        const wChars = new Set(w.split(''));
+        for (const t of tmdbSameLen) {
+          const tChars = new Set(t.split(''));
+          const intersection = [...wChars].filter(c => tChars.has(c)).length;
+          const union = new Set([...wChars, ...tChars]).size;
+          if (intersection / union >= 0.5) { similar = true; break; }
+        }
+        if (!similar) {
+          anomalas.push(w + '≠' + tmdbSameLen.join('|'));
+        }
       }
     }
 

@@ -50,7 +50,7 @@ async function main() {
     console.log('📥 Atualizando release...');
     process.chdir(RELEASE_DIR);
     run('git fetch --tags');
-    run(`git checkout ${latestTag}`);
+    run(`git checkout -f ${latestTag}`);
   } else {
     console.log('📥 Clonando release...');
     fs.mkdirSync(RELEASE_DIR, { recursive: true });
