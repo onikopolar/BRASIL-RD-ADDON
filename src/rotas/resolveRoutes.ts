@@ -155,7 +155,7 @@ export const setupResolveRoutes = (app: any) => {
             return res.status(200).end();
         }
 
-        const cacheKey = `resolve:torrentio:${apiKey}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
+        const cacheKey = `resolve:torrentio:${apiKey.substring(0,8)}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
         const cachedDirectLink = cacheService.get<string>(cacheKey);
         if (cachedDirectLink) {
             res.setHeader('Access-Control-Allow-Origin', '*');

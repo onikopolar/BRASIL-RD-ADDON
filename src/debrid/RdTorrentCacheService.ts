@@ -52,7 +52,7 @@ export class RdTorrentCacheService {
 
   // Gera chave para lock de processamento
   private getLockKey(magnetHash: string, apiKey: string): string {
-    return `lock:${magnetHash}:${apiKey}`;
+    return `lock:${magnetHash}:${apiKey.substring(0, 8)}`;
   }
 
   // Verifica se cache está expirado

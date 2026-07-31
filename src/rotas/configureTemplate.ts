@@ -153,6 +153,17 @@ export const configureTemplate = (manifest: any) => {
             <a id="installLink" class="install-link" href="#">
                 <button name="Install">INSTALL</button>
             </a>
+            
+            <div class="separator"></div>
+            
+            <div id="directUrlSection" class="form-element" style="display: none;">
+                <div class="label-to-top" style="margin-bottom: 0.5vh;">
+                    URL do Manifest (para AlOManager / uso manual)
+                </div>
+                <input id="directUrl" type="text" readonly onclick="this.select();document.execCommand('copy');var t=this;t.style.background='rgba(138,90,171,0.3)';setTimeout(function(){t.style.background='rgba(255,255,255,0.1)'},600);" 
+                       style="width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 3px; font-size: 14px; margin-top: 0.5vh; background: rgba(255,255,255,0.1); color: #ccc; cursor: pointer;" 
+                       title="Clique para copiar" />
+            </div>
         </div>
         
         <script>
@@ -160,22 +171,27 @@ export const configureTemplate = (manifest: any) => {
             
             const apiKeyInput = document.getElementById('${manifest.config[0].key}');
             const installLink = document.getElementById('installLink');
+            const directUrl = document.getElementById('directUrl');
+            const directUrlSection = document.getElementById('directUrlSection');
             const mainForm = document.getElementById('mainForm');
             
             function updateLink() {
                 const apiKey = apiKeyInput.value.trim();
+                const baseUrl = window.location.protocol + '//' + window.location.host;
                 
                 if (apiKey) {
-                    // Usa hostname (ex: localhost ou 127.0.0.1) para gerar o link stremio://
                     installLink.href = 'stremio://' + window.location.hostname + ':' + window.location.port + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
-                    // Link mascarado no console por segurança (API key não deve vazar)
-                    console.log('[Brasil RD] Link gerado (mascarado):', installLink.href.replace(/torbox=[^/]+/, 'torbox=***'));
+                    directUrl.value = baseUrl + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
+                    directUrlSection.style.display = 'block';
                 } else {
                     installLink.href = '#';
+                    directUrl.value = '';
+                    directUrlSection.style.display = 'none';
                 }
             }
             
-            mainForm.onchange = updateLink;
+            apiKeyInput.oninput = updateLink;
+            apiKeyInput.onpaste = () => setTimeout(updateLink, 100);
             mainForm.onsubmit = (e) => e.preventDefault();
             
             installLink.onclick = () => {
