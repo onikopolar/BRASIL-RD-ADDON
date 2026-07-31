@@ -1,5 +1,4 @@
 import path from 'path';
-import https from 'https';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { TorboxService } from '../debrid/RealDebridService.js';
@@ -8,19 +7,6 @@ import { CacheService } from '../debrid/CacheService.js';
 import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
 import { Logger } from '../utils/logger.js';
 import { getStatusMessage } from './statusHelpers.js';
-
-// ── Otimizações globais ──────────────────────────────────────────────
-
-// Pool de conexões HTTPS reutilizável (evita handshake TLS por request)
-const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10, keepAliveMsecs: 30000 });
-
-// Stremio Web (browser) precisa de proxy CORS; apps nativos aceitam redirect direto
-function isStremioWeb(req: any): boolean {
-    const origin = (req.get('origin') || '').toLowerCase();
-    const referer = (req.get('referer') || '').toLowerCase();
-    return origin.includes('web.strem.io') || origin.includes('strem.io')
-        || referer.includes('web.strem.io');
-}
 
 // Envia video MP4 de status diretamente (sem redirect) para o Stremio Web tocar
 function sendStatusVideo(res: any, resolveLogger: Logger, requestId: string, videoUrl: string) {
@@ -75,61 +61,6 @@ function createStreamFromStaticResponse(
 async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
     const dados = await analisarMagnet(magnet);
     return dados ? dados.infoHash : null;
-}
-
-// Proxy: baixa stream do Torbox e entrega com CORS (necessário pra Stremio Web)
-function proxyStreamToResponse(streamLink: string, req: any, res: any, logger: any, baseUrl: string) {
-    // Forward Range header para buffering funcionar no Stremio Web
-    const proxyHeaders: any = { 'User-Agent': 'Brasil-RD-Addon/1.4' };
-    if (req.headers.range) {
-        proxyHeaders['Range'] = req.headers.range;
-    }
-
-    return new Promise<void>((_resolve, _reject) => {
-        const proxyReq = https.get(streamLink, { headers: proxyHeaders, agent: httpsAgent }, (upstream: any) => {
-            if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
-                https.get(upstream.headers.location, { headers: proxyHeaders, agent: httpsAgent }, (finalUpstream: any) => {
-                    sendProxyResponse(finalUpstream, res);
-                }).on('error', (err: Error) => {
-                    logger.warn('Proxy Torbox redirect falhou, fallback redirect', { error: err.message });
-                    res.setHeader('Access-Control-Allow-Origin', '*');
-                    res.redirect(302, streamLink);
-                });
-            } else {
-                sendProxyResponse(upstream, res);
-            }
-        });
-        proxyReq.on('error', (err: Error) => {
-            logger.warn('Proxy Torbox falhou, fallback redirect', { error: err.message });
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.redirect(302, streamLink);
-        });
-        proxyReq.setTimeout(120000, () => { proxyReq.destroy() });
-    });
-}
-
-function sendProxyResponse(upstream: any, res: any) {
-    const statusCode = upstream.statusCode || 200;
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
-    res.setHeader('Accept-Ranges', 'bytes');
-    if (upstream.headers['content-type']) res.setHeader('Content-Type', upstream.headers['content-type']);
-    if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
-    if (upstream.headers['content-range']) res.setHeader('Content-Range', upstream.headers['content-range']);
-    res.status(statusCode);
-    upstream.pipe(res);
-}
-
-// Serve stream: proxy CORS pra Stremio Web, redirect direto pra apps nativos
-function serveStream(streamLink: string, req: any, res: any, logger: any, baseUrl: string) {
-    if (isStremioWeb(req)) {
-        return proxyStreamToResponse(streamLink, req, res, logger, baseUrl);
-    }
-    // App nativo (mobile/desktop): redirect direto (sem gastar banda do servidor)
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    return res.redirect(302, streamLink);
 }
 
 // Essa função NUNCA rejeita – sempre retorna um objeto com status
@@ -227,7 +158,8 @@ export const setupResolveRoutes = (app: any) => {
         const cacheKey = `resolve:torrentio:${apiKey}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
         const cachedDirectLink = cacheService.get<string>(cacheKey);
         if (cachedDirectLink) {
-            return serveStream(cachedDirectLink, req, res, resolveLogger, baseUrl);
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            return res.redirect(302, cachedDirectLink);
         }
 
         resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
@@ -259,7 +191,8 @@ export const setupResolveRoutes = (app: any) => {
                 const readyStatuses = ['ready', 'completed', 'cached', 'uploading', 'seeding'];
                 if (readyStatuses.some(s => (tbResult.status || '').toLowerCase().includes(s)) && tbResult.streamLink) {
                     cacheService.set(cacheKey, tbResult.streamLink, CACHE_TTL);
-                    return serveStream(tbResult.streamLink, req, res, resolveLogger, baseUrl);
+                    res.setHeader('Access-Control-Allow-Origin', '*');
+                    return res.redirect(302, tbResult.streamLink);
                 }
 
                 // Estados de progresso/espera (case-insensitive)
