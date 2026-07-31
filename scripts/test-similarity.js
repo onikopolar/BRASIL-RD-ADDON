@@ -27,6 +27,17 @@ const testCases = [
     torrentYear: 2015,
     expected: false, // E:X — SxxExx em filme é suspeito
   },
+
+  // ═══ MANDALORIAN & GROGU: PT tem "Star Wars", EN não ═══
+  {
+    label: 'Mandalorian & Grogu filme (Star Wars no título)',
+    tmdbTitles: ['Star Wars O Mandaloriano e Grogu', 'The Mandalorian and Grogu'],
+    tmdbYear: 2026,
+    tmdbMediaType: 'movie',
+    torrentTitle: 'Star.Wars.The.Mandalorian.And.Grogu.2026.1080p.WEBRip.Dublado.mkv',
+    torrentYear: 2026,
+    expected: true, // F deve usar palavras de AMBOS os títulos TMDB
+  },
 ];
 
 // ─── Execução ───

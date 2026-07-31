@@ -46,17 +46,18 @@ export class TorrentScraperService {
             const allResults: TorrentResult[] = [];
 
             // Executa TorrentIndexer, WebScrapers e WordPress API em paralelo
-            const indexerPromise = torrentIndexerConfig.enabled
+            // Factory functions: promessas encapsuladas pra nao dispararem antes do if/else
+            const indexerFactory = () => torrentIndexerConfig.enabled
                 ? this.searchTorrentIndexerWithQueries(searchQueries, type, targetSeason, targetYear, tmdbData)
                     .catch(() => [])
                 : Promise.resolve([]);
 
-            const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
+            const webScrapersFactory = () => this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
 
             const wpQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const wpQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const wpPromise = Promise.all([
+            const wpFactory = () => Promise.all([
                 this.wpScraper.search(wpQueryEn, type).catch(() => []),
                 wpQueryPt !== wpQueryEn ? this.wpScraper.search(wpQueryPt, type).catch(() => []) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -69,15 +70,12 @@ export class TorrentScraperService {
                 return merged;
             }).catch(() => [] as TorrentResult[]);
 
-            // TPB: busca em inglês E português (torrents PT têm títulos nos dois idiomas)
-            // ⚠️ TPB é sensível a acentos: usa portugueseTitleRaw (com acentos) para PT
             const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const tpbPromise = Promise.all([
+            const tpbFactory = () => Promise.all([
                 searchTpb(tpbQueryEn, type),
                 tpbQueryPt !== tpbQueryEn ? searchTpb(tpbQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
-                // Merge e dedup por infoHash
                 const seen = new Set<string>();
                 const merged = [...en, ...pt].filter(t => {
                   if (seen.has(t.infoHash)) return false;
@@ -87,10 +85,9 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapTpbResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // RARGB: busca em inglês E português (mesmo padrão do TPB)
             const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const rargbPromise = Promise.all([
+            const rargbFactory = () => Promise.all([
                 searchRargb(rargbQueryEn, type),
                 rargbQueryPt !== rargbQueryEn ? searchRargb(rargbQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -103,10 +100,9 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapRargbResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // Starck Oficial: busca em inglês E português (HTML scraper, não WordPress API)
             const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const starckPromise = Promise.all([
+            const starckFactory = () => Promise.all([
                 searchStarck(starckQueryEn, type),
                 starckQueryPt !== starckQueryEn ? searchStarck(starckQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -119,10 +115,9 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapStarckResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // HDR Torrent: busca EN + PT (HTML scraper, magnets diretos no HTML)
             const hdrQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const hdrQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const hdrPromise = Promise.all([
+            const hdrFactory = () => Promise.all([
                 searchHdr(hdrQueryEn, type),
                 hdrQueryPt !== hdrQueryEn ? searchHdr(hdrQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -135,19 +130,17 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // ═══ SCRAPERS PRINCIPAIS: Comando/BLUDV (WP) + Starck ═══
-            // ═══ SCRAPERS FALLBACK: HDR, TPB, RARGB, Indexer, Web ═══
-            // skipPriority=false → só principais | skipPriority=true → só fallbacks
+            // SCRAPERS PRINCIPAIS: Comando/BLUDV (WP) + Starck
+            // SCRAPERS FALLBACK: HDR, TPB, RARGB, Indexer, Web
+            // skipPriority=false = so principais | skipPriority=true = so fallbacks
             if (skipPriority) {
-                // Só fallback — principais já falharam na FASE 1
                 const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
+                    hdrFactory(), indexerFactory(), webScrapersFactory(), tpbFactory(), rargbFactory()
                 ]);
                 allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
             } else {
-                // Só principais — fallbacks só se necessário
                 const [wpResults, starckResults] = await Promise.all([
-                    wpPromise, starckPromise
+                    wpFactory(), starckFactory()
                 ]);
                 allResults.push(...wpResults, ...starckResults);
             }

@@ -67,15 +67,15 @@ class TorrentScraperService {
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
             const allResults = [];
-            const indexerPromise = scraperProviders_js_1.torrentIndexerConfig.enabled
+            const indexerFactory = () => scraperProviders_js_1.torrentIndexerConfig.enabled
                 ? this.searchTorrentIndexerWithQueries(searchQueries, type, targetSeason, targetYear, tmdbData)
                     .catch(() => [])
                 : Promise.resolve([]);
-            const webScrapersPromise = this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
+            const webScrapersFactory = () => this.searchWebScrapersWithQueries(searchQueries, type, tmdbData)
                 .catch(() => []);
             const wpQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const wpQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const wpPromise = Promise.all([
+            const wpFactory = () => Promise.all([
                 this.wpScraper.search(wpQueryEn, type).catch(() => []),
                 wpQueryPt !== wpQueryEn ? this.wpScraper.search(wpQueryPt, type).catch(() => []) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -90,7 +90,7 @@ class TorrentScraperService {
             }).catch(() => []);
             const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const tpbPromise = Promise.all([
+            const tpbFactory = () => Promise.all([
                 (0, tpbScraper_js_1.searchTpb)(tpbQueryEn, type),
                 tpbQueryPt !== tpbQueryEn ? (0, tpbScraper_js_1.searchTpb)(tpbQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -105,7 +105,7 @@ class TorrentScraperService {
             }).catch(() => []);
             const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const rargbPromise = Promise.all([
+            const rargbFactory = () => Promise.all([
                 (0, rargbScraper_js_1.searchRargb)(rargbQueryEn, type),
                 rargbQueryPt !== rargbQueryEn ? (0, rargbScraper_js_1.searchRargb)(rargbQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -120,7 +120,7 @@ class TorrentScraperService {
             }).catch(() => []);
             const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const starckPromise = Promise.all([
+            const starckFactory = () => Promise.all([
                 (0, starckScraper_js_1.searchStarck)(starckQueryEn, type),
                 starckQueryPt !== starckQueryEn ? (0, starckScraper_js_1.searchStarck)(starckQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -135,7 +135,7 @@ class TorrentScraperService {
             }).catch(() => []);
             const hdrQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const hdrQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const hdrPromise = Promise.all([
+            const hdrFactory = () => Promise.all([
                 (0, hdrScraper_js_1.searchHdr)(hdrQueryEn, type),
                 hdrQueryPt !== hdrQueryEn ? (0, hdrScraper_js_1.searchHdr)(hdrQueryPt, type) : Promise.resolve([])
             ]).then(([en, pt]) => {
@@ -150,13 +150,13 @@ class TorrentScraperService {
             }).catch(() => []);
             if (skipPriority) {
                 const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
+                    hdrFactory(), indexerFactory(), webScrapersFactory(), tpbFactory(), rargbFactory()
                 ]);
                 allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
             }
             else {
                 const [wpResults, starckResults] = await Promise.all([
-                    wpPromise, starckPromise
+                    wpFactory(), starckFactory()
                 ]);
                 allResults.push(...wpResults, ...starckResults);
             }

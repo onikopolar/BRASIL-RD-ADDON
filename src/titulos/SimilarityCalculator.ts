@@ -201,9 +201,17 @@ export class SimilarityCalculator {
     const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
     // F: Pula se é série (SxxExx) — episódios têm subtítulos legítimos (ex: "Celebs")
     const temEp = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
+    // Usa TODAS as palavras de todos os títulos TMDB (não só do melhor match)
+    // Ex: PT tem "star wars", EN não — sem isso F rejeita "Star Wars" do torrent
+    const todasPalavrasTmdb = new Set<string>();
+    for (const titulo of titulosValidos) {
+      for (const palavra of this.normalizarParaComparacao(titulo).split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w))) {
+        todasPalavrasTmdb.add(palavra);
+      }
+    }
     const condicaoF = temEp
       ? { passou: true, motivo: '' }
-      : this.validarComprimentoPalavras(palavrasTorrent, melhor.palavrasTmdb);
+      : this.validarComprimentoPalavras(palavrasTorrent, [...todasPalavrasTmdb]);
     const condicaoG = this.validarSequenciaNumero(tituloTorrent, palavrasTorrent, titulosValidos);
 
     const todasPassaram = condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoF.passou && condicaoG.passou;
