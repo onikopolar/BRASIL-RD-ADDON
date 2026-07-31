@@ -352,11 +352,17 @@ export class SimilarityCalculator {
     return { passou: true, motivo: '' };
   }
 
-  /** E: Temporada do torrent deve bater com o alvo */
+  /** E: Temporada do torrent deve bater com o alvo.
+   *    Se TMDB é filme e torrent tem SxxExx → rejeita (filme não tem episódio). */
   private validarTemporada(
     tituloTorrent: string,
     temporadaAlvo?: number
   ): { passou: boolean; motivo: string } {
+    // Se torrent tem SxxExx mas não é série (sem temporadaAlvo) → suspeito
+    const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
+    if (temporadaAlvo === undefined && temEpisodio) {
+      return { passou: false, motivo: 'SxxExx em filme — provável episódio de série' };
+    }
     if (temporadaAlvo === undefined) return { passou: true, motivo: '' };
     const epRange = extrairRangeEpisodios(tituloTorrent);
     if (epRange) {

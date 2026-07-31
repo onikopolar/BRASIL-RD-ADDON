@@ -259,6 +259,23 @@ export class CatalogProvider {
       if (dadosMagnets[i]?.infoHash) t.magnetInfoHash = dadosMagnets[i]!.infoHash;
     });
 
+    // ═══ PASSO 1.5: Filtra episódios de série quando request é movie ═══
+    if (request.type === 'movie') {
+      const antes = torrents.length;
+      torrents = torrents.filter(t => {
+        const nome = t.canonicalName || t.title;
+        const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(nome);
+        if (temEpisodio) {
+          this.logger.debug('Ignorado episodio em filme', { titulo: nome.substring(0, 60) });
+          return false;
+        }
+        return true;
+      });
+      if (torrents.length < antes) {
+        this.logger.info('Filtrado episodios de filme', { removidos: antes - torrents.length, restantes: torrents.length });
+      }
+    }
+
     // ═══ PASSO 2: Pre-filtro PT-BR usando canonicalName (magnet) ═══
     // Verifica APENAS indicadores explicitos de idioma (dual, dublado, grupos BR).
     // NAO usa TMDB — nomes de magnet e titulos TMDB nao tem relacao direta.
