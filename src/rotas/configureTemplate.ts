@@ -168,7 +168,8 @@ export const configureTemplate = (manifest: any) => {
                 if (apiKey) {
                     // Usa hostname (ex: localhost ou 127.0.0.1) para gerar o link stremio://
                     installLink.href = 'stremio://' + window.location.hostname + ':' + window.location.port + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
-                    console.log('[Brasil RD] Link gerado:', installLink.href);
+                    // Link mascarado no console por segurança (API key não deve vazar)
+                    console.log('[Brasil RD] Link gerado (mascarado):', installLink.href.replace(/torbox=[^/]+/, 'torbox=***'));
                 } else {
                     installLink.href = '#';
                 }

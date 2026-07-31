@@ -4,6 +4,15 @@ import crypto from 'crypto';
 
 const logger = new Logger('ULTRA-DEBUG');
 
+// Redacta API keys de URLs antes de logar (CRÍTICO: evita vazamento de tokens)
+function maskUrl(url: string): string {
+  // Redacta /torbox=UUID/... → /torbox=***/...
+  let masked = url.replace(/(\/torbox=)([a-f0-9-]{32,36})(\/|$)/gi, '$1***$3');
+  // Redacta ?token=... ou &token=... (Torbox download links)
+  masked = masked.replace(/([?&]token=)([^&\s]+)/gi, '$1***');
+  return masked;
+}
+
 // Máscara valores sensíveis (API keys, tokens)
 function maskSensitive(obj: any, depth: number = 0): any {
     if (depth > 5) return '[MAX_DEPTH]';
@@ -71,8 +80,8 @@ export const ultraDebugMiddleware = () => {
                 requestId,
                 timestamp: new Date().toISOString(),
                 method: req.method,
-                fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
-                path: req.path,
+                fullUrl: maskUrl(`${req.protocol}://${req.get('host')}${req.originalUrl}`),
+                path: maskUrl(req.path),
                 query: maskSensitive(req.query),
                 params: maskSensitive(req.params),
                 headers: getRelevantHeaders(req),
@@ -81,7 +90,7 @@ export const ultraDebugMiddleware = () => {
                 body: req.body && Object.keys(req.body).length > 0 ? maskSensitive(req.body) : undefined,
             };
 
-            logger.info(`▶ REQUEST #${requestId} ${req.method} ${req.path}`, entryLog);
+            logger.info(`▶ REQUEST #${requestId} ${req.method} ${maskUrl(req.path)}`, entryLog);
         }
 
         // ═══════════════════════════════════════════
@@ -101,9 +110,9 @@ export const ultraDebugMiddleware = () => {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
-                    path: req.path,
+                    path: maskUrl(req.path),
                     bodySize: bodyStr.length,
-                    bodyPreview: truncated,
+                    bodyPreview: maskUrl(truncated),
                     headers: res.getHeaders ? {
                         'content-type': res.getHeader('content-type'),
                         'content-length': res.getHeader('content-length'),
@@ -124,9 +133,9 @@ export const ultraDebugMiddleware = () => {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
-                    path: req.path,
+                    path: maskUrl(req.path),
                     contentType: res.getHeader('content-type'),
-                    bodyPreview: truncated,
+                    bodyPreview: maskUrl(truncated),
                 });
             }
             return originalSend(body);
@@ -144,12 +153,12 @@ export const ultraDebugMiddleware = () => {
                 redirectUrl = url;
             }
             if (!shouldSkip) {
-                logger.info(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${redirectUrl}`, {
+                logger.info(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${maskUrl(redirectUrl)}`, {
                     requestId,
                     statusCode,
                     responseTimeMs: responseTime,
-                    path: req.path,
-                    redirectTo: redirectUrl,
+                    path: maskUrl(req.path),
+                    redirectTo: maskUrl(redirectUrl),
                 });
             }
             if (statusCode === 302) {
