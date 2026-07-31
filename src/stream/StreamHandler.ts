@@ -203,7 +203,10 @@ export class StreamHandler {
         if (seasonMatch) {
           const season = parseInt(seasonMatch[1]);
           const episode = parseInt(seasonMatch[2]);
-          where.imdbSeason = season;
+          where[Op.or] = [
+            { imdbSeason: season },
+            { imdbSeason: null },  // pack multi-temporada
+          ];
           // Filtra por range de episódios: só inclui torrents que cobrem este episódio
           // (ou que não têm range = pack completo da temporada)
           where[Op.and] = [

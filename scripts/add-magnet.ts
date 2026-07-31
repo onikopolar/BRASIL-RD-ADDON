@@ -9,7 +9,7 @@ import { ImdbScraperService } from '../src/catalogo/ImdbScraperService.js';
 import { QualityDetector } from '../src/lib/qualityDetector.js';
 import { Logger } from '../src/utils/logger.js';
 import { analisarMagnet } from '../src/magnet/magnetHelper.js';
-import { getTorrent, createTorrent } from '../src/lib/repository.js';
+import { getTorrent, createTorrent, upsertTorrent } from '../src/lib/repository.js';
 import { extrairRangeEpisodios } from '../src/titulos/TechnicalWords.js';
 import { TorboxService } from '../src/debrid/RealDebridService.js';
 import * as readline from 'readline';
@@ -49,19 +49,120 @@ async function main() {
   } catch { console.log('   [AVISO] TMDB falhou.'); }
 
   const tipo = (await question(rl, 'Tipo (movie/series) [movie]: ')) === 'series' ? 'series' : 'movie';
-  const seasonStr = tipo === 'series' ? await question(rl, 'Temporada [Enter=pular]: ') : '';
-  const season = seasonStr ? parseInt(seasonStr) : null;
+  let season: number | null = null;
+  const epRange = extrairRangeEpisodios(dn);
+  if (tipo === 'series') {
+    const seasonDetectada = epRange?.season || null;
+    const promptSeason = seasonDetectada 
+      ? `Temporada [${seasonDetectada}]: ` 
+      : 'Temporada (1, 2, 3...): ';
+    const seasonStr = await question(rl, promptSeason);
+    season = seasonStr ? parseInt(seasonStr) : seasonDetectada;
+  }
   const qualidade = qualityDetector.extractBestQuality(dn) || await question(rl, 'Qualidade [HD]: ') || 'HD';
   const idioma = await question(rl, 'Idioma [pt-BR]: ') || 'pt-BR';
 
-  console.log('\nSalvando direto no banco...');
+  console.log('\n=== TORBOX: Baixando e ativando AirLock ===');
 
-  if (infoHash) {
-    const existe = await getTorrent(infoHash);
-    if (existe) { console.log('[AVISO] Ja existe no banco.'); rl.close(); return; }
+  const curatorKey = process.env.TORBOX_CURATOR_API_KEY;
+  if (!curatorKey || curatorKey.length < 10) {
+    console.log('[ERRO] TORBOX_CURATOR_API_KEY nao configurada no .env');
+    rl.close();
+    return;
   }
 
-  const epRange = extrairRangeEpisodios(dn);
+  const is4k = qualidade.toLowerCase().includes('2160p') || qualidade.toLowerCase().includes('4k');
+
+  // Passo 1: Adicionar magnet ao Torbox do curador
+  console.log('Adicionando magnet ao Torbox...');
+  let torrentId: string;
+  try {
+    torrentId = await torboxService.addMagnet(magnet, curatorKey);
+    console.log(`   Torrent ID: ${torrentId}`);
+  } catch (e) {
+    console.log('[ERRO] Falha ao adicionar magnet:', (e as Error).message);
+    rl.close();
+    return;
+  }
+
+  // Passo 2: Aguardar download concluir, mostrando progresso
+  console.log('\nAguardando download...');
+  let lastProgress = -1;
+  let downloadDone = false;
+  const startTime = Date.now();
+  const MAX_WAIT_MS = 30 * 60 * 1000; // 30 minutos
+
+  while (!downloadDone) {
+    if (Date.now() - startTime > MAX_WAIT_MS) {
+      console.log('\n[ERRO] Timeout — download demorou mais de 30 minutos.');
+      rl.close();
+      return;
+    }
+
+    try {
+      const info = await torboxService.getTorrentInfo(torrentId, curatorKey);
+      const progress = info.progress || 0;
+      const pct = Math.round(progress * 100);
+      const state = info.download_state || 'unknown';
+      const speed = info.download_speed
+        ? `${(info.download_speed / 1024 / 1024).toFixed(1)} MB/s`
+        : '--';
+
+      if (pct !== lastProgress) {
+        const filled = Math.floor(pct / 5);
+        const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
+        process.stdout.write(`\r   [${bar}] ${pct}% | ${speed} | ${state}   `);
+        lastProgress = pct;
+      }
+
+      if (pct >= 100 || state === 'completed' || state === 'uploading' || state === 'cached') {
+        downloadDone = true;
+      }
+    } catch (e) {
+      // Erro no poll — tenta de novo
+    }
+
+    if (!downloadDone) {
+      await new Promise(r => setTimeout(r, 5000));
+    }
+  }
+
+  console.log('\n   ✅ Download concluído!');
+
+  // Passo 3: Ativar AirLock (obrigatório)
+  console.log('\nAtivando AirLock...');
+  try {
+    await torboxService.airlockTorrent(torrentId, curatorKey, !is4k);
+    console.log(`   AirLock: ${is4k ? 'DESATIVADO (4K)' : 'ATIVADO'} ✅`);
+  } catch (e) {
+    console.log('[ERRO] AirLock falhou:', (e as Error).message);
+    console.log('Torrent NAO salvo no banco — corrija o erro e tente novamente.');
+    rl.close();
+    return;
+  }
+
+  // Passo 4: Só agora salvar no banco
+  console.log('\nSalvando no banco...');
+
+  if (infoHash) {
+    const existentes = await getTorrent(infoHash);
+    if (existentes) {
+      if (tipo === 'series' && season !== null && existentes.imdbSeason !== season) {
+        await upsertTorrent(infoHash, {
+          imdbSeason: null,
+          imdbEpisodeStart: null,
+          imdbEpisodeEnd: null,
+          lastSeen: new Date(),
+        });
+        console.log('[ATUALIZADO] Marcado como pack multi-temporada (season=null)');
+      } else {
+        console.log('[AVISO] Ja existe no banco.');
+      }
+      rl.close();
+      return;
+    }
+  }
+
   await createTorrent({
     infoHash: infoHash || 'manual-' + Date.now(),
     provider: 'Curadoria', title: dn, size: 0, type: tipo,
@@ -71,22 +172,6 @@ async function main() {
     seeders: 50, idioma, qualidade,
     uploadDate: new Date(), lastSeen: new Date(),
   });
-
-  console.log(`DB SALVO! ${dn.substring(0, 70)}`);
-
-  // AirLock: adiciona na conta do curador e marca como permanente
-  const curatorKey = process.env.TORBOX_CURATOR_API_KEY;
-  if (curatorKey && curatorKey.length > 10) {
-    try {
-      console.log('\nAtivando AirLock na conta do curador...');
-      const is4k = qualidade.toLowerCase().includes('2160p') || qualidade.toLowerCase().includes('4k');
-      const torrentId = await torboxService.addMagnet(magnet, curatorKey);
-      await torboxService.airlockTorrent(torrentId, curatorKey, !is4k);
-      console.log(`AirLock: ${is4k ? 'DESATIVADO (4K)' : 'ATIVADO'} | Torrent ID: ${torrentId}`);
-    } catch (e) {
-      console.log('[AVISO] AirLock falhou:', (e as Error).message);
-    }
-  }
 
   console.log(`\nPRONTO! ${dn.substring(0, 70)}`);
   rl.close();

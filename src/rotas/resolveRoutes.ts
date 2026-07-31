@@ -1,4 +1,5 @@
 import path from 'path';
+import https from 'https';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { TorboxService } from '../debrid/RealDebridService.js';
@@ -7,6 +8,19 @@ import { CacheService } from '../debrid/CacheService.js';
 import { StaticResponseService, StaticResponse } from '../stream/StaticResponseService.js';
 import { Logger } from '../utils/logger.js';
 import { getStatusMessage } from './statusHelpers.js';
+
+// ── Otimizações globais ──────────────────────────────────────────────
+
+// Pool de conexões HTTPS reutilizável (evita handshake TLS por request)
+const httpsAgent = new https.Agent({ keepAlive: true, maxSockets: 10, keepAliveMsecs: 30000 });
+
+// Stremio Web (browser) precisa de proxy CORS; apps nativos aceitam redirect direto
+function isStremioWeb(req: any): boolean {
+    const origin = (req.get('origin') || '').toLowerCase();
+    const referer = (req.get('referer') || '').toLowerCase();
+    return origin.includes('web.strem.io') || origin.includes('strem.io')
+        || referer.includes('web.strem.io');
+}
 
 // Envia video MP4 de status diretamente (sem redirect) para o Stremio Web tocar
 function sendStatusVideo(res: any, resolveLogger: Logger, requestId: string, videoUrl: string) {
@@ -63,6 +77,61 @@ async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
     return dados ? dados.infoHash : null;
 }
 
+// Proxy: baixa stream do Torbox e entrega com CORS (necessário pra Stremio Web)
+function proxyStreamToResponse(streamLink: string, req: any, res: any, logger: any, baseUrl: string) {
+    // Forward Range header para buffering funcionar no Stremio Web
+    const proxyHeaders: any = { 'User-Agent': 'Brasil-RD-Addon/1.4' };
+    if (req.headers.range) {
+        proxyHeaders['Range'] = req.headers.range;
+    }
+
+    return new Promise<void>((_resolve, _reject) => {
+        const proxyReq = https.get(streamLink, { headers: proxyHeaders, agent: httpsAgent }, (upstream: any) => {
+            if (upstream.statusCode >= 300 && upstream.statusCode < 400 && upstream.headers.location) {
+                https.get(upstream.headers.location, { headers: proxyHeaders, agent: httpsAgent }, (finalUpstream: any) => {
+                    sendProxyResponse(finalUpstream, res);
+                }).on('error', (err: Error) => {
+                    logger.warn('Proxy Torbox redirect falhou, fallback redirect', { error: err.message });
+                    res.setHeader('Access-Control-Allow-Origin', '*');
+                    res.redirect(302, streamLink);
+                });
+            } else {
+                sendProxyResponse(upstream, res);
+            }
+        });
+        proxyReq.on('error', (err: Error) => {
+            logger.warn('Proxy Torbox falhou, fallback redirect', { error: err.message });
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.redirect(302, streamLink);
+        });
+        proxyReq.setTimeout(120000, () => { proxyReq.destroy() });
+    });
+}
+
+function sendProxyResponse(upstream: any, res: any) {
+    const statusCode = upstream.statusCode || 200;
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', '*');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, Content-Type, Content-Range, Accept-Ranges');
+    res.setHeader('Accept-Ranges', 'bytes');
+    if (upstream.headers['content-type']) res.setHeader('Content-Type', upstream.headers['content-type']);
+    if (upstream.headers['content-length']) res.setHeader('Content-Length', upstream.headers['content-length']);
+    if (upstream.headers['content-range']) res.setHeader('Content-Range', upstream.headers['content-range']);
+    res.status(statusCode);
+    upstream.pipe(res);
+}
+
+// Serve stream: proxy CORS pra Stremio Web, redirect direto pra apps nativos
+function serveStream(streamLink: string, req: any, res: any, logger: any, baseUrl: string) {
+    if (isStremioWeb(req)) {
+        return proxyStreamToResponse(streamLink, req, res, logger, baseUrl);
+    }
+    // App nativo (mobile/desktop): redirect direto (sem gastar banda do servidor)
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    return res.redirect(302, streamLink);
+}
+
 // Essa função NUNCA rejeita – sempre retorna um objeto com status
 async function processMagnetWithTorbox(
     magnet: string, apiKey: string, season?: number, episode?: number, type: string = 'movie', quality?: string
@@ -83,22 +152,19 @@ async function processMagnetWithTorbox(
 
     // Tenta buscar no cache / Torbox existente
     try {
-        const torrentInfo = await rdTorrentCacheService.getTorrentId(magnetHash, apiKey, torboxService);
-        if (torrentInfo.torrentId) {
-            // Paralelo: getStreamLink e getTorrentInfo são independentes
-            const [streamLinkResult, torrentDetails] = await Promise.all([
-                rdTorrentCacheService.getStreamLink(torrentInfo.torrentId, apiKey, season, episode, torboxService, quality),
-                torboxService.getTorrentInfo(torrentInfo.torrentId, apiKey)
-            ]);
-            if (torrentInfo.status !== torrentDetails.download_state) {
-                rdTorrentCacheService.updateTorrentStatus(magnetHash, apiKey, torrentDetails.download_state);
-            }
+        const cached = await rdTorrentCacheService.getTorrentId(magnetHash, apiKey, torboxService);
+        if (cached.torrentId) {
+            // 1 chamada à API: busca info e reusa no getStreamLink (evita 2ª chamada)
+            const details = await torboxService.getTorrentInfo(cached.torrentId, apiKey);
+            const linkResult = await rdTorrentCacheService.getStreamLink(
+                cached.torrentId, apiKey, season, episode, torboxService, quality, details
+            );
             return {
                 success: true,
-                status: torrentDetails.download_state,
-                streamLink: streamLinkResult.streamLink || undefined,
-                message: getStatusMessage(torrentDetails.download_state, Math.round(torrentDetails.progress * 100)),
-                torrentId: torrentInfo.torrentId
+                status: details.download_state,
+                streamLink: linkResult.streamLink || undefined,
+                message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
+                torrentId: cached.torrentId
             };
         }
     } catch (err) {
@@ -144,34 +210,24 @@ export const setupResolveRoutes = (app: any) => {
         const host = req.get('host') || 'localhost:7000';
         const baseUrl = `${protocol}://${host}`;
 
-        resolveLogger.info('═══════════════════════════════════════', {});
-        resolveLogger.info('🔄 RESOLVE INICIADO', {
-            requestId: req._ultraDebugId,
-            apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
-            apiKeyLength: apiKey?.length || 0,
-            infoHash,
-            fileIndex,
-            filename: filename?.substring(0, 80),
-            season,
-            episode,
-            quality,
-            type,
-            client: req.headers['user-agent']?.substring(0, 80),
-            origin: req.get('origin'),
-            host: req.get('host'),
-        });
+        // Impede Cloudflare de cachear respostas de resolve
+        res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, private');
+        res.setHeader('Pragma', 'no-cache');
+        res.setHeader('Expires', '0');
+
+        // HEAD request: responde imediatamente (Stremio verifica antes do GET)
+        if (req.method === 'HEAD') {
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+            res.setHeader('Accept-Ranges', 'bytes');
+            res.setHeader('Content-Type', 'video/mp4');
+            return res.status(200).end();
+        }
 
         const cacheKey = `resolve:torrentio:${apiKey}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
         const cachedDirectLink = cacheService.get<string>(cacheKey);
         if (cachedDirectLink) {
-            resolveLogger.info('✅ RESOLVE CACHE HIT - Redirecionando para link em cache', {
-                requestId: req._ultraDebugId,
-                cacheKey,
-                streamLinkPreview: cachedDirectLink.substring(0, 80) + '...',
-            });
-            res.setHeader('Access-Control-Allow-Origin', '*');
-            res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-            return res.redirect(302, cachedDirectLink);
+            return serveStream(cachedDirectLink, req, res, resolveLogger, baseUrl);
         }
 
         resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
@@ -200,15 +256,15 @@ export const setupResolveRoutes = (app: any) => {
 
             // Tratar o resultado – NUNCA mais lançar exceção
             if (tbResult.success) {
-                if ((tbResult.status === 'ready' || tbResult.status === 'completed' || tbResult.status === 'cached') && tbResult.streamLink) {
+                const readyStatuses = ['ready', 'completed', 'cached', 'uploading', 'seeding'];
+                if (readyStatuses.some(s => (tbResult.status || '').toLowerCase().includes(s)) && tbResult.streamLink) {
                     cacheService.set(cacheKey, tbResult.streamLink, CACHE_TTL);
-                    res.setHeader('Access-Control-Allow-Origin', '*');
-                    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-                    return res.redirect(302, tbResult.streamLink);
+                    return serveStream(tbResult.streamLink, req, res, resolveLogger, baseUrl);
                 }
 
                 // Estados de progresso/espera (case-insensitive)
-                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'uploading', 'checking']; 
+                // NOTA: 'uploading' e 'seeding' são estados PRONTOS, não de progresso
+                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'checking']; 
                 const statusLower = tbResult.status?.toLowerCase() || '';
                 if (progressStatuses.some(s => statusLower.includes(s))) {
                     // usando baseUrl do topo

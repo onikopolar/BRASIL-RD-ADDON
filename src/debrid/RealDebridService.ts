@@ -227,12 +227,13 @@ export class TorboxService {
   }
 
   async getStreamLinkForTorrent(
-    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string
+    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string,
+    cachedInfo?: TorboxTorrentInfo  // evita 2ª chamada à API
   ): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
     try {
-      const info = await this.getTorrentInfo(torrentId, apiKey);
+      const info = cachedInfo || await this.getTorrentInfo(torrentId, apiKey);
 
       const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
       if (staticResponse) {
@@ -358,7 +359,7 @@ export class TorboxService {
   private isReadyStatus(status: string): boolean {
     const ready = ['completed', 'cached', 'uploading', 'seeding'];
     const s = status?.toLowerCase() || '';
-    return ready.includes(s);
+    return ready.some(r => s.includes(r));
   }
 
   private async retryableRequest<T>(

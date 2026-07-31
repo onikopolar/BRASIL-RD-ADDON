@@ -1,4 +1,5 @@
 import { TorboxService } from './RealDebridService.js';
+import { TorboxTorrentInfo } from '../types/index.js';
 import { Logger } from '../utils/logger.js';
 import { torrentCacheService, streamCacheService } from './AdvancedCacheService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
@@ -184,7 +185,8 @@ export class RdTorrentCacheService {
     season?: number,
     episode?: number,
     torboxService?: TorboxService,
-    quality?: string
+    quality?: string,
+    cachedInfo?: TorboxTorrentInfo  // evita 2ª chamada à API
   ): Promise<{ streamLink: string | null; fromCache: boolean }> {
     const cacheKey = this.getStreamLinkCacheKey(torrentId, season, episode);
     const advancedCacheKey = `stream:${torrentId}:${season || 'all'}:${episode || 'all'}`;
@@ -235,7 +237,7 @@ export class RdTorrentCacheService {
     }
     
     // Buscar no RD
-    const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality);
+    const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality, cachedInfo);
     
     if (streamLink) {
       // Salvar no cache avançado
