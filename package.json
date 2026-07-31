@@ -6,7 +6,7 @@
   "main": "dist/server.js",
   "scripts": {
     "build": "node build.js",
-    "postbuild": "npx pm2 start ecosystem.config.js --update-env",
+    "deploy": "node scripts/deploy-release.js",
     "start": "node railway-start.js",
     "start:stremio": "node dist/server.js",
     "dev": "node scripts/dev.js",
