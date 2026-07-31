@@ -135,13 +135,22 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // Todos scrapers rodam em paralelo. Se skipPriority=true, só roda fallback.
-            const [wpResults, starckResults, hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                skipPriority ? Promise.resolve([]) : wpPromise,
-                skipPriority ? Promise.resolve([]) : starckPromise,
-                hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
-            ]);
-            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            // ═══ SCRAPERS PRINCIPAIS: Comando/BLUDV (WP) + Starck ═══
+            // ═══ SCRAPERS FALLBACK: HDR, TPB, RARGB, Indexer, Web ═══
+            // skipPriority=false → só principais | skipPriority=true → só fallbacks
+            if (skipPriority) {
+                // Só fallback — principais já falharam na FASE 1
+                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
+                    hdrPromise, indexerPromise, webScrapersPromise, tpbPromise, rargbPromise
+                ]);
+                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
+            } else {
+                // Só principais — fallbacks só se necessário
+                const [wpResults, starckResults] = await Promise.all([
+                    wpPromise, starckPromise
+                ]);
+                allResults.push(...wpResults, ...starckResults);
+            }
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
