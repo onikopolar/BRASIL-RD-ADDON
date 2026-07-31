@@ -199,7 +199,11 @@ export class SimilarityCalculator {
     const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent, temIndicadorPt);
     const condicaoD = this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent);
     const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
-    const condicaoF = this.validarComprimentoPalavras(palavrasTorrent, melhor.palavrasTmdb);
+    // F: Pula se é série (SxxExx) — episódios têm subtítulos legítimos (ex: "Celebs")
+    const temEp = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
+    const condicaoF = temEp
+      ? { passou: true, motivo: '' }
+      : this.validarComprimentoPalavras(palavrasTorrent, melhor.palavrasTmdb);
     const condicaoG = this.validarSequenciaNumero(tituloTorrent, palavrasTorrent, titulosValidos);
 
     const todasPassaram = condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoF.passou && condicaoG.passou;
@@ -318,12 +322,17 @@ export class SimilarityCalculator {
     return { passou, motivo: passou ? `Ano compativel: ${anoTorrent}=${anoTmdb}` : `Ano divergente: ${anoTorrent} vs ${anoTmdb} (dif=${diff}>${tolerancia})` };
   }
 
-  /** D: Nenhum número de sequência fora do esperado pelo TMDB */
+  /** D: Nenhum número de sequência fora do esperado pelo TMDB.
+   *    Ignora números em contexto de episódio/temporada. */
   private validarSequencia(
     tituloTorrent: string,
     titulosValidos: string[],
     anoTorrent: number | null
   ): { passou: boolean; motivo: string } {
+    // Se título menciona episódio/temporada, números são de episódio, não sequência
+    const temContextoEp = /\b(?:episodio|episódio|temporada|season|episode|temp)\b/i.test(tituloTorrent);
+    if (temContextoEp) return { passou: true, motivo: '' };
+
     const suspeitos = getPotentialSequelNumbers(tituloTorrent)
       .filter(n => n !== anoTorrent);
     // Filtra números dentro do range de episódios

@@ -236,7 +236,7 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   // Abreviacoes comuns de fansub
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
   'turg', 'Turg','TURG','fitgirl', 'FitGirl', 'Repack', 'repack',
-  
+
 ];
 
 // ─── FUNCOES ───
@@ -413,7 +413,18 @@ function _isInTechnicalContext(
     }
   }
 
-  // c) Range de episodios: S01E01-02, S01E01 02
+  // c) Contexto PT de episódio/temporada: "Episódio 5", "5ª Temporada", "Temporada 5"
+  const epPtRe = /\b(?:episodio|episódio)\s+(\d{1,3})\b/gi;
+  while ((m = epPtRe.exec(lowerTitle)) !== null) {
+    if (Number(m[1]) === num) return true;
+  }
+  const tempPtRe = /\b(\d{1,2})\s*ª?\s*(?:temporada|temp)\b|\b(?:temporada|temp)\s+(\d{1,2})\b/gi;
+  while ((m = tempPtRe.exec(lowerTitle)) !== null) {
+    const n = Number(m[1] || m[2]);
+    if (n === num) return true;
+  }
+
+  // d) Range de episodios: S01E01-02, S01E01 02
   const epRangeRe = /s\d+e\d+[-\s]+0*(\d+)/gi;
   while ((m = epRangeRe.exec(lowerTitle)) !== null) {
     if (Number(m[1]) === num) return true;
