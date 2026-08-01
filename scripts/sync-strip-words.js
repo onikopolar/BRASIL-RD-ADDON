@@ -40,13 +40,18 @@ if (newWords.length === 0) {
 
 console.log(`🆕 ${newWords.length} palavras novas para adicionar: ${newWords.join(', ')}`);
 
-// 5. Adiciona ao Set no TS source
+// 5. Adiciona ao Set no TS source (6 palavras por linha)
 const allWords = [...existingWords, ...newWords].sort();
-const newSetContent = allWords.map(w => `'${w}'`).join(',\n  ');
+const PER_LINE = 6;
+const lines = [];
+for (let i = 0; i < allWords.length; i += PER_LINE) {
+  lines.push('  ' + allWords.slice(i, i + PER_LINE).map(w => `'${w}'`).join(', '));
+}
+const newSetContent = lines.join(',\n');
 
 source = source.replace(
   /const TECHNICAL_STRIP_WORDS = new Set\(\[([\s\S]*?)\]\)/,
-  `const TECHNICAL_STRIP_WORDS = new Set([\n  ${newSetContent}\n])`
+  `const TECHNICAL_STRIP_WORDS = new Set([\n${newSetContent}\n])`
 );
 
 fs.writeFileSync(TS_FILE, source);

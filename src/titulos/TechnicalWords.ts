@@ -35,7 +35,7 @@ export const INTERNATIONAL_RELEASE_GROUPS = [
   'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws', 'xforce',
   'sva', 'exc', 'phd', 'grym', 'jyk', 'kings', 'dimension', 'sparks',
   'geckos', 'loki', 'memento', 'quid', 'mazemaze', 'kognitiv',
-  'anoxmous', 'bamboozle', 'cab', 'c0ke', 'cm8', 'crimson', 'drones', 'ebi',
+  'anoxmous', 'bamboozle', 'cab', 'c0ke', 'cm8', 'crimson', 'drones', 'ebi', 'rartv', '[rartv]'
 ];
 
 // Lista específica de trackers internacionais conhecidos
@@ -43,7 +43,7 @@ export const INTERNATIONAL_TRACKERS = [
   '1337x', 'torrentday', 'iptorrents', 'filelist', 'torrentleech',
   'demonoid', 'kickasstorrents', 'kat', 'thepiratebay', 'tpb',
   'limetorrents', 'zooqle', 'torrentz2', 'torrentdownloads', 'mononoke',
-  'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub',
+  'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub', 'rartv', 'bone', 'BONE'
 ];
 
 // Lista específica de grupos de release brasileiros conhecidos
@@ -54,7 +54,7 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes',
   'lapumia', 'comoeubaixo', 'bludv', 'BLUDV', 'WWW.BLUDV.COM',
-  'luanharper','SiGLA',
+  'luanharper','SiGLA', 'SF', 'WEB-DL', 'web-dl'
 ];
 
 // Função auxiliar para verificar se uma palavra é técnica
@@ -112,8 +112,8 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'legendado', 'legendada', 'legenda',
   // Abreviacoes comuns de fansub
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
-  'turg', 'Turg','TURG','fitgirl', 'FitGirl', 'Repack', 'repack','steamrip',
-  'g4ris',
+  'turg', 'Turg','TURG','fitgirl', 'FitGirl','steamrip',
+  'g4ris', 'rartv', 'ntb', 'bone', 'BONE'
 
 ];
 
@@ -496,8 +496,7 @@ const TECHNICAL_STRIP_WORDS = new Set([
   // Códigos de idioma em releases multi (ex: ESP-ENG, ITA, FRE)
   'esp', 'eng', 'ita', 'fre', 'ger', 'jpn', 'kor', 'rus', 'por',
   // Tags de sites WordPress (Listão Filmes, etc)
-  'download', 'listao', 'filmes', 'terror', 'acao', 'aventura', 'drama', 'comedia', 'guerra',
-  'classicos', 'acesse', 'original',
+  'download', 'listao', 'filmes', 'acesse',
   // Metadados de temporada
   'temporada', 'completa', 'season', 'complete', 'parts', 
   // Codecs e variantes

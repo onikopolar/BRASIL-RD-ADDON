@@ -214,7 +214,8 @@ export class SimilarityCalculator {
       : this.validarComprimentoPalavras(palavrasTorrent, [...todasPalavrasTmdb]);
     const condicaoG = this.validarSequenciaNumero(tituloTorrent, palavrasTorrent, titulosValidos);
 
-    const todasPassaram = condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoF.passou && condicaoG.passou;
+    // A: palavras mínimas do TMDB (trava títulos diferentes). B: informativo.
+    const todasPassaram = condicaoA.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoF.passou && condicaoG.passou;
 
     // Monta o motivo juntando as falhas (ou sucessos)
     const partesMotivo: string[] = [];
@@ -238,27 +239,22 @@ export class SimilarityCalculator {
       reason: partesMotivo.join(' | '),
     };
 
-    // Log compacto: 1 linha com status das 7 condicoes
-    const statusCondicoes = `A:${condicaoA.passou?'OK':'X'} B:${condicaoB.passou?'OK':'X'} C:${condicaoC.passou?'OK':'X'} D:${condicaoD.passou?'OK':'X'} E:${condicaoE.passou?'OK':'X'} F:${condicaoF.passou?'OK':'X'} G:${condicaoG.passou?'OK':'X'}`;
+    // Log compacto
+    const statusCondicoes = `A:${condicaoA.passou?'OK':'X'} C:${condicaoC.passou?'OK':'X'} D:${condicaoD.passou?'OK':'X'} E:${condicaoE.passou?'OK':'X'} F:${condicaoF.passou?'OK':'X'} G:${condicaoG.passou?'OK':'X'}`;
     if (!todasPassaram) {
-      // Mostra TODOS os motivos de rejeição (antes filtrava só alguns)
       const motivo = partesMotivo.join(' | ');
       
-      // Detecta "F-only rejection": todas OK menos F → candidato a normalização
-      const fOnly = !condicaoF.passou && condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
+      const fOnly = !condicaoF.passou && condicaoA.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
       
       if (fOnly) {
-        // F-only: só tamanho de palavra falhou (ex: LAPUMiA, grupos BR no canonicalName).
-        // Aceita mesmo assim — o auto-learner (registerStripCandidate) já registrou
-        // as palavras anômalas e vai stripá-las no futuro após 3+ IMDBs.
-        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] — aceito (auto-learner ativo): "${tituloTorrent.substring(0, 80)}" | ${motivo}`);
+        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] aceito: "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
         resultado.matches = true;
         resultado.similarity = 0.85;
       } else {
-        this.logger.debug(`REJEITADO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
+        this.logger.warn(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
       }
     } else {
-      this.logger.debug(`ACEITO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}"`);
+      this.logger.debug(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}"`);
     }
 
     resultado.mediaType = movieInfo.mediaType;
@@ -277,17 +273,15 @@ export class SimilarityCalculator {
       };
     }
 
-    // Edge-gap: tolera 1 palavra na ponta, mas só se for "cola" (≤ 3 chars)
+    // Edge-gap: tolera 1 palavra faltando se for "cola" (≤ 3 chars)
     // Palavras-core (≥ 4 chars) sao obrigatorias — identificam o titulo
     if (melhor.faltando.length === 1 && melhor.palavrasTmdb.length >= 3) {
       const palavra = melhor.faltando[0];
-      const idx = melhor.palavrasTmdb.indexOf(palavra);
       const ehCola = palavra.length <= 3;
-      if (ehCola && (idx === 0 || idx === melhor.palavrasTmdb.length - 1)) {
-        const ponta = idx === 0 ? 'esquerda' : 'direita';
+      if (ehCola) {
         return {
           passou: true,
-          motivo: `Edge-gap: "${palavra}" (cola) na ponta ${ponta}, ${melhor.encontradas}/${melhor.totalTmdb}`
+          motivo: `Palavra-cola opcional: "${palavra}" (≤3 chars), ${melhor.encontradas}/${melhor.totalTmdb}`
         };
       }
     }

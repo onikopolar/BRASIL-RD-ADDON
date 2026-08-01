@@ -262,18 +262,29 @@ export class CatalogProvider {
     const ptTorrents = torrents.filter(t => {
       const nome = t.canonicalName || t.title;
       const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
-      const ehPt = resultado.ehPortugues;
-      return ehPt;
+
+      // Se o provider detectou idioma PT-BR (ex: BLUDV/Comando via HTML),
+      // só rejeita se o magnet tiver indicadores INTERNACIONAIS FORTES (rartv, ntb, etc).
+      // Magnet sem indicador nenhum (ex: "Rick.Morty.S05E01.1080p.WEB-DL") → confia no HTML.
+      if (t.language && /portugu[eê]s|dual|dublado/i.test(t.language)) {
+        const temInternacional = resultado.palavrasEn && resultado.palavrasEn.length > 0;
+        if (!temInternacional) return true;
+        return false; // HTML PT-BR mas magnet tem rartv/ntb/etc
+      }
+
+      return resultado.ehPortugues;
     });
     const falsoPositivo = torrents.filter(t =>
       !ptTorrents.includes(t) && t.canonicalName
     );
     if (falsoPositivo.length > 0) {
-      this.logger.info('🧹 Magnet revelou falso-positivo PT-BR', {
-        imdbId,
-        count: falsoPositivo.length,
-        nomes: falsoPositivo.map(t => t.canonicalName?.substring(0, 60)),
+      const enWords = new Set<string>();
+      falsoPositivo.forEach(t => {
+        const dn = t.canonicalName || '';
+        const matches = dn.match(/\[([^\]]+)\]$/);
+        if (matches) matches[1].split(',').forEach(w => enWords.add(w.trim()));
       });
+      this.logger.info(`🧹 ${falsoPositivo.length} falsos PT-BR rejeitados (${[...enWords].join(', ')})`, { imdbId });
     }
 
     // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══

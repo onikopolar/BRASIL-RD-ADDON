@@ -6,6 +6,7 @@ import { torrentIndexerConfig, scraperProviders } from './scraperProviders.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
+import { BludvScraper } from './bludvScraper.js';
 import { searchTpb } from './tpbScraper.js';
 import { searchRargb } from './rargbScraper.js';
 import { searchStarck } from './starckScraper.js';
@@ -18,6 +19,7 @@ export class TorrentScraperService {
     private readonly qualityDetector: QualityDetector;
     private readonly tmdbScraper: ImdbScraperService;
     private readonly wpScraper: WordPressScraper;
+    private readonly bludvScraper: BludvScraper;
     private readonly episodeMatcher = EpisodeMatcher.getInstance();
     private readonly version = '6.2.0'; // WP API scraper integrado
 
@@ -25,6 +27,7 @@ export class TorrentScraperService {
         this.qualityDetector = QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService.getInstance();
         this.wpScraper = new WordPressScraper();
+        this.bludvScraper = new BludvScraper();
     }
 
     async searchTorrents(
@@ -57,11 +60,13 @@ export class TorrentScraperService {
             const wpQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const wpQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
             const wpFactory = () => Promise.all([
+                this.bludvScraper.search(wpQueryEn, type).catch(() => []),
+                this.bludvScraper.search(wpQueryPt, type).catch(() => []),
                 this.wpScraper.search(wpQueryEn, type).catch(() => []),
                 wpQueryPt !== wpQueryEn ? this.wpScraper.search(wpQueryPt, type).catch(() => []) : Promise.resolve([])
-            ]).then(([en, pt]) => {
+            ]).then(([bludvEn, bludvPt, wpEn, wpPt]) => {
                 const seen = new Set<string>();
-                const merged = [...en, ...pt].filter(t => {
+                const merged = [...bludvEn, ...bludvPt, ...wpEn, ...wpPt].filter(t => {
                   if (seen.has(t.magnet)) return false;
                   seen.add(t.magnet);
                   return true;

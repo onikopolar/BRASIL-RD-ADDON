@@ -75,12 +75,6 @@ function createProxyAgent(proxyUrl: string): any {
 
 const WP_SITES: WordPressSite[] = [
   {
-    name: 'BLUDV Filmes',
-    baseUrl: 'https://bludvfilmes.xyz',
-    priority: 3,
-    timeout: 15000,
-  },
-  {
     name: 'Comando Torrents',
     baseUrl: 'https://comando1.com',
     priority: 2,
@@ -119,7 +113,7 @@ export class WordPressScraper {
     return results;
   }
 
-  private async searchSite(
+  async searchSite(
     site: WordPressSite,
     query: string,
     type: 'movie' | 'series'
@@ -158,10 +152,8 @@ export class WordPressScraper {
 
     if (!Array.isArray(response.data)) return [];
 
-    // logger.debug(`WP ${site.name}: "${searchQuery}" → ${response.data.length} posts`, {
-    //   titles: response.data.slice(0, 3).map((p: any) => (p.title?.rendered || '').substring(0, 60)),
-    //   magnetCounts: response.data.map((p: any) => ((p.content?.rendered || '').match(/magnet:/g) || []).length),
-    // });
+    const totalMagnets = response.data.reduce((sum: number, p: any) => sum + ((p.content?.rendered || '').match(/magnet:/g) || []).length, 0);
+    logger.debug(`WP ${site.name}: "${searchQuery}" → ${response.data.length} posts, ${totalMagnets} magnets`);
 
     const results: TorrentResult[] = [];
     for (const post of response.data) {

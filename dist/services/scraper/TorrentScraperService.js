@@ -44,6 +44,7 @@ const scraperProviders_js_1 = require("./scraperProviders.js");
 const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
+const bludvScraper_js_1 = require("./bludvScraper.js");
 const tpbScraper_js_1 = require("./tpbScraper.js");
 const rargbScraper_js_1 = require("./rargbScraper.js");
 const starckScraper_js_1 = require("./starckScraper.js");
@@ -57,6 +58,7 @@ class TorrentScraperService {
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
+        this.bludvScraper = new bludvScraper_js_1.BludvScraper();
     }
     async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
         const startTime = Date.now();
@@ -76,11 +78,13 @@ class TorrentScraperService {
             const wpQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const wpQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
             const wpFactory = () => Promise.all([
+                this.bludvScraper.search(wpQueryEn, type).catch(() => []),
+                this.bludvScraper.search(wpQueryPt, type).catch(() => []),
                 this.wpScraper.search(wpQueryEn, type).catch(() => []),
                 wpQueryPt !== wpQueryEn ? this.wpScraper.search(wpQueryPt, type).catch(() => []) : Promise.resolve([])
-            ]).then(([en, pt]) => {
+            ]).then(([bludvEn, bludvPt, wpEn, wpPt]) => {
                 const seen = new Set();
-                const merged = [...en, ...pt].filter(t => {
+                const merged = [...bludvEn, ...bludvPt, ...wpEn, ...wpPt].filter(t => {
                     if (seen.has(t.magnet))
                         return false;
                     seen.add(t.magnet);

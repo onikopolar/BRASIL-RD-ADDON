@@ -251,7 +251,7 @@ export class AutoMagnetService {
 
         this.validationCache.set(cacheKey, { valid: true, data: result, timestamp: Date.now() });
         
-        logger.info('Magnet salvo no banco', {
+        logger.debug('Magnet salvo no banco', {
           title: magnetData.title.substring(0, 60),
           imdbId: magnetData.imdbId,
           qualidade: magnetData.quality,
@@ -504,7 +504,7 @@ export class AutoMagnetService {
         });
       }
 
-      logger.info('Magnet salvo no DB com sucesso', {
+      logger.debug('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),
         imdbId: magnetData.imdbId,
         qualidadeSalva: magnetData.quality,

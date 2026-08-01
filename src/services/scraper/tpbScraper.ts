@@ -147,6 +147,8 @@ async function scrapeMirror(baseUrl: string, query: string, format: 'search' | '
     torrents.push({ title, magnet: magnetLink, seeders, leechers, size: 'N/A', infoHash });
   }
 
-  logger.debug(`TPB ${baseUrl}: ${torrents.length} torrents`, { query: query.substring(0, 40), format });
+  if (torrents.length > 0) {
+    logger.debug(`TPB ${baseUrl}: ${torrents.length} torrents`, { query: query.substring(0, 40), format });
+  }
   return torrents;
 }

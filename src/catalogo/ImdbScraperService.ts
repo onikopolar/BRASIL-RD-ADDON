@@ -88,7 +88,7 @@ export class ImdbScraperService {
       
       if (!tmdbInfo) {
         // Fallback 1: TMDB HTML scraper (OMDB → TMDB search → scrape)
-        logger.warn('TMDB API falhou, tentando fallback HTML', { imdbId });
+        logger.debug('TMDB API offline, usando fallback HTML', { imdbId });
         const htmlResult = await getTmdbTitlesViaHtml(imdbId);
         if (htmlResult) {
           ImdbScraperService.globalCache.set(cacheKey, {
@@ -274,7 +274,7 @@ export class ImdbScraperService {
       return null;
       
     } catch (error) {
-      logger.error('TMDB erro converter IMDB', {
+      logger.debug('TMDB erro converter IMDB (esperado, fallback HTML funciona)', {
         imdbId,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
