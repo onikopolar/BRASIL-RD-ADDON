@@ -4,6 +4,7 @@ import * as cheerio from 'cheerio';
 import dns from 'dns';
 import https from 'https';
 import tls from 'tls';
+import { getTmdbTitlesViaHtml } from './TmdbHtmlScraper.js';
 
 const logger = new Logger('TMDBScraper');
 
@@ -86,7 +87,18 @@ export class ImdbScraperService {
       const tmdbInfo = await this.findInTMDB(imdbId);
       
       if (!tmdbInfo) {
-        logger.warn('TMDB: não encontrado, tentando fallback IMDb HTML', { imdbId });
+        // Fallback 1: TMDB HTML scraper (OMDB → TMDB search → scrape)
+        logger.warn('TMDB API falhou, tentando fallback HTML', { imdbId });
+        const htmlResult = await getTmdbTitlesViaHtml(imdbId);
+        if (htmlResult) {
+          ImdbScraperService.globalCache.set(cacheKey, {
+            data: htmlResult,
+            timestamp: Date.now(),
+          });
+          return htmlResult;
+        }
+        // Fallback 2: IMDb HTML (só título original)
+        logger.warn('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
         return await this.scrapeImdbTitle(imdbId);
       }
 

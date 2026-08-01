@@ -701,29 +701,46 @@ async function getAxios() {
 /**
  * Verifica se uma palavra existe em QUALQUER título do TMDB.
  * Se existir, é palavra legítima (ex: "korra"), não termo técnico.
+ * Fallback: se API falhar, usa TMDB search HTML.
  */
 async function tmdbReverseLookup(word: string): Promise<boolean> {
-  if (!TMDB_API_KEY) {
-    // Sem API key, confia no threshold de IMDBs como fallback
-    return false;
+  // Tenta API primeiro
+  if (TMDB_API_KEY) {
+    try {
+      const axios = await getAxios();
+      const resp = await axios.get('https://api.themoviedb.org/3/search/multi', {
+        params: {
+          api_key: TMDB_API_KEY,
+          query: word,
+          language: 'pt-BR',
+          page: 1,
+        },
+        timeout: 5000,
+      });
+      const total = resp.data?.total_results || 0;
+      if (total > 0) return true;
+    } catch {
+      // API falhou, tenta HTML
+    }
   }
-  
+
+  // Fallback: TMDB search HTML
   try {
     const axios = await getAxios();
-    const resp = await axios.get('https://api.themoviedb.org/3/search/multi', {
-      params: {
-        api_key: TMDB_API_KEY,
-        query: word,
-        language: 'pt-BR',
-        page: 1,
+    const searchUrl = `https://www.themoviedb.org/search?query=${encodeURIComponent(word)}`;
+    const resp = await axios.get(searchUrl, {
+      timeout: 8000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+        'Accept': 'text/html',
+        'Accept-Language': 'pt-BR,pt;q=0.9',
       },
-      timeout: 5000,
     });
-    
-    const total = resp.data?.total_results || 0;
-    return total > 0;
+    const html: string = resp.data;
+    // Procura por links /movie/ ou /tv/ nos resultados
+    const hasResults = /\/movie\/\d+/.test(html) || /\/tv\/\d+/.test(html);
+    return hasResults;
   } catch {
-    // Erro na API → assume que NÃO existe (conservador)
     return false;
   }
 }
