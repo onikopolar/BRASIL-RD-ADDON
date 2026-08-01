@@ -5,11 +5,10 @@ module.exports = {
     cwd: __dirname,
     env: {
       NODE_ENV: 'production',
-      LOG_LEVEL: 'debug'
+      LOG_LEVEL: 'debug',
+      BASE_URL: 'https://brasil-rd-oficial.oniko.org'
     },
     autorestart: true,
-    watch: ['dist'],
-    watch_delay: 1000,
     max_restarts: 10,
     restart_delay: 5000,
     // Logs

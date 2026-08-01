@@ -263,16 +263,6 @@ export class CatalogProvider {
       const nome = t.canonicalName || t.title;
       const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
       const ehPt = resultado.ehPortugues;
-
-      if (/liga da justi[cç]|ponto de igni[cç]|brasil|dublado(?!.*dual)/.test(nome.toLowerCase())) {
-        this.logger.debug('Detalhe PT-BR', {
-          nome: nome.substring(0, 70),
-          ehPt,
-          motivo: resultado.motivo,
-          palavrasPt: resultado.palavrasPt?.join(','),
-          palavrasEn: resultado.palavrasEn?.join(','),
-        });
-      }
       return ehPt;
     });
     const falsoPositivo = torrents.filter(t =>
@@ -536,11 +526,12 @@ export class CatalogProvider {
       const hash = t.magnetInfoHash;
       if (hash && seen.has(hash.toLowerCase())) continue;
       if (hash) seen.add(hash.toLowerCase());
-      // Para packs, dedup também por título normalizado (ignora SxxExx)
+      // Para packs, dedup por título normalizado APENAS se não temos infoHash
+      // (se temos infoHash, já é suficiente pra identificar unicidade)
       if (packRe.test(t.title)) {
         const tituloNormalizado = t.title.replace(/\s*\(?\s*S\d{1,2}\s*[Ee]\d{1,2}\s*\)?\s*$/g, '').trim().toLowerCase();
-        if (seenTitles.has(tituloNormalizado)) continue;
-        seenTitles.add(tituloNormalizado);
+        if (!hash && seenTitles.has(tituloNormalizado)) continue;
+        if (!hash) seenTitles.add(tituloNormalizado);
       }
       unique.push(t);
     }

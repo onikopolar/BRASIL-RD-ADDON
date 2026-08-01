@@ -3,131 +3,6 @@
 // Exporta constantes para uso no SimilarityCalculator
 
 // Palavras técnicas completas para remoção durante normalização
-export const TECHNICAL_WORDS = [
-  // Formatos de vídeo
-  'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv', 'rmvb', 'm2ts', 'ts', 'm4v', 'vob', 'ogv', '3gp', 'mts', 'm2t', 'mxf',
-  
-  // Qualidades e resoluções
-  '720p', '1080p', '2160p', '4k', 'hd', 'fullhd', 'uhd', 'sd', 'fhd', 'hdr', 'dv', 'uhdhdr', 'blurayremux', 'remux', '4kuhd',
-  '480p', '576p', '360p', '240p', '144p', '8k', '2k', 'qhd', 'whd', 'fhd', 'hq', 'lq', 'mhd', 'vcd', 'svcd',
-  
-  // Codecs de vídeo expandidos
-  'x264', 'x265', 'h264', 'h265', 'avc', 'hevc', 'xvid', 'divx', 'vp9', 'av1', 'prores', 'dnxhd', 'cineform', 'mjpeg',
-  'h263', 'h261', 'mpeg2', 'mpeg4', 'wmv9', 'vc1', 'indeo', 'theora', 'rv', 'realvideo', 'sorenson', 'cinepak',
-  'dvavi', 'mpeg1', 'm1v', 'm2v', 'm4v', 'hvc1', 'hev1', 'vp8', 'vp6', 'vp7', 'vp10', 'daala',
-  
-  // Codecs de áudio expandidos
-  'ac3', 'dts', 'aac', 'dd5.1', 'dolby', 'atmos', 'truehd', 'dts-hd', 'dtshd', 'mp3', 'ogg', 'opus', 'flac', 'alac',
-  'wav', 'pcm', 'aiff', 'wma', 'vorbis', 'eac3', 'dd+', 'ddp', 'dtsx', 'dtsma', 'lpcm', 'dsd',
-  '2.0', '5.1', '7.1', '5.1ch', '7.1ch', '2ch', 'stereo', 'mono', 'surround', '6ch', '8ch',
-  'mp2', 'ra', 'ram', 'mid', 'midi', 'amr', 'amrnb', 'amrwb', 'qcelp', 'evrc', 'smv', 'g729',
-  
-  // Fontes e tipos de release expandidos
-  'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'camrip', 'ts', 'tc', 'r5', 'scr', 'dvdscr', 'bdscr', 'webscr',
-  'ppvrip', 'hdrip', 'bdscr', 'r6', 'telecine', 'satrip', 'iptv', 'dsr', 'pdtv', 'hdtvrip', 'uhdrip', '4kuhd',
-  'amzn', 'nf', 'hulu', 'dsnp', 'atvp', 'hmax', 'appletv', 'prime', 'disney', 'hbo', 'max', 'netflix', 'amazon',
-  'hdtc', 'hdts', 'dvdscr', 'r5line', 'dvd5', 'dvd9', 'bd25', 'bd50', 'uhd100', 'webcap', 'hdcam', 'hdrc',
-  'sat', 'cable', 'dtv', 'atv', 'itunes', 'google', 'vudu', 'ma', 'uv', 'aiv', 'h264', 'h265',
-  
-  // Termos de áudio e legendas expandidos
-  'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio', 'legendado', 'legendada', 'legenda', 'sub', 'subtitle',
-  'multilanguage', 'multiaudio', 'multisub', 'multi', 'tri', 'triaudio', 'trilanguage', 'subforced', 'subs',
-  'dub', 'dubbed', 'subtitled', 'captions', 'cc', 'srt', 'ass', 'ssa', 'vtt', 'idx', 'sub', 'sup',
-  'english', 'french', 'spanish', 'german', 'italian', 'japanese', 'korean', 'chinese', 'russian',
-  
-  // Idiomas expandidos
-  'pt-br', 'ptbr', 'pt_br', 'pt.br', 'pt br', 'portugues', 'português', 'eng', 'english', 'ingles', 'spanish', 'espanol',
-  'french', 'francês', 'german', 'alemão', 'italian', 'italiano', 'japanese', 'japonês', 'chinese', 'chinês',
-  'korean', 'coreano', 'russian', 'russo', 'brazilian', 'brasileiro', 'latino', 'latin', 'internacional',
-  'es', 'fr', 'de', 'it', 'ja', 'ko', 'zh', 'ru', 'ar', 'hi', 'tr', 'nl', 'pl', 'sv', 'no', 'da', 'fi',
-  
-  // GRUPOS DE RELEASE INTERNACIONAIS CONHECIDOS (PREDOMINANTEMENTE INGLÊS)
-  // Trackers e grupos internacionais
-  'yts', 'yify', 'rarbg', 'rartv', 'ettv', 'eztv', 'skgtv', 'turbo', 'cakes', 'galaxyrg', 'ctrlhd', 'framestor', 'tayto',
-  'ntb', 'cmrg', 'evolve', 'mteam', 'chd', 'hds', 'chdbits', 'hdchina', 'ptp', 'btn', 'ahd', 'bhd', 'decode',
-  'fum', 'tbs', 'flux', 'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'vtv', 'ws', 'xforce',
-  'sva', 'exc', 'phd', 'grym', 'jyk', 'kings', 'dimension', 'sparks', 'geckos', 'loki', 'memento', 'quid',
-  'mazemaze', 'kognitiv', 'anoxmous', 'bamboozle', 'cab', 'c0ke', 'cm8', 'crimson', 'drones', 'ebi',
-  
-  // GRUPOS DE RELEASE BRASILEIROS CONHECIDOS
-  'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'cmdtv', 'cmdb', 'dhg', 'divulgahd', 'legiahd',
-  'baixar', 'download', 'downloadseries', 'downloadfilmes', 'brasil', 'brrip', 'br-rip',
-  'seriesbr', 'filmesbr', 'bluraybr', 'hdbr', 'webdlbr', 'torrentbr',
-  
-  // Trackers e sites internacionais adicionais
-  '1337x', 'torrentday', 'iptorrents', 'filelist', 'torrentleech', 'demonoid', 'kickasstorrents', 'kat',
-  'thepiratebay', 'tpb', 'limetorrents', 'zooqle', 'torrentz2', 'torrentdownloads', 'mononoke',
-  'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub', 'pornolab', 'empornium',
-  
-  // Termos de edição e versão expandidos
-  'repack', 'proper', 'extended', 'directors', 'cut', 'remastered', 'complete', 'uncensored', 'uncut', 'limited', 'special', 'edition',
-  'directors.cut', 'theatrical', 'unrated', 'imax', '3d', '4dx', 'final', 'version', 'collectors', 'anniversary',
-  'restored', 'remux', 'se', 'dc', 'ue', 'ce', 'te', 'ee', 'le', 've', 're', 'ue', 'pe', 'fe',
-  'extended.cut', 'theatrical.cut', 'ultimate', 'deluxe', 'premium', 'gold', 'platinum', 'definitive',
-  'international', 'us', 'uk', 'eu', 'asia', 'jpn', 'kor', 'chn', 'rus', 'bra', 'ger', 'fra', 'ita',
-  
-  // Palavras comuns de títulos de torrent
-  'temporada', 'season', 'episodio', 'episódio', 'episode', 'complete', 'pack', 'collection', 'boxset', 'anthology',
-  'movie', 'the movie', 'cinema', 'cinematográfico', 'cinematografico', 'filme', 'serie', 'series', 'show',
-  's0', 's1', 's2', 's3', 's4', 's5', 's6', 's7', 's8', 's9', 's10', 's11', 's12', 's13', 's14', 's15',
-  'e0', 'e1', 'e2', 'e3', 'e4', 'e5', 'e6', 'e7', 'e8', 'e9', 'e10', 'e11', 'e12', 'e13', 'e14', 'e15',
-  'ep0', 'ep1', 'ep2', 'ep3', 'ep4', 'ep5', 'ep6', 'ep7', 'ep8', 'ep9', 'ep10', 'ep11', 'ep12', 'ep13', 'ep14', 'ep15',
-  
-  // Termos de versão e qualidade
-  'versão', 'versao', 'version', 'edição', 'edicao', 'edition', 'completo', 'completa', 'complete',
-  'torrent', 'download', 'baixar', 'assistir', 'online', 'stream', 'streaming',
-  'free', 'full', 'part', 'parts', 'cd', 'cd1', 'cd2', 'disc', 'disc1', 'disc2', 'disk', 'disk1', 'disk2',
-  
-  // Artigos e preposições comuns
-  'the', 'of', 'and', 'in', 'to', 'a', 'an', 'for', 'with', 'on', 'at', 'by', 'from', 'as', 'is', 'it', 'that', 'this',
-  'or', 'but', 'not', 'be', 'are', 'was', 'were', 'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
-  'can', 'could', 'may', 'might', 'must', 'shall', 'ought',
-  
-  // Extensões e termos técnicos
-  'web', 'dl', 'rip', 'cam', 'part', 'pt', 'vol', 'volume', 'ª', 'º', 'cap', 'chapter', 'ep', 's',
-  'i', 'ii', 'iii', 'iv', 'v', 'vi', 'vii', 'viii', 'ix', 'x', 'xi', 'xii', 'xiii', 'xiv', 'xv',
-  '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
-  'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten',
-  
-  // Termos de encoding expandidos
-  'encoded', 'encoding', 'transcoded', 'transcoding', 'bitrate', 'bit', 'rate', 'fps', 'hz', 'khz', 'mb', 'gb',
-  'high', 'quality', 'low', 'medium', 'standard', 'premium', 'ultimate', 'extreme', 'master', 'professional',
-  'bitrate', 'samplerate', 'vbr', 'cbr', 'abr', 'crf', 'qp', 'preset', 'profile', 'level', 'tier',
-  'fast', 'medium', 'slow', 'slower', 'veryslow', 'placebo',
-  
-  // Termos de container expandidos
-  'container', 'format', 'file', 'files', 'disc', 'dvd', 'bd', 'blu', 'ray', 'uhdbluray', 'hddvd',
-  'matroska', 'mpegts', 'mpegps', 'avi', 'mov', 'mp4', 'flv', 'wmv', 'ogv', 'webm', '3gp',
-  
-  // Termos de áudio técnico expandidos
-  'channel', 'channels', 'sound', 'track', 'tracks', 'voice', 'over', 'narration', 'commentary',
-  'descriptive', 'audiodescription', 'ad', 'sdh', 'cc', 'subtitles', 'karaoke', 'instrumental',
-  'vocals', 'dialogue', 'effects', 'foley', 'music', 'score', 'soundtrack',
-  
-  // Termos de vídeo técnico
-  'frame', 'frames', 'resolution', 'aspect', 'ratio', 'pixel', 'pixels', 'color', 'colors', 'grading',
-  'gamma', 'contrast', 'brightness', 'saturation', 'hue', 'luminance', 'chroma',
-  'interlaced', 'progressive', 'field', 'fields', 'telecine', 'ivtc', 'deinterlace',
-  
-  // Termos de compressão
-  'compressed', 'uncompressed', 'lossless', 'lossy', 'zip', 'rar', '7z', 'gz', 'bz2', 'lzma',
-  'archive', 'compression', 'decompression', 'extract', 'extracted',
-  
-  // Termos de rede e distribuição
-  'peer', 'peers', 'seeder', 'seeders', 'leecher', 'leechers', 'swarm', 'tracker', 'trackers',
-  'magnet', 'torrent', 'bittorrent', 'utorrent', 'qbittorrent', 'transmission', 'deluge',
-  'ratio', 'upload', 'download', 'bandwidth', 'speed', 'throttle', 'throttling',
-  
-  // Termos gerais de mídia
-  'media', 'entertainment', 'film', 'cinema', 'theater', 'theatre', 'broadcast', 'television',
-  'streaming', 'vod', 'pvod', 'tvod', 'avod', 'svod', 'live', 'broadcast',
-  
-  // Termos específicos de séries
-  'season', 'series', 'episode', 'pilot', 'finale', 'midseason', 'special', 'marathon', 'binge',
-  'arc', 'storyline', 'plot', 'character', 'characters', 'cast', 'crew', 'director', 'producer',
-  'writer', 'creator', 'showrunner', 'network', 'studio', 'production',
-];
-
 // Acrônimos técnicos para remoção durante normalização
 export const TECHNICAL_ACRONYMS = [
   'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
@@ -177,13 +52,15 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'comando1', 'cmdtv', 'cmdb',
   'dhg', 'divulgahd', 'legiahd', 'baixar', 'download', 'brasil',
   'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
-  'webdlbr', 'torrentbr', 'starck', 'starckfilmes'
+  'webdlbr', 'torrentbr', 'starck', 'starckfilmes',
+  'lapumia', 'comoeubaixo', 'bludv', 'BLUDV', 'WWW.BLUDV.COM',
+  'luanharper','SiGLA',
 ];
 
 // Função auxiliar para verificar se uma palavra é técnica
 export function isTechnicalWord(word: string): boolean {
   const lowerWord = word.toLowerCase();
-  return TECHNICAL_WORDS.includes(lowerWord) || TECHNICAL_ACRONYMS.includes(lowerWord);
+  return TECHNICAL_ACRONYMS.includes(lowerWord);
 }
 
 // Função para verificar se é grupo de release internacional
@@ -235,7 +112,8 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'legendado', 'legendada', 'legenda',
   // Abreviacoes comuns de fansub
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
-  'turg', 'Turg','TURG','fitgirl', 'FitGirl', 'Repack', 'repack',
+  'turg', 'Turg','TURG','fitgirl', 'FitGirl', 'Repack', 'repack','steamrip',
+  'g4ris',
 
 ];
 
@@ -332,9 +210,8 @@ export function containsBrazilianIndicators(title: string): {
 // Estatísticas das palavras técnicas
 export function getTechnicalWordsStats() {
   return {
-    totalWords: TECHNICAL_WORDS.length,
     totalAcronyms: TECHNICAL_ACRONYMS.length,
-    totalCombined: TECHNICAL_WORDS.length + TECHNICAL_ACRONYMS.length,
+    totalCombined: TECHNICAL_ACRONYMS.length,
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
@@ -683,12 +560,33 @@ export function normalizarTituloTorrent(title: string): string {
 //  real, ela NÃO é termo técnico — é palavra legítima).
 // ═══════════════════════════════════════════════════════════════════════
 
-const AUTO_LEARN_THRESHOLD = 3;       // mínimo de IMDBs diferentes
+const AUTO_LEARN_THRESHOLD = 3;
 const TMDB_API_KEY = typeof process !== 'undefined' ? (process.env as any)?.TMDB_API_KEY : undefined;
 
 const learnerCounts = new Map<string, { count: number; imdbIds: Set<string> }>();
-/** Palavras já verificadas no TMDB como legítimas — nunca serão strip */
 const tmdbVerifiedWords = new Set<string>();
+
+// ── Persistência: data/strip-words.txt (1 palavra por linha) ──
+import * as fs from 'fs';
+import * as path from 'path';
+const STRIP_FILE = path.join(process.cwd(), 'data', 'strip-words.txt');
+
+// Carrega palavras persistidas no startup
+try {
+  if (fs.existsSync(STRIP_FILE)) {
+    const lines = fs.readFileSync(STRIP_FILE, 'utf-8').split('\n').map(l => l.trim()).filter(Boolean);
+    for (const w of lines) TECHNICAL_STRIP_WORDS.add(w);
+    console.log(`[StripAutoLearner] 📂 ${lines.length} palavras carregadas de data/strip-words.txt`);
+  }
+} catch { /* ignora */ }
+
+function persistStripWord(word: string): void {
+  try {
+    const dir = path.dirname(STRIP_FILE);
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+    fs.appendFileSync(STRIP_FILE, word + '\n');
+  } catch { /* ignora */ }
+}
 
 let axiosModule: any = null;
 async function getAxios() {
@@ -781,14 +679,13 @@ export function registerStripCandidate(word: string, imdbId?: string): boolean {
         tmdbVerifiedWords.add(key);
         console.log(`[StripAutoLearner] 🔒 "${key}" existe no TMDB — NÃO é termo técnico, bloqueado permanentemente`);
       } else {
-        // Palavra NÃO existe no TMDB → é termo técnico
-        TECHNICAL_STRIP_WORDS.add(key);
-        console.log(`[StripAutoLearner] ✅ "${key}" auto-adicionado ao TECHNICAL_STRIP_WORDS (${entry.count}x em ${entry.imdbIds.size} IMDBs, 0 resultados TMDB)`);
+        // Palavra NÃO existe no TMDB → salva no arquivo (carrega no próximo startup)
+        persistStripWord(key);
+        console.log(`[StripAutoLearner] ✅ "${key}" → salvo em data/strip-words.txt (${entry.imdbIds.size} IMDBs)`);
       }
     }).catch(() => {
-      // Erro na verificação → adiciona mesmo assim (conservador: melhor strip a mais que a menos)
-      TECHNICAL_STRIP_WORDS.add(key);
-      console.log(`[StripAutoLearner] ⚠️ "${key}" auto-adicionado (fallback — erro na verificação TMDB)`);
+      persistStripWord(key);
+      console.log(`[StripAutoLearner] ⚠️ "${key}" → salvo (fallback)`);
     });
     
     return true; // vai ser processado async

@@ -1,11 +1,13 @@
 #!/usr/bin/env ts-node
 /**
- * Curadoria pessoal — salva DIRETO no banco, sem validacao.
+ * Curadoria pessoal — baixa magnet no Torbox e salva no banco
+ * COM validação de similaridade (roda pipeline completo).
  * Uso: npm run addmagnet
  */
 
 import 'dotenv/config';
 import { ImdbScraperService } from '../src/catalogo/ImdbScraperService.js';
+import { TitleFilter } from '../src/titulos/titleFilter.js';
 import { QualityDetector } from '../src/lib/qualityDetector.js';
 import { Logger } from '../src/utils/logger.js';
 import { analisarMagnet } from '../src/magnet/magnetHelper.js';
@@ -15,6 +17,7 @@ import { TorboxService } from '../src/debrid/RealDebridService.js';
 import * as readline from 'readline';
 
 const imdbScraper = ImdbScraperService.getInstance();
+const titleFilter = TitleFilter.getInstance();
 const qualityDetector = QualityDetector.getInstance();
 const torboxService = new TorboxService();
 
@@ -25,8 +28,8 @@ async function question(rl: readline.Interface, prompt: string): Promise<string>
 async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  console.log('=== BRASIL RD -- CURADORIA (MODO DIRETO) ===');
-  console.log('Validacao e idioma IGNORADOS — confia no curador.\n');
+  console.log('=== BRASIL RD -- CURADORIA (COM VALIDAÇÃO) ===');
+  console.log('Similaridade e idioma VALIDADOS — igual ao scraping.\n');
 
   const magnet = await question(rl, 'Magnet: ');
   if (!magnet.startsWith('magnet:') || !magnet.includes('xt=urn:btih:')) {
@@ -141,7 +144,23 @@ async function main() {
     return;
   }
 
-  // Passo 4: Só agora salvar no banco
+  // Passo 4: Validar similaridade e salvar
+  console.log('\nValidando similaridade...');
+
+  // Verifica idioma PT-BR
+  const idiomaCheck = titleFilter.verificarIdiomaDetalhado(dn);
+  console.log(`   Idioma: ${idiomaCheck.ehPortugues ? '✅ PT-BR' : '❌ NÃO-PT'} (${idiomaCheck.motivo})`);
+
+  // Valida título contra TMDB
+  const tmdbMatch = await titleFilter.titulosCombinam(dn, imdbId, season ?? undefined, undefined);
+  console.log(`   Similaridade: ${tmdbMatch.matches ? '✅ ACEITO' : '❌ REJEITADO'}`);
+  if (!tmdbMatch.matches) {
+    console.log(`   Motivo: ${tmdbMatch.reason}`);
+    console.log('\n[REJEITADO] Magnet não passou na validação de similaridade.');
+    rl.close();
+    return;
+  }
+
   console.log('\nSalvando no banco...');
 
   if (infoHash) {
@@ -149,12 +168,9 @@ async function main() {
     if (existentes) {
       if (tipo === 'series' && season !== null && existentes.imdbSeason !== season) {
         await upsertTorrent(infoHash, {
-          imdbSeason: null,
-          imdbEpisodeStart: null,
-          imdbEpisodeEnd: null,
-          lastSeen: new Date(),
+          imdbSeason: null, imdbEpisodeStart: null, imdbEpisodeEnd: null, lastSeen: new Date(),
         });
-        console.log('[ATUALIZADO] Marcado como pack multi-temporada (season=null)');
+        console.log('[ATUALIZADO] Marcado como pack multi-temporada');
       } else {
         console.log('[AVISO] Ja existe no banco.');
       }

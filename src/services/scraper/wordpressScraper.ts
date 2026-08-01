@@ -75,21 +75,21 @@ function createProxyAgent(proxyUrl: string): any {
 
 const WP_SITES: WordPressSite[] = [
   {
-    name: 'Comando Torrents',
-    baseUrl: 'https://comando1.com',
-    priority: 1,
+    name: 'BLUDV Filmes',
+    baseUrl: 'https://bludvfilmes.xyz',
+    priority: 3,
     timeout: 15000,
   },
   {
-    name: 'BLUDV Filmes',
-    baseUrl: 'https://bludvfilmes.xyz',
+    name: 'Comando Torrents',
+    baseUrl: 'https://comando1.com',
     priority: 2,
     timeout: 15000,
   },
   {
     name: 'Starck Oficial',
     baseUrl: 'https://www.starck-oficial.com',
-    priority: 3,
+    priority: 1,
     timeout: 15000,
   },
 ];
@@ -124,7 +124,19 @@ export class WordPressScraper {
     query: string,
     type: 'movie' | 'series'
   ): Promise<TorrentResult[]> {
-    const encodedQuery = encodeURIComponent(query);
+    // WordPress search é ruinzinho com números e caracteres especiais.
+    // "Rick Morty Temporada 4" não acha "4ª Temporada".
+    // Solução: usa query limpa (sem season/episode) e deixa o filtro pós-processar.
+    const cleanQuery = query
+      .replace(/\b\d+ª\s*(temporada|temp)\b/gi, '')
+      .replace(/\btemporada\s*\d+\b/gi, '')
+      .replace(/\bseason\s*\d+\b/gi, '')
+      .replace(/\bs\d{2}\b/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const searchQuery = cleanQuery || query; // fallback pro original se limpar tudo
+    const encodedQuery = encodeURIComponent(searchQuery);
     const apiUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodedQuery}&per_page=15&_fields=id,title,link,content,date`;
 
     // DNS bypass + Crawlee-style anti-bot headers
@@ -146,10 +158,18 @@ export class WordPressScraper {
 
     if (!Array.isArray(response.data)) return [];
 
+    // logger.debug(`WP ${site.name}: "${searchQuery}" → ${response.data.length} posts`, {
+    //   titles: response.data.slice(0, 3).map((p: any) => (p.title?.rendered || '').substring(0, 60)),
+    //   magnetCounts: response.data.map((p: any) => ((p.content?.rendered || '').match(/magnet:/g) || []).length),
+    // });
+
     const results: TorrentResult[] = [];
     for (const post of response.data) {
       try {
         const extracted = await this.extractMagnetsFromPost(post, site.name, type);
+        // if (extracted.length) {
+        //   logger.debug(`WP ${site.name}: ${extracted.length} magnets de "${(post.title?.rendered || '').substring(0, 60)}"`);
+        // }
         results.push(...extracted);
       } catch {
         // Post individual com problema, ignora
@@ -171,7 +191,45 @@ export class WordPressScraper {
     const $ = cheerio.load(content);
     const results: TorrentResult[] = [];
 
-    const magnetLinks = $('a[href^="magnet:"]');
+    // Links diretos de magnet
+    let magnetLinks = $('a[href^="magnet:"]');
+    
+    // Se não achou magnets, procura links de redirect (systemads.net, etc)
+    if (!magnetLinks.length) {
+      const redirectLinks = $('a[href*="systemads.net"], a[href*="link.tl"], a[href*="encurta.net"]');
+      if (redirectLinks.length) {
+        logger.debug(`WP: ${redirectLinks.length} redirects encontrados, resolvendo...`);
+        const resolvedMagnets: { el: any; magnet: string }[] = [];
+        
+        for (let i = 0; i < redirectLinks.length; i++) {
+          const el = redirectLinks[i];
+          const redirectUrl = $(el).attr('href');
+          if (!redirectUrl) continue;
+          try {
+            const resolved = await this.resolveRedirectToMagnet(redirectUrl);
+            if (resolved) {
+              resolvedMagnets.push({ el, magnet: resolved });
+            }
+          } catch { /* skip redirects que falham */ }
+        }
+        
+        if (resolvedMagnets.length) {
+          // Reconstrói o HTML substituindo os links de redirect por magnet:
+          let modifiedContent = content;
+          for (const { el, magnet } of resolvedMagnets) {
+            const originalHref = $(el).attr('href');
+            if (originalHref) {
+              modifiedContent = modifiedContent.replace(originalHref, magnet);
+            }
+          }
+          // Recarrega com os magnets injetados
+          const $modified = cheerio.load(modifiedContent);
+          magnetLinks = $modified('a[href^="magnet:"]');
+          logger.info(`WP: ${resolvedMagnets.length} magnets resolvidos de redirects`);
+        }
+      }
+    }
+
     if (!magnetLinks.length) return [];
 
     const metadata = this.extractPostMetadata($, content);
@@ -186,9 +244,29 @@ export class WordPressScraper {
 
       let resultTitle = this.buildResultTitle(title, episodeLabel, seriesInfo, type);
 
-      const quality = this.qualityDetector.extractQualityFromFilename(resultTitle)
-        || metadata.quality
-        || this.extractQualityFromTitle(title);
+      // Tenta detectar qualidade do título, do corpo do post e do magnet
+      let quality = this.qualityDetector.extractQualityFromFilename(resultTitle);
+      
+      // Se não achou no título, procura no corpo inteiro do post (onde pode ter "4K", "2160p", etc)
+      if (quality === 'HD') {
+        const bodyQuality = this.qualityDetector.extractQualityFromFilename(content);
+        if (bodyQuality && bodyQuality !== 'HD') quality = bodyQuality;
+      }
+      
+      // Se ainda não achou, procura no texto próximo ao magnet
+      if (quality === 'HD') {
+        const magnetText = $(el).parent().text() || '';
+        const magnetQuality = this.qualityDetector.extractQualityFromFilename(magnetText);
+        if (magnetQuality && magnetQuality !== 'HD') quality = magnetQuality;
+      }
+      
+      // Fallbacks antigos
+      if (quality === 'HD' && metadata.quality) {
+        quality = this.qualityDetector.extractQualityFromFilename(metadata.quality) || quality;
+      }
+      if (quality === 'HD') {
+        quality = this.extractQualityFromTitle(title) || quality;
+      }
 
       if (!allowedQualities.has(quality)) continue;
 
@@ -314,6 +392,43 @@ export class WordPressScraper {
     return cleanTitle;
   }
 
+  // Segue um link de redirect (systemads.net, etc) para achar o magnet real
+  private async resolveRedirectToMagnet(redirectUrl: string): Promise<string | null> {
+    try {
+      // Não segue redirects automaticamente — queremos pegar o Location header
+      const resp = await axios.get(redirectUrl, {
+        timeout: 8000,
+        maxRedirects: 0,
+        validateStatus: (s) => s < 400,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+          'Accept': 'text/html',
+        },
+        httpsAgent: agenteHttps,
+        lookup: lookupCustomizado,
+      });
+
+      // 1. Tenta achar magnet no Location header
+      const location = resp.headers['location'] || resp.headers['Location'];
+      if (location && location.startsWith('magnet:')) {
+        return location;
+      }
+
+      // 2. Tenta extrair magnet do HTML da página de redirect
+      const html: string = resp.data || '';
+      const magnetMatch = html.match(/magnet:\?xt=urn:btih:[a-fA-F0-9]{40}[^"'\s<>]*/);
+      if (magnetMatch) return magnetMatch[0];
+
+      // 3. Tenta achar um meta refresh ou link pra magnet
+      const metaMatch = html.match(/<meta[^>]+url=(magnet:[^"'\s]+)/i);
+      if (metaMatch) return metaMatch[1];
+
+      return null;
+    } catch {
+      return null;
+    }
+  }
+
   private async extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
     const dados = await analisarMagnet(magnet);
     return dados ? dados.infoHash : null;
@@ -321,7 +436,7 @@ export class WordPressScraper {
 
   private extractQualityFromTitle(title: string): string {
     const lower = title.toLowerCase();
-    if (lower.includes('2160p') || lower.includes('4k')) return '2160p';
+    if (lower.includes('2160p') || lower.includes('4k') || lower.includes('uhd')) return '2160p';
     if (lower.includes('1080p') || lower.includes('full hd')) return '1080p';
     if (lower.includes('720p')) return '720p';
     return 'HD';

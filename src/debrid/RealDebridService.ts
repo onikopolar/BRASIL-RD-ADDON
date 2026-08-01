@@ -33,6 +33,8 @@ export class TorboxService {
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
+  /** Cache infoHash → torrentId para torrents em fila (queued) não listados no mylist */
+  private static queuedTorrentCache = new Map<string, string>();
   private readonly videoExtensions: string[] = [
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
     '.mpg', '.mpeg', '.3gp', '.ts', '.mts', '.m2ts', '.vob'
@@ -113,9 +115,11 @@ export class TorboxService {
         || response.data?.data?.queued_id;
 
       if (torrentId) {
+        const hash = await this.extrairMagnetHash(magnetLink);
+        if (hash) TorboxService.queuedTorrentCache.set(hash.toLowerCase(), String(torrentId));
         this.logger.info('Magnet adicionado ao Torbox', {
           torrentId,
-          magnetHash: await this.extrairMagnetHash(magnetLink),
+          magnetHash: hash,
           campoEncontrado: response.data?.torrent_id ? 'torrent_id' :
             response.data?.id ? 'id' :
             response.data?.data?.torrent_id ? 'data.torrent_id' :
@@ -127,8 +131,18 @@ export class TorboxService {
       throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
+      // Se o magnet já está na fila, tenta recuperar o ID do cache
+      const msg = error instanceof Error ? error.message : '';
+      if (/already queued/i.test(msg)) {
+        const hash = await this.extrairMagnetHash(magnetLink);
+        const cachedId = hash ? TorboxService.queuedTorrentCache.get(hash.toLowerCase()) : undefined;
+        if (cachedId) {
+          this.logger.info('Magnet já na fila, usando ID cacheado', { torrentId: cachedId, magnetHash: hash?.substring(0, 16) });
+          return cachedId;
+        }
+      }
       this.logger.error('Falha ao adicionar magnet ao Torbox', {
-        error: error instanceof Error ? error.message : 'Erro',
+        error: msg || 'Erro',
         magnetHash: await this.extrairMagnetHash(magnetLink)
       });
       throw error;
@@ -177,7 +191,7 @@ export class TorboxService {
       throw new Error('Torrent não encontrado no Torbox');
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
-      this.logger.error('Falha ao obter info do torrent', { torrentId });
+      this.logger.error('Falha ao obter info do torrent', { torrentId, message: (error as Error).message });
       throw error;
     }
   }
@@ -329,7 +343,7 @@ export class TorboxService {
       return t || null;
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
-      this.logger.error('Falha ao buscar torrent existente', { magnetHash });
+      this.logger.error('Falha ao buscar torrent existente', { magnetHash: magnetHash.substring(0, 16) });
       return null;
     }
   }
@@ -344,9 +358,19 @@ export class TorboxService {
       }
       const id = await this.addMagnet(magnetLink, apiKey);
       // Torbox processa automaticamente, não precisa selectFiles
-      const info = await this.getTorrentInfo(id, apiKey);
-      const ready = this.isReadyStatus(info.download_state);
-      return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
+      try {
+        const info = await this.getTorrentInfo(id, apiKey);
+        const ready = this.isReadyStatus(info.download_state);
+        return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
+      } catch (infoErr) {
+        // getTorrentInfo pode falhar se o torrent ainda está em fila (queued)
+        // Retorna status "downloading" em vez de erro
+        this.logger.warn('getTorrentInfo falhou, torrent provavelmente em fila', {
+          torrentId: id,
+          error: infoErr instanceof Error ? infoErr.message : 'Erro',
+        });
+        return { added: true, ready: false, status: 'downloading', torrentId: id, progress: 0 };
+      }
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
       return { added: false, ready: false, status: 'error' };
@@ -372,7 +396,8 @@ export class TorboxService {
       } catch (error) {
         lastError = error as Error;
         if (error instanceof StreamStatusException) throw error;
-        if (this.isRetryableError(error as AxiosError) && attempt < this.maxRetries) {
+        const axiosErr = error as AxiosError;
+        if (this.isRetryableError(axiosErr) && attempt < this.maxRetries) {
           const delay = this.baseDelay * Math.pow(2, attempt - 1);
           this.logger.warn(`Tentativa ${attempt}/${this.maxRetries} falhou, retry em ${delay}ms`);
           await this.delay(delay);

@@ -192,7 +192,7 @@ export class SimilarityCalculator {
     const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
 
     // Filme tolera 1 ano de diferenca, serie tolera 3
-    const toleranciaAno = tipoMidia === 'tv' ? 3 : 1;
+    const toleranciaAno = tipoMidia === 'tv' ? 15 : 1;
 
     const condicaoA = this.validarPalavrasMinimas(melhor);
     const condicaoB = this.validarTituloCompleto(melhor);
@@ -248,7 +248,12 @@ export class SimilarityCalculator {
       const fOnly = !condicaoF.passou && condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
       
       if (fOnly) {
-        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] — candidato a normalização: "${tituloTorrent.substring(0, 80)}" | ${motivo}`);
+        // F-only: só tamanho de palavra falhou (ex: LAPUMiA, grupos BR no canonicalName).
+        // Aceita mesmo assim — o auto-learner (registerStripCandidate) já registrou
+        // as palavras anômalas e vai stripá-las no futuro após 3+ IMDBs.
+        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] — aceito (auto-learner ativo): "${tituloTorrent.substring(0, 80)}" | ${motivo}`);
+        resultado.matches = true;
+        resultado.similarity = 0.85;
       } else {
         this.logger.debug(`REJEITADO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
       }

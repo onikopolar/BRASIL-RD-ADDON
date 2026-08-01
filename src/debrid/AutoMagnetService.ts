@@ -609,35 +609,59 @@ export class AutoMagnetService {
 
       const torrentId = await torboxService.addMagnet(magnetData.magnet, apiKey);
 
-      const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
-
       let streamLink: string | null = null;
-      if (torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached') {
-        streamLink = await torboxService.getStreamLinkForTorrent(
+      try {
+        const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
+        if (torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached') {
+          streamLink = await torboxService.getStreamLinkForTorrent(
+            torrentId,
+            apiKey,
+            magnetData.imdbSeason,
+            magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
+          );
+        }
+        return {
+          success: true,
+          status: torrentInfo.download_state,
+          streamLink: streamLink || undefined,
+          message: `Torrent adicionado: ${torrentInfo.download_state}`
+        };
+      } catch (infoErr) {
+        // getTorrentInfo 500 → torrent ainda em fila, retorna downloading
+        logger.warn('getTorrentInfo falhou, torrent em fila', {
           torrentId,
-          apiKey,
-          magnetData.imdbSeason,
-          magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
-        );
+          error: infoErr instanceof Error ? infoErr.message : 'Erro'
+        });
+        return {
+          success: true,
+          status: 'downloading',
+          message: 'Torrent na fila do Torbox, aguardando processamento'
+        };
       }
 
-      return {
-        success: true,
-        status: torrentInfo.download_state,
-        streamLink: streamLink || undefined,
-        message: `Torrent adicionado: ${torrentInfo.download_state}`
-      };
-
     } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      // "Download already queued" = já foi enviado em requisição anterior, tratar como baixando
+      if (/already queued|already exists|already added/i.test(msg)) {
+        logger.info('Magnet já na fila do Torbox (requisição anterior)', {
+          title: magnetData.title.substring(0, 60),
+        });
+        return {
+          success: true,
+          status: 'queued',
+          message: 'Torrent já está na fila do Torbox'
+        };
+      }
+
       logger.error('Erro ao processar Torbox', {
         title: magnetData.title.substring(0, 60),
-        error: error instanceof Error ? error.message : 'Erro'
+        error: msg
       });
 
       return {
         success: false,
         status: 'error',
-        message: `Erro Real-Debrid: ${error instanceof Error ? error.message : 'Erro'}`
+        message: `Erro Real-Debrid: ${msg}`
       };
     }
   }

@@ -51,7 +51,7 @@ const axiosConfigEn = {
 //  PASSO 1: Pega título via OMDB API (gratuita, sem key obrigatória)
 // ═══════════════════════════════════════════════════════════════════════
 
-async function getOmdbTitle(imdbId: string): Promise<{ title: string; year?: number } | null> {
+async function getOmdbTitle(imdbId: string): Promise<{ title: string; year?: number; type?: 'tv' | 'movie' } | null> {
   try {
     const url = `http://www.omdbapi.com/?i=${imdbId}&apikey=trilogy`;
     const res = await axios.get(url, {
@@ -65,8 +65,9 @@ async function getOmdbTitle(imdbId: string): Promise<{ title: string; year?: num
     }
     const title = data.Title;
     const year = data.Year ? parseInt(data.Year) : undefined;
-    logger.debug(`OMDB: "${title}" (${year || '?'})`);
-    return { title, year };
+    const type = data.Type === 'series' ? 'tv' as const : data.Type === 'movie' ? 'movie' as const : undefined;
+    logger.debug(`OMDB: "${title}" (${year || '?'}) [${type || '?'}]`);
+    return { title, year, type };
   } catch (err: any) {
     logger.warn(`OMDB falhou para ${imdbId}: ${err.message}`);
     return null;
@@ -84,7 +85,27 @@ interface TmdbSearchResult {
   year?: number;
 }
 
-async function searchTmdbHtml(query: string, year?: number): Promise<TmdbSearchResult | null> {
+async function searchTmdbHtml(query: string, year?: number, preferType?: 'tv' | 'movie'): Promise<TmdbSearchResult | null> {
+  const all = await searchTmdbHtmlAll(query);
+  if (all.length === 0) return null;
+
+  if (preferType && year) {
+    const best = all.find(r => r.mediaType === preferType && r.year === year);
+    if (best) return best;
+  }
+  if (preferType) {
+    const typeMatch = all.find(r => r.mediaType === preferType);
+    if (typeMatch) return typeMatch;
+  }
+  if (year) {
+    const yearMatch = all.find(r => r.year === year);
+    if (yearMatch) return yearMatch;
+  }
+  return all[0];
+}
+
+/** Retorna TODOS os resultados da busca TMDB (sem filtrar) */
+async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
   try {
     const searchUrl = `https://www.themoviedb.org/search?query=${encodeURIComponent(query)}`;
     const res = await axios.get(searchUrl, axiosConfig);
@@ -129,19 +150,10 @@ async function searchTmdbHtml(query: string, year?: number): Promise<TmdbSearchR
       return true;
     });
 
-    if (unique.length === 0) return null;
-
-    // Se tem year, tenta casar
-    if (year) {
-      const yearMatch = unique.find(r => r.year === year);
-      if (yearMatch) return yearMatch;
-    }
-
-    // Pega o primeiro resultado
-    return unique[0];
+    return unique;
   } catch (err: any) {
     logger.warn(`TMDB search HTML falhou para "${query}": ${err.message}`);
-    return null;
+    return [];
   }
 }
 
@@ -156,49 +168,41 @@ async function scrapeTmdbPage(tmdbUrl: string): Promise<{
   year?: number;
 } | null> {
   try {
-    // Busca páginas em pt-BR e en EM PARALELO
+    // Busca páginas em pt-BR e EN EM PARALELO (força language=pt-BR na URL)
+    const urlPt = tmdbUrl.includes('?') ? `${tmdbUrl}&language=pt-BR` : `${tmdbUrl}?language=pt-BR`;
+    const urlEn = tmdbUrl.includes('?') ? `${tmdbUrl}&language=en-US` : `${tmdbUrl}?language=en-US`;
     const [resPt, resEn] = await Promise.all([
-      axios.get(tmdbUrl, axiosConfig),
-      axios.get(tmdbUrl, axiosConfigEn).catch(() => null),
+      axios.get(urlPt, axiosConfig),
+      axios.get(urlEn, axiosConfigEn).catch(() => null),
     ]);
 
     const $pt = cheerio.load(resPt.data);
+    const $en = resEn ? cheerio.load(resEn.data) : null;
 
-    // Extrai título da página pt-BR
-    const ptTitleRaw = $pt('title').text()
-      .replace(/\s*—\s*The Movie Database.*$/i, '')
-      .replace(/\s*\(\d{4}\)\s*$/, '')
-      .trim();
-    const yearMatch = $pt('title').text().match(/\((\d{4})\)/);
+    // ═══ H2 é a fonte mais confiável: "Avatar: A Lenda de Aang (2005)" ═══
+    const ptH2 = $pt('h2').first().text().trim().replace(/\s+/g, ' ');
+    const yearMatch = ptH2.match(/\(\s*(\d{4})\s*\)/);
     const year = yearMatch ? parseInt(yearMatch[1]) : undefined;
-
-    // Título original: da página EN (fallback: mesmo que PT)
-    let originalTitle = ptTitleRaw;
-    if (resEn) {
-      const $en = cheerio.load(resEn.data);
-      const enTitleRaw = $en('title').text()
-        .replace(/\s*—\s*The Movie Database.*$/i, '')
-        .replace(/\s*\(\d{4}\)\s*$/, '')
-        .trim();
-      if (enTitleRaw && enTitleRaw !== ptTitleRaw) {
-        originalTitle = enTitleRaw;
-      }
+    const ptTitle = ptH2.replace(/\s*\(\s*\d{4}\s*\)\s*/, '').trim();
+    
+    // Título original: H2 da página EN
+    let originalTitle = ptTitle;
+    if ($en) {
+      const enH2 = $en('h2').first().text().trim().replace(/\s+/g, ' ');
+      const enTitle = enH2.replace(/\s*\(\s*\d{4}\s*\)\s*/, '').trim();
+      if (enTitle && enTitle !== ptTitle) originalTitle = enTitle;
     }
-
-    // Verifica se PT ≠ original
     const normalize = (t: string) =>
       t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    const normPt = normalize(ptTitleRaw);
-    const normOrig = normalize(originalTitle);
-    const isDifferent = normPt !== normOrig;
+    const isDifferent = normalize(ptTitle) !== normalize(originalTitle);
 
-    logger.debug(`TMDB HTML: PT="${ptTitleRaw}" | ORIG="${originalTitle}" | year=${year} | diff=${isDifferent}`);
+    logger.debug(`TMDB HTML: PT="${ptTitle}" | ORIG="${originalTitle}" | year=${year} | diff=${isDifferent}`);
 
     return {
       originalTitle,
-      portugueseTitle: isDifferent ? ptTitleRaw : null,
-      portugueseTitleRaw: isDifferent ? ptTitleRaw : null,
+      portugueseTitle: isDifferent ? ptTitle : null,
+      portugueseTitleRaw: isDifferent ? ptTitle : null,
       year,
     };
   } catch (err: any) {
@@ -222,21 +226,51 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
       return null;
     }
 
-    // PASSO 2: Busca no TMDB via search HTML
-    const tmdbResult = await searchTmdbHtml(imdbData.title, imdbData.year);
-    if (!tmdbResult) {
+    // PASSO 2: Busca no TMDB via search HTML — itera resultados até achar um compatível com OMDB
+    const searchResults = await searchTmdbHtmlAll(imdbData.title);
+    if (searchResults.length === 0) {
       logger.warn(`TmdbHtmlScraper: TMDB search sem resultados para "${imdbData.title}"`);
       return null;
     }
 
-    // PASSO 3: Extrai metadados da página do TMDB
-    const metadata = await scrapeTmdbPage(tmdbResult.tmdbUrl);
-    if (!metadata) {
-      logger.warn(`TmdbHtmlScraper: TMDB page scrape falhou`);
-      return null;
+    // Tenta cada resultado do TMDB até achar um compatível com OMDB (tipo + ano)
+    let bestResult: TmdbSearchResult | null = null;
+    let bestMetadata: any = null;
+    for (const r of searchResults) {
+      // Filtra por tipo se OMDB informou
+      if (imdbData.type && r.mediaType !== imdbData.type) continue;
+
+      const meta = await scrapeTmdbPage(r.tmdbUrl);
+      if (!meta) continue;
+
+      // Valida ano: se OMDB tem ano e TMDB tem ano diferente (>2 anos), é resultado errado
+      if (imdbData.year && meta.year && Math.abs(imdbData.year - meta.year) > 2) {
+        logger.debug(`TmdbHtmlScraper: pulando "${meta.originalTitle}" (${meta.year}) — ano diverge do OMDB (${imdbData.year})`);
+        continue;
+      }
+
+      bestResult = r;
+      bestMetadata = meta;
+      break;
     }
 
-    // OMDB é a fonte mais confiável para o ano
+    if (!bestResult || !bestMetadata) {
+      // Fallback: usa o primeiro resultado como antes
+      const fallback = searchResults[0];
+      bestResult = fallback;
+      bestMetadata = await scrapeTmdbPage(fallback.tmdbUrl);
+      if (!bestMetadata) {
+        logger.warn(`TmdbHtmlScraper: TMDB page scrape falhou`);
+        return null;
+      }
+    }
+
+    const metadata = bestMetadata;
+    const tmdbResult = bestResult;
+
+    // O ano é enviado para o similarity calculator (Condition C) validar.
+    // Tolerância de 15 anos para TV cobre séries longas (ex: Rick and Morty 2013-2023)
+    // e rejeita adaptações diferentes com mesmo nome (ex: Avatar 2005 vs 2024).
     const finalYear = imdbData.year || metadata.year;
 
     // Se TMDB achou um filme de ano diferente, usa o título do TMDB mas ano do OMDB

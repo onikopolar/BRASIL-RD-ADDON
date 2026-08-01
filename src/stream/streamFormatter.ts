@@ -662,6 +662,11 @@ export class StreamFormatter {
       const seedsA = this.extrairSeedsDoTitulo(a.title);
       const seedsB = this.extrairSeedsDoTitulo(b.title);
       if (seedsB !== seedsA) return seedsB - seedsA;
+
+      // Mesmos seeds: ordena por tamanho em GB (maior primeiro)
+      const sizeA = this.extrairTamanhoDoTitulo(a.title);
+      const sizeB = this.extrairTamanhoDoTitulo(b.title);
+      if (sizeB !== sizeA) return sizeB - sizeA;
       
       return (a.title || '').localeCompare(b.title || '');
     });
@@ -674,6 +679,20 @@ export class StreamFormatter {
     if (lines.length >= 2) {
       const match = lines[1].match(/🔗\s*(\d+)/);
       if (match) return parseInt(match[1]);
+    }
+    return 0;
+  }
+
+  // Extrai tamanho em GB da linha 2 do titulo (formato: "💾 4.31 GB ...")
+  private extrairTamanhoDoTitulo(title?: string): number {
+    if (!title) return 0;
+    const lines = title.split('\n');
+    if (lines.length >= 2) {
+      const match = lines[1].match(/💾\s*([\d.]+)\s*(GB|MB)/i);
+      if (match) {
+        const value = parseFloat(match[1]);
+        return match[2].toUpperCase() === 'MB' ? value / 1024 : value;
+      }
     }
     return 0;
   }
