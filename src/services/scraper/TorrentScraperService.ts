@@ -44,6 +44,13 @@ export class TorrentScraperService {
             let tmdbData = null;
             if (imdbId) {
                 tmdbData = await this.getTmdbData(imdbId, targetSeason);
+                // Filtra títulos não-latinos — inúteis em scrapers BR
+                if (tmdbData) {
+                    const isLatin = (t: string) => /^[a-z0-9\s\-\.']+$/i.test(t);
+                    if (tmdbData.originalTitle && !isLatin(tmdbData.originalTitle)) tmdbData.originalTitle = '';
+                    if (tmdbData.portugueseTitleRaw && !isLatin(tmdbData.portugueseTitleRaw)) tmdbData.portugueseTitleRaw = '';
+                    if (tmdbData.portugueseTitle && !isLatin(tmdbData.portugueseTitle)) tmdbData.portugueseTitle = '';
+                }
             }
 
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
@@ -159,7 +166,10 @@ export class TorrentScraperService {
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
             // PT primeiro (último do array), depois EN — prioriza busca em português
-            const titlesReverse = [...tmdbData.allTitles].reverse();
+            // Filtra títulos não-latinos (coreano, japonês etc) — inúteis em scrapers BR
+            const titlesReverse = [...tmdbData.allTitles]
+              .filter((t: string) => /^[a-z0-9\s\-\.]+$/i.test(t))
+              .reverse();
             for (const title of titlesReverse) {
                 queries.push(title);
                 if (yearToUse) queries.push(`${title} ${yearToUse}`);

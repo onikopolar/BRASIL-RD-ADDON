@@ -64,6 +64,15 @@ class TorrentScraperService {
             let tmdbData = null;
             if (imdbId) {
                 tmdbData = await this.getTmdbData(imdbId, targetSeason);
+                if (tmdbData) {
+                    const isLatin = (t) => /^[a-z0-9\s\-\.']+$/i.test(t);
+                    if (tmdbData.originalTitle && !isLatin(tmdbData.originalTitle))
+                        tmdbData.originalTitle = '';
+                    if (tmdbData.portugueseTitleRaw && !isLatin(tmdbData.portugueseTitleRaw))
+                        tmdbData.portugueseTitleRaw = '';
+                    if (tmdbData.portugueseTitle && !isLatin(tmdbData.portugueseTitle))
+                        tmdbData.portugueseTitle = '';
+                }
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
             const allResults = [];
@@ -158,7 +167,9 @@ class TorrentScraperService {
         const queries = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            const titlesReverse = [...tmdbData.allTitles].reverse();
+            const titlesReverse = [...tmdbData.allTitles]
+                .filter((t) => /^[a-z0-9\s\-\.]+$/i.test(t))
+                .reverse();
             for (const title of titlesReverse) {
                 queries.push(title);
                 if (yearToUse)

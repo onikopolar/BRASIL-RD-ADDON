@@ -111,7 +111,7 @@ export class ImdbScraperService {
       if (mediaType === 'movie') {
         const details = await this.fetchDetailsFromTMDB(tmdbIdNum, 'movie');
         if (details) {
-          originalTitle = details.original_title || '';
+          originalTitle = details.original_title || details.title || '';
           portugueseTitle = details.title || '';
           
           if (details.release_date) {
@@ -132,7 +132,7 @@ export class ImdbScraperService {
             if (seasonData) {
               const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
               if (seriesDetails) {
-                originalTitle = seriesDetails.original_name || '';
+                originalTitle = seriesDetails.original_name || seriesDetails.name || '';
                 portugueseTitle = seriesDetails.name || '';
               }
               
@@ -155,7 +155,7 @@ export class ImdbScraperService {
             
             const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
             if (seriesDetails) {
-              originalTitle = seriesDetails.original_name || '';
+              originalTitle = seriesDetails.original_name || seriesDetails.name || '';
               portugueseTitle = seriesDetails.name || '';
               if (seriesDetails.first_air_date) {
                 year = parseInt(seriesDetails.first_air_date.substring(0, 4));
@@ -165,7 +165,7 @@ export class ImdbScraperService {
         } else {
           const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
           if (seriesDetails) {
-            originalTitle = seriesDetails.original_name || '';
+            originalTitle = seriesDetails.original_name || seriesDetails.name || '';
             portugueseTitle = seriesDetails.name || '';
             if (seriesDetails.first_air_date) {
               year = parseInt(seriesDetails.first_air_date.substring(0, 4));
@@ -393,7 +393,7 @@ export class ImdbScraperService {
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\w\s]/g, ' ')
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')  // \p{L}=Unicode letters, preserva coreano/japonês/árabe etc
       .replace(/\s+/g, ' ')
       .trim();
   }
