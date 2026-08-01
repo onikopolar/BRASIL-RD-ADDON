@@ -8,7 +8,8 @@ import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { BludvScraper } from './bludvScraper.js';
 import { searchTpb } from './tpbScraper.js';
-import { searchRargb } from './rargbScraper.js';
+// RARGB desabilitado — JS rendering, inacessível com cheerio
+// import { searchRargb } from './rargbScraper.js';
 import { searchStarck } from './starckScraper.js';
 import { searchHdr } from './hdrScraper.js';
 import { EpisodeMatcher } from '../../titulos/episodeMatcher.js';
@@ -89,20 +90,8 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapTpbResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
-            const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const rargbFactory = () => Promise.all([
-                searchRargb(rargbQueryEn, type),
-                rargbQueryPt !== rargbQueryEn ? searchRargb(rargbQueryPt, type) : Promise.resolve([])
-            ]).then(([en, pt]) => {
-                const seen = new Set<string>();
-                const merged = [...en, ...pt].filter(t => {
-                  if (seen.has(t.infoHash)) return false;
-                  seen.add(t.infoHash);
-                  return true;
-                });
-                return merged.map(r => this.mapRargbResult(r, type)).filter((r): r is TorrentResult => r !== null);
-            }).catch(() => [] as TorrentResult[]);
+            // RARGB desabilitado — site usa JS rendering (Cloudflare), cheerio não extrai nada
+            const rargbFactory = () => Promise.resolve([] as any[]);
 
             const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
@@ -480,7 +469,7 @@ export class TorrentScraperService {
             leechers: r.leechers,
             size: 'N/A',
             quality,
-            provider: 'TPB',
+            provider: 'The Pirate Bay',
             language: this.extractLanguage(r.title),
             type,
             relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),

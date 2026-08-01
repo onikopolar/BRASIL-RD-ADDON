@@ -1,14 +1,16 @@
-// Deploy: reinicia PM2 direto do dist/ na raiz (sem release/)
+// Deploy: mata PM2 e inicia fresco com o dist atual
+// Rode `npm run build` ANTES para compilar o código que quer em produção
 const { execSync } = require('child_process');
+const path = require('path');
 
-console.log('🚀 Deploy: reiniciando PM2...\n');
+console.log('🚀 Deploy: resetando PM2...\n');
 
-try {
-  execSync('npx pm2 restart brasil-rd-addon --update-env', { stdio: 'inherit' });
-} catch {
-  // Processo não existe ainda, cria do zero
-  execSync('npx pm2 start ecosystem.config.js', { stdio: 'inherit' });
-}
+// Mata PM2 completamente (limpa cache de require)
+execSync('npx pm2 kill', { stdio: 'inherit' });
+console.log('');
 
-console.log('\n✅ Deploy concluído!');
+// Inicia fresco com o dist atual
+execSync('npx pm2 start ecosystem.config.js', { stdio: 'inherit', cwd: path.resolve(__dirname, '..') });
+
+console.log('\n✅ Deploy concluído! PM2 rodando dist/ atual.');
 

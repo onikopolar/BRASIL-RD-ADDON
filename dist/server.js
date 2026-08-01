@@ -176,11 +176,12 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_js_1.torrentioRateLim
         ultraLogger.info(' STREAM RESULT retornado', {
             requestId,
             totalStreams: result.streams?.length || 0,
-            streamPreviews: result.streams?.slice(0, 5).map((s) => ({
-                title: s.title?.substring(0, 60),
-                quality: s.behaviorHints?.streamQuality || 'unknown',
-                hasUrl: !!s.url,
-            })),
+            resumo: result.streams?.slice(0, 8).map((s) => {
+                const provider = (s.title || '').match(/⚙️\s*([^\n]+)/)?.[1] || '?';
+                const quality = s.behaviorHints?.streamQuality || '?';
+                const name = (s.title || '').split('\n')[0].substring(0, 50);
+                return `${provider} ${quality} | ${name}`;
+            }),
         });
         result.streams.forEach((stream) => {
             let quality = 'unknown';

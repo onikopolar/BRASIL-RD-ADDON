@@ -6,7 +6,7 @@ import { TitleFilter, TitleMatchResult, SeriesMetadata } from '../titulos/titleF
 import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
-import { extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
 import { LanguageDetector } from '../titulos/LanguageDetector.js';
 import { RescrapeService } from '../services/RescrapeService.js';
 
@@ -16,6 +16,14 @@ const imdbScraper = ImdbScraperService.getInstance();
 const titleFilter = TitleFilter.getInstance();
 const episodeMatcher = EpisodeMatcher.getInstance();
 const qualityDetector = QualityDetector.getInstance();
+
+// Legendado indicators da fonte unica (TechnicalWords)
+const LEGENDADO_REGEX = new RegExp(
+  '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
+    .filter(w => /^leg/i.test(w))
+    .join('|') + ')\\b',
+  'i'
+);
 
 interface MagnetData {
   imdbId: string;
@@ -424,7 +432,8 @@ export class AutoMagnetService {
     // Indicadores fortes de PT-BR
     if (lowerTitle.includes('dublado') || lowerTitle.includes('dublada') || lowerTitle.includes('dublagem')) return 'pt-BR';
     if (lowerTitle.includes('dual audio') || lowerTitle.includes('dual áudio')) return 'pt-BR,en';
-    if (lowerTitle.includes('legendado') || lowerTitle.includes('legendada')) return 'pt-BR';
+    // Legendado/truncado = NAO eh PT-BR dublado
+    if (LEGENDADO_REGEX.test(lowerTitle)) return 'legendado';
     if (lowerTitle.includes('nacional')) return 'pt-BR';
 
     // Indicadores fortes de EN
@@ -641,11 +650,28 @@ export class AutoMagnetService {
 
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      // "Download already queued" = já foi enviado em requisição anterior, tratar como baixando
+      // "Download already queued" = já foi enviado em requisição anterior
+      // Tenta achar o torrent existente e verificar se já completou
       if (/already queued|already exists|already added/i.test(msg)) {
-        logger.info('Magnet já na fila do Torbox (requisição anterior)', {
+        logger.info('Magnet já na fila do Torbox, verificando status...', {
           title: magnetData.title.substring(0, 60),
         });
+        try {
+          const existing = await this.checkExistingTorrent(magnetData.magnet, apiKey);
+          if (existing.found && existing.downloaded) {
+            const streamLink = await torboxService.getStreamLinkForTorrent(
+              existing.torrentId!,
+              apiKey,
+              magnetData.imdbSeason,
+              magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
+            );
+            return {
+              success: true,
+              streamLink: streamLink || undefined,
+              status: 'downloaded'
+            };
+          }
+        } catch (e) { /* fallthrough */ }
         return {
           success: true,
           status: 'queued',
@@ -653,15 +679,31 @@ export class AutoMagnetService {
         };
       }
 
-      logger.error('Erro ao processar Torbox', {
+      // Timeout ou outro erro — tenta verificar se o torrent já existe
+      logger.warn('Erro ao processar Torbox, verificando se já existe...', {
         title: magnetData.title.substring(0, 60),
-        error: msg
+        error: msg.substring(0, 100)
       });
+
+      try {
+        const existing = await this.checkExistingTorrent(magnetData.magnet, apiKey);
+        if (existing.found && existing.downloaded) {
+          const streamLink = await torboxService.getStreamLinkForTorrent(
+            existing.torrentId!, apiKey,
+            magnetData.imdbSeason,
+            magnetData.imdbEpisode !== null ? magnetData.imdbEpisode : undefined
+          );
+          return { success: true, streamLink: streamLink || undefined, status: 'downloaded' };
+        }
+        if (existing.found) {
+          return { success: true, status: existing.status || 'downloading', message: `Status: ${existing.status}` };
+        }
+      } catch (e) { /* fallthrough */ }
 
       return {
         success: false,
         status: 'error',
-        message: `Erro Real-Debrid: ${msg}`
+        message: `Erro Torbox: ${msg.substring(0, 150)}`
       };
     }
   }

@@ -46,7 +46,6 @@ const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
 const bludvScraper_js_1 = require("./bludvScraper.js");
 const tpbScraper_js_1 = require("./tpbScraper.js");
-const rargbScraper_js_1 = require("./rargbScraper.js");
 const starckScraper_js_1 = require("./starckScraper.js");
 const hdrScraper_js_1 = require("./hdrScraper.js");
 const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
@@ -107,21 +106,7 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapTpbResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            const rargbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
-            const rargbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const rargbFactory = () => Promise.all([
-                (0, rargbScraper_js_1.searchRargb)(rargbQueryEn, type),
-                rargbQueryPt !== rargbQueryEn ? (0, rargbScraper_js_1.searchRargb)(rargbQueryPt, type) : Promise.resolve([])
-            ]).then(([en, pt]) => {
-                const seen = new Set();
-                const merged = [...en, ...pt].filter(t => {
-                    if (seen.has(t.infoHash))
-                        return false;
-                    seen.add(t.infoHash);
-                    return true;
-                });
-                return merged.map(r => this.mapRargbResult(r, type)).filter((r) => r !== null);
-            }).catch(() => []);
+            const rargbFactory = () => Promise.resolve([]);
             const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
             const starckFactory = () => Promise.all([
@@ -485,7 +470,7 @@ class TorrentScraperService {
             leechers: r.leechers,
             size: 'N/A',
             quality,
-            provider: 'TPB',
+            provider: 'The Pirate Bay',
             language: this.extractLanguage(r.title),
             type,
             relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),

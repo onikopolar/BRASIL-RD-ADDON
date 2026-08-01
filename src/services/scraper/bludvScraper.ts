@@ -68,16 +68,11 @@ export class BludvScraper {
 
       logger.debug(`BLUDV HTML: "${query}" → ${postUrls.length} posts encontrados`);
 
-      // Passo 2: Para cada post, extrair magnets diretos do HTML
-      const results: TorrentResult[] = [];
-      for (const postUrl of postUrls) {
-        try {
-          const extracted = await this.scrapePost(postUrl, type);
-          results.push(...extracted);
-        } catch {
-          // Post individual com problema, ignora
-        }
-      }
+      // Passo 2: Extrair magnets de TODOS os posts em PARALELO
+      const postResults = await Promise.all(
+        postUrls.map(url => this.scrapePost(url, type).catch(() => [] as TorrentResult[]))
+      );
+      const results = postResults.flat();
 
       // logger.debug(`BLUDV HTML: ${results.length} magnets extraídos de ${postUrls.length} posts`);
       return results;
@@ -114,7 +109,7 @@ export class BludvScraper {
       }
     });
 
-    // Limita a 8 posts para não demorar
+    // Limita a 8 posts (rodam em paralelo via Promise.all)
     return postUrls.slice(0, 8);
   }
 

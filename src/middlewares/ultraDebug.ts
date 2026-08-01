@@ -90,7 +90,7 @@ export const ultraDebugMiddleware = () => {
                 body: req.body && Object.keys(req.body).length > 0 ? maskSensitive(req.body) : undefined,
             };
 
-            logger.info(`▶ REQUEST #${requestId} ${req.method} ${maskUrl(req.path)}`, entryLog);
+            logger.debug(`▶ REQUEST #${requestId} ${req.method} ${maskUrl(req.path)}`, entryLog);
         }
 
         // ═══════════════════════════════════════════
@@ -106,7 +106,7 @@ export const ultraDebugMiddleware = () => {
             if (!shouldSkip) {
                 const bodyStr = JSON.stringify(body);
                 const truncated = bodyStr.length > 500 ? bodyStr.substring(0, 500) + `... [TRUNCATED ${bodyStr.length} chars]` : bodyStr;
-                logger.info(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) JSON`, {
+                logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) JSON`, {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
@@ -129,7 +129,7 @@ export const ultraDebugMiddleware = () => {
             if (!shouldSkip) {
                 const bodyStr = typeof body === 'string' ? body : JSON.stringify(body);
                 const truncated = bodyStr.length > 300 ? bodyStr.substring(0, 300) + `... [${bodyStr.length} chars]` : bodyStr;
-                logger.info(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) SEND`, {
+                logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) SEND`, {
                     requestId,
                     statusCode: res.statusCode,
                     responseTimeMs: responseTime,
@@ -153,7 +153,7 @@ export const ultraDebugMiddleware = () => {
                 redirectUrl = url;
             }
             if (!shouldSkip) {
-                logger.info(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${maskUrl(redirectUrl)}`, {
+                logger.debug(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${maskUrl(redirectUrl)}`, {
                     requestId,
                     statusCode,
                     responseTimeMs: responseTime,

@@ -110,6 +110,9 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'vo', 'ov',
   // Legendas (legendado = nao-dublado, tratar como internacional)
   'legendado', 'legendada', 'legenda',
+  // Forma truncada de "legendado" (ex: titulo cortado por limite de caracteres)
+  // NOTA: "legend" NAO incluso — falso positivo com "Legends" (titulos de filmes)
+  'lege',
   // Abreviacoes comuns de fansub
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
   'turg', 'Turg','TURG','fitgirl', 'FitGirl','steamrip',
@@ -245,6 +248,21 @@ export function getPotentialSequelNumbers(title: string): number[] {
     if (/^\d+$/.test(token)) {
       const n = Number(token);
       if (n >= 2 && n <= 19) candidates.push(n);
+    }
+  }
+
+  // Extrai numeros romanos (I, II, III, IV...) do título original
+  const romanMap: Record<string, number> = {
+    'ii': 2, 'iii': 3, 'iv': 4, 'v': 5, 'vi': 6, 'vii': 7, 'viii': 8, 'ix': 9, 'x': 10,
+    'xi': 11, 'xii': 12, 'xiii': 13, 'xiv': 14, 'xv': 15, 'xvi': 16, 'xvii': 17, 'xviii': 18, 'xix': 19, 'xx': 20,
+  };
+  // Busca no título ORIGINAL (antes de lowercase) pra pegar maiúsculas
+  // Exclui matches adjacentes a hífen (ex: "X" em "X-Men" não é romano)
+  const romanMatch = title.match(/(?<!-)\b(I{1,3}|IV|VI{0,3}|IX|XI{0,3})\b(?!-)/gi);
+  if (romanMatch) {
+    for (const r of romanMatch) {
+      const num = romanMap[r.toLowerCase()];
+      if (num && num >= 2 && num <= 20) candidates.push(num);
     }
   }
 
@@ -470,51 +488,39 @@ console.log('[DEBUG] [TechnicalWords] Iniciada verificação de grupos internaci
 
 /** Palavras puramente técnicas que devem ser removidas na normalização */
 const TECHNICAL_STRIP_WORDS = new Set([
-  // Extensões
-  'mkv', 'mp4', 'avi', 'webm', 'mpg', 'mpeg', 'mov', 'wmv', 'flv', 'rmvb', 'm2ts', 'ts', 'm4v', 'vob', 'ogv', '3gp',
-  // Qualidades
-  '720p', '1080p', '2160p', '4k', '480p', '360p', 'sd', 'hd', 'fhd', 'uhd', 'hdr', 'fullhd', '8k', '2k',
-  // Codecs vídeo
-  'x264', 'x265', 'h264', 'h265', 'avc', 'hevc', 'xvid', 'divx', 'vp9', 'av1',
-  // Codecs áudio
-  'ac3', 'aac', 'dts', 'eac3', 'mp3', 'ogg', 'opus', 'flac', 'truehd', 'atmos', 'dtshd', 'dts-hd',
-  // Fontes
-  'web-dl', 'webrip', 'bluray', 'brrip', 'bdrip', 'dvdrip', 'hdtv', 'remux', 'web', 'dl', 'bd', 'dvd',
-  // Áudio canais (5.1, 7.1, etc — o regex também pega)
-  '5.1', '7.1', '2.0', '2ch', '6ch', '5.1ch', '7.1ch',
-  // Palavras de áudio/legenda (ruído na comparação de títulos)
-  'dublado', 'dublada', 'dublagem', 'dual', 'audio', 'áudio',
-  'legendado', 'legendada', 'legenda', 'dub', 'dubbed',
-  // Grupos release comuns (ruído visual)
-  'yts', 'yify', 'rarbg', 'ettv', 'eztv', 'ion10', 'bludv', 'comando', 'comando1', 'tpb', 'starck', 'starckfilmes',
-  // Grupos release encontrados nos scrapers
-  'btm', 'sujaidr', 'xebec', 'douglasvip', 'deejayahmed', 'jeremiah', 'leroy', 'pitt',
-  'ethel', 'coyote', 'reenc', 'psa', 'mang0', 'rdnyb', 'grace', 'bone', 'syncup', 'pong',
-  // Domínios/URLs que poluem o dn do magnet
-  'www', 'com', 'org', 'net', 'tv', 'xyz', 'info', 'io', 'to', 'cc',
-  'hidratorrents', 'hdr',
-  // Códigos de idioma em releases multi (ex: ESP-ENG, ITA, FRE)
-  'esp', 'eng', 'ita', 'fre', 'ger', 'jpn', 'kor', 'rus', 'por',
-  // Tags de sites WordPress (Listão Filmes, etc)
-  'download', 'listao', 'filmes', 'acesse',
-  // Metadados de temporada
-  'temporada', 'completa', 'season', 'complete', 'parts', 
-  // Codecs e variantes
-  '10bit', '10bits', 'hdr10', 'hdr10p', 'dd', 'ddp', 'ddp5', 'sdr', 'blu', 'extras',
-  'remastered', '3d', 'imax', 'dv', 'hdr10plus', 'dovi', 'BAIXARAPIDO.COM', 'COMOEUBAIXO.COM', 'BRRip',
-  'WWW.RAPIDOTORRENTS.COM', 'RAPIDOTORRENTS', '.com', '.COM', 'www.', 'rapidotorrents',
-  // Spam de sites nos DNs de magnet
-  'site', 'visite', 'www',
-  // Metadados soltos
-  'movie', 'film', 'series', 'vol', 'volume', 'extended',
-  // PT: versões estendidas
-  'estendido', 'estendida', 'versao', 'versão',
-  // Domínios/spam nos DNs de magnet
-  'sitedetorrents', 'hidratorrents',
-  // Entidades HTML numéricas que escapam da normalização
-  '8211', '8230', '038',
-  // Lançamentos multi (ex: "S01E01-02-03")
-  's01', 's02', 's03', 's04', 's05', 's06', 's07', 's08',
+  '# Strip Words auto-aprendidas — 1 palavra por linha', '.COM', '.com', '038', '1080p', '10bit',
+  '10bits', '2.0', '2160p', '2ch', '2k', '360p',
+  '3d', '3gp', '480p', '4k', '5.1', '5.1ch',
+  '6ch', '7.1', '7.1ch', '720p', '8211', '8230',
+  '8k', 'BAIXARAPIDO.COM', 'BRRip', 'COMOEUBAIXO.COM', 'RAPIDOTORRENTS', 'WWW.RAPIDOTORRENTS.COM',
+  'aac', 'ac3', 'acesse', 'atmos', 'audio', 'av1',
+  'avc', 'avi', 'bd', 'bdrip', 'blu', 'bludv',
+  'bluray', 'bone', 'brrip', 'btm', 'cc', 'com',
+  'comando', 'comando1', 'comandotorrents', 'completa', 'complete', 'coyote',
+  'dd', 'ddp', 'ddp5', 'deejayahmed', 'divx', 'dl',
+  'douglasvip', 'dovi', 'download', 'dts', 'dts-hd', 'dtshd',
+  'dual', 'dub', 'dubbed', 'dublada', 'dublado', 'dublagem',
+  'dv', 'dvd', 'dvdrip', 'eac3', 'eng', 'esp',
+  'estendida', 'estendido', 'ethel', 'ettv', 'extended', 'extras',
+  'eztv', 'fhd', 'film', 'filmes', 'flac', 'flv',
+  'fre', 'fullhd', 'ger', 'grace', 'h264', 'h265',
+  'hd', 'hdr', 'hdr', 'hdr10', 'hdr10p', 'hdr10plus',
+  'hdtv', 'hevc', 'hidratorrents', 'hidratorrents', 'imax', 'info',
+  'io', 'ion10', 'ita', 'jeremiah', 'jpn', 'kor',
+  'legenda', 'legendada', 'legendado', 'leroy', 'listao', 'm2ts',
+  'm4v', 'mang0', 'mkv', 'mov', 'movie', 'mp3',
+  'mp4', 'mpeg', 'mpg', 'net', 'ogg', 'ogv',
+  'opus', 'org', 'parts', 'pitt', 'pong', 'por',
+  'psa', 'rapidotorrents', 'rarbg', 'rdnyb', 'reenc', 'remastered',
+  'remux', 'rmvb', 'rus', 's01', 's02', 's03',
+  's04', 's05', 's06', 's07', 's08', 'sd',
+  'sdr', 'season', 'series', 'sf', 'site', 'sitedetorrents',
+  'starck', 'starckfilmes', 'sujaidr', 'syncup', 'temporada', 'to',
+  'tpb', 'truehd', 'ts', 'tv', 'uhd', 'versao',
+  'versão', 'visite', 'vob', 'vol', 'volume', 'vp9',
+  'web', 'web-dl', 'webm', 'webrip', 'wmv', 'www',
+  'www', 'www.', 'x264', 'x265', 'xebec', 'xvid',
+  'xyz', 'yify', 'yts', 'áudio'
 ]);
 
 // Regex de qualidade/codec (padrões que não são palavras isoladas)

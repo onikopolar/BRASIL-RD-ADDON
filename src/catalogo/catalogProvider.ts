@@ -11,6 +11,15 @@ import { TitleFilter } from '../titulos/titleFilter.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
 import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
+
+// Legendado indicators da fonte unica (TechnicalWords)
+const LEGENDADO_REGEX = new RegExp(
+  '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
+    .filter(w => /^leg/i.test(w))
+    .join('|') + ')\\b',
+  'i'
+);
 
 interface ScrapedTorrent {
   title: string;
@@ -262,6 +271,11 @@ export class CatalogProvider {
     const ptTorrents = torrents.filter(t => {
       const nome = t.canonicalName || t.title;
       const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
+
+      // Se o provider explicitamente diz que é Legendado → rejeitar direto
+      if (t.language && LEGENDADO_REGEX.test(t.language)) {
+        return false;
+      }
 
       // Se o provider detectou idioma PT-BR (ex: BLUDV/Comando via HTML),
       // só rejeita se o magnet tiver indicadores INTERNACIONAIS FORTES (rartv, ntb, etc).

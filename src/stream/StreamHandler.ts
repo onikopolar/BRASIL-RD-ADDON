@@ -10,6 +10,15 @@ import { CatalogProvider } from '../catalogo/catalogProvider.js';
 import { StreamFormatter } from '../stream/streamFormatter.js';
 import { StaticResponseService, StaticResponse } from './StaticResponseService.js';
 import { StreamStatusException } from './StreamStatusException.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
+
+// Legendado indicators da fonte unica (TechnicalWords)
+const LEGENDADO_REGEX = new RegExp(
+  '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
+    .filter(w => /^leg/i.test(w))
+    .join('|') + ')\\b',
+  'i'
+);
 
 interface DatabaseStreamResult {
   success: boolean;
@@ -232,8 +241,16 @@ export class StreamHandler {
       });
 
       // Converte direto — validação já foi feita no save (SimilarityCalculator)
+      // Filtra idioma: só retorna torrents PT-BR (exclui Legendado/EN)
       const streams: Stream[] = [];
       for (const t of torrents) {
+        // Pula torrents com idioma explicitamente Legendado ou EN
+        const idioma = (t.idioma || '').toLowerCase();
+        if (idioma === 'legendado' || idioma === 'en' || idioma === 'es' || idioma === 'fr') continue;
+        // Pula títulos que contenham indicadores de Legendado
+        const titleLower = (t.title || '').toLowerCase();
+        if (LEGENDADO_REGEX.test(titleLower)) continue;
+
         const stream = await this.convertTorrentToStream(t, request);
         if (stream) streams.push(stream);
       }

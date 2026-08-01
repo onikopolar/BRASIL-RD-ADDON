@@ -259,40 +259,34 @@ export class TorboxService {
       }
 
       const files = info.files || [];
+      
+      // DEBUG compacto: total de arquivos → vídeos → escolhido
+      const videoFiles = files.filter(f => this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)));
+
       let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
-      for (const f of files) {
-        if (!this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext))) continue;
+      for (const f of videoFiles) {
+        const minSize = (targetSeason !== undefined) ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+        if (f.size < minSize) continue;
         let score = 0;
-        // Prioridade 1: Episodio correto (+100B — sempre vence arquivos de outros episodios)
         if (targetSeason !== undefined && targetEpisode !== undefined) {
-          const match = this.episodeMatcher.arquivoPertenceAoEpisodio(
-            f.name, targetSeason, targetEpisode
-          );
+          const match = this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode);
           if (match) score += 100_000_000_000;
         }
-        // Prioridade 2: Qualidade correta (+50B — vence arquivos de qualidade diferente)
         if (targetQuality && f.name.toLowerCase().includes(targetQuality.toLowerCase())) {
           score += 50_000_000_000;
         }
-        // Prioridade 3: Tamanho (desempate entre arquivos do mesmo episódio e qualidade)
         score += f.size;
         if (score > bestScore) { bestScore = score; bestFile = f; }
       }
+
+      console.log(`📁 Torbox: ${files.length} arquivos, ${videoFiles.length} vídeos → "${bestFile?.name?.substring(0, 60) || 'N/A'}" (${Math.round((bestFile?.size || 0) / 1048576)}MB)`);
 
       if (!bestFile) {
         throw new StreamStatusException(StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
       }
 
-      this.logger.info('Arquivo selecionado por qualidade', {
-        torrentId,
-        targetQuality: targetQuality || 'N/A',
-        totalFiles: files.length,
-        escolhido: bestFile.name,
-        fileId: bestFile.id,
-        tamanhoMB: Math.round(bestFile.size / 1048576),
-      });
 
       return this.buildStreamPermalink(torrentId, bestFile.id, apiKey);
     } catch (error) {

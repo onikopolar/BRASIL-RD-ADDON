@@ -315,19 +315,22 @@ export class SimilarityCalculator {
     tituloTorrent: string,
     temIndicadorPt: boolean
   ): { passou: boolean; motivo: string } {
-    // TMDB 1 palavra sem ano nem SxxExx → rejeita (ambiguo)
-    // Mas só se o torrent tem MAIS palavras que o TMDB (a palavra é parte de outro título)
+    // TMDB de 1 palavra → verifica ambiguidade (ex: "Soul" em "Don't Tell a Soul 2021")
+    // Só quando TODOS os títulos TMDB são 1 palavra — se há título multi-palavra
+    // (ex: "Aliens: O Resgate" + "Aliens"), o título maior legitima o match
+    // Tolera +1 palavra extra (termos técnicos: 1080p, DUAL, etc)
     let minWords = 99;
+    let maxWords = 0;
     for (const t of movieInfo.allTitles) {
       const palavras = this.normalizarParaComparacao(t).split(' ').filter(w => w.length > 0 && !(/^\d+$/.test(w)));
       if (palavras.length < minWords) minWords = palavras.length;
+      if (palavras.length > maxWords) maxWords = palavras.length;
     }
     const temSxxExx = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
-    if (anoTorrent === null && minWords <= 1 && !temSxxExx) {
-      // Se o torrent tem mais palavras que o TMDB, a palavra TMDB é só parte de outro título
+    if (minWords <= 1 && maxWords <= 1 && !temSxxExx) {
       const palavrasTitulo = this.normalizarParaComparacao(tituloTorrent)
         .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
-      if (palavrasTitulo.length > minWords) {
+      if (palavrasTitulo.length > minWords + 1) {
         return { passou: false, motivo: `TMDB de 1 palavra ("${movieInfo.allTitles[0]}") em título maior — ambiguo` };
       }
     }
@@ -412,30 +415,19 @@ export class SimilarityCalculator {
     palavrasTorrent: string[],
     titulosValidos: string[]
   ): { passou: boolean; motivo: string } {
-    // Extrai números de sequência (≥2, excluindo anos 19xx/20xx) de TODOS os títulos TMDB
+    // Extrai números de sequência dos títulos TMDB usando getPotentialSequelNumbers
     const seqNumbers = new Set<number>();
     for (const titulo of titulosValidos) {
-      const tokens = this.normalizarParaComparacao(titulo).split(' ');
-      for (const tk of tokens) {
-        const n = parseInt(tk);
-        if (!isNaN(n) && n >= 2 && n <= 100 && !/^(19|20)\d{2}$/.test(tk)) {
-          seqNumbers.add(n);
-        }
+      for (const n of getPotentialSequelNumbers(titulo)) {
+        seqNumbers.add(n);
       }
     }
 
     // Se TMDB não tem número de sequência, não é sequência → OK
     if (seqNumbers.size === 0) return { passou: true, motivo: '' };
 
-    // Extrai números do título ORIGINAL (palavrasTorrent já tem números filtrados!)
-    // Usa o título bruto normalizado só para extrair números
-    const tituloNormalizado = this.normalizarParaComparacao(tituloTorrent);
-    const allTokens = tituloNormalizado.split(' ').filter(w => w.length > 0);
-    const torrentNumbers = new Set<number>();
-    for (const w of allTokens) {
-      const n = parseInt(w);
-      if (!isNaN(n)) torrentNumbers.add(n);
-    }
+    // Extrai números do torrent via getPotentialSequelNumbers (inclui romanos)
+    const torrentNumbers = new Set(getPotentialSequelNumbers(tituloTorrent));
 
     // Pelo menos um número de sequência TMDB precisa estar no torrent
     for (const sn of seqNumbers) {

@@ -9,6 +9,15 @@ import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { allowedQualities } from './scraperConfigs.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+
+// Legendado indicators extraídos da fonte única (TechnicalWords)
+const LEGENDADO_REGEX = new RegExp(
+  '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
+    .filter(w => /^leg/i.test(w))
+    .join('|') + ')\\b',
+  'i'
+);
 
 const logger = new Logger('WordPressScraper');
 
@@ -437,8 +446,8 @@ export class WordPressScraper {
   private extractLanguage(title: string): string {
     const lower = title.toLowerCase();
     if (lower.includes('dual')) return 'Dual';
-    if (lower.includes('dublado')) return 'Dublado';
-    if (lower.includes('legendado')) return 'Legendado';
+    if (lower.includes('dublado') || lower.includes('dublad')) return 'Dublado';
+    if (LEGENDADO_REGEX.test(lower)) return 'Legendado';
     return 'Desconhecido';
   }
 
