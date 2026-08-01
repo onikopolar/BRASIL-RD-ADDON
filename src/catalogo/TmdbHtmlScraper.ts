@@ -48,16 +48,109 @@ const axiosConfigEn = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
+//  FALLBACK: TMDB /find/{imdb_id} — converte IMDB ID direto sem OMDB
+// ═══════════════════════════════════════════════════════════════════════
+
+async function getTmdbViaFindEndpoint(imdbId: string): Promise<ImdbTitles | null> {
+  try {
+    // Tenta TMDB API find endpoint (sem key = fallback pra HTML)
+    const apiKey = process.env.TMDB_API_KEY;
+    if (apiKey) {
+      const axios = (await import('axios')).default;
+      const resp = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
+        params: { api_key: apiKey, external_source: 'imdb_id', language: 'pt-BR' },
+        timeout: 10000,
+        headers: { 'User-Agent': 'BrasilRD/1.0' },
+      });
+      const results = resp.data;
+      const movie = results?.movie_results?.[0];
+      const tv = results?.tv_results?.[0];
+      const item = movie || tv;
+      if (item) {
+        const mediaType = movie ? 'movie' as const : 'tv' as const;
+        const url = `https://www.themoviedb.org/${mediaType}/${item.id}?language=pt-BR`;
+        const meta = await scrapeTmdbPage(url);
+        if (meta) {
+          const normalized = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+          const allTitles = [normalized(meta.originalTitle)];
+          if (meta.portugueseTitle) {
+            const normPt = normalized(meta.portugueseTitle);
+            if (!allTitles.includes(normPt)) allTitles.push(normPt);
+          }
+          return {
+            originalTitle: meta.originalTitle,
+            portugueseTitle: meta.portugueseTitle,
+            portugueseTitleRaw: meta.portugueseTitleRaw,
+            allTitles,
+            foundInPortuguese: !!meta.portugueseTitle,
+            year: meta.year,
+            mediaType,
+            portuguesePriority: !!meta.portugueseTitle,
+          };
+        }
+      }
+    }
+  } catch { /* fallback silencioso */ }
+  
+  // Fallback HTML: tenta /movie/{imdbId} ou /tv/{imdbId}
+  try {
+    for (const type of ['movie', 'tv']) {
+      const url = `https://www.themoviedb.org/${type}/${imdbId}?language=pt-BR`;
+      const meta = await scrapeTmdbPage(url);
+      if (meta) {
+        const normalized = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
+        const allTitles = [normalized(meta.originalTitle)];
+        if (meta.portugueseTitle) {
+          const normPt = normalized(meta.portugueseTitle);
+          if (!allTitles.includes(normPt)) allTitles.push(normPt);
+        }
+        return {
+          originalTitle: meta.originalTitle,
+          portugueseTitle: meta.portugueseTitle,
+          portugueseTitleRaw: meta.portugueseTitleRaw,
+          allTitles,
+          foundInPortuguese: !!meta.portugueseTitle,
+          year: meta.year,
+          mediaType: type as 'movie' | 'tv',
+          portuguesePriority: !!meta.portugueseTitle,
+        };
+      }
+    }
+  } catch { /* fallback silencioso */ }
+  
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════════
+
+async function retryAxios<T>(fn: () => Promise<T>, maxRetries: number, delayMs: number): Promise<T> {
+  let lastErr: any;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastErr = err;
+      if (i < maxRetries - 1) {
+        await new Promise(r => setTimeout(r, delayMs * (i + 1)));
+      }
+    }
+  }
+  throw lastErr;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 //  PASSO 1: Pega título via OMDB API (gratuita, sem key obrigatória)
 // ═══════════════════════════════════════════════════════════════════════
 
 async function getOmdbTitle(imdbId: string): Promise<{ title: string; year?: number; type?: 'tv' | 'movie' } | null> {
   try {
-    const url = `http://www.omdbapi.com/?i=${imdbId}&apikey=trilogy`;
-    const res = await axios.get(url, {
+    const url = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
+    const res = await retryAxios(() => axios.get(url, {
       timeout: 10000,
       headers: { 'User-Agent': 'BrasilRD/1.0' },
-    });
+    }), 3, 1000);
     const data = res.data;
     if (!data || data.Response === 'False' || !data.Title) {
       logger.warn(`OMDB: sem resultados para ${imdbId}`);
@@ -222,6 +315,14 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
     // PASSO 1: Pega título via OMDB
     const imdbData = await getOmdbTitle(imdbId);
     if (!imdbData) {
+      // Fallback: tenta TMDB /find/{imdb_id} direto (sem precisar do título)
+      logger.warn(`TmdbHtmlScraper: OMDB falhou, tentando TMDB find direto para ${imdbId}`);
+      const directResult = await getTmdbViaFindEndpoint(imdbId);
+      if (directResult) {
+        const duration = Date.now() - startTime;
+        logger.info(`TmdbHtmlScraper: "${directResult.originalTitle}" [${directResult.mediaType}] em ${duration}ms (via find)`);
+        return directResult;
+      }
       logger.warn(`TmdbHtmlScraper: OMDB falhou para ${imdbId}`);
       return null;
     }

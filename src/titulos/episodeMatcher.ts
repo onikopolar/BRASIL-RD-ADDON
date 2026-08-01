@@ -196,6 +196,7 @@ export class EpisodeMatcher {
 
   extractSeasonFromTitle(title: string): number | null {
     const patterns = [
+      /(\d+)x\d+/i,                    // "8x262" → season 8
       /temporada\s*(\d+)/i,
       /(\d+)\s*ª?\s*temporada/i,     // "2ª temporada", "2 temporada"
       /season\s*(\d+)/i,

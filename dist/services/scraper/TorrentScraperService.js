@@ -45,7 +45,6 @@ const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const wordpressScraper_js_1 = require("./wordpressScraper.js");
 const bludvScraper_js_1 = require("./bludvScraper.js");
-const tpbScraper_js_1 = require("./tpbScraper.js");
 const starckScraper_js_1 = require("./starckScraper.js");
 const hdrScraper_js_1 = require("./hdrScraper.js");
 const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
@@ -91,21 +90,7 @@ class TorrentScraperService {
                 });
                 return merged;
             }).catch(() => []);
-            const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
-            const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const tpbFactory = () => Promise.all([
-                (0, tpbScraper_js_1.searchTpb)(tpbQueryEn, type),
-                tpbQueryPt !== tpbQueryEn ? (0, tpbScraper_js_1.searchTpb)(tpbQueryPt, type) : Promise.resolve([])
-            ]).then(([en, pt]) => {
-                const seen = new Set();
-                const merged = [...en, ...pt].filter(t => {
-                    if (seen.has(t.infoHash))
-                        return false;
-                    seen.add(t.infoHash);
-                    return true;
-                });
-                return merged.map(r => this.mapTpbResult(r, type)).filter((r) => r !== null);
-            }).catch(() => []);
+            const tpbFactory = () => Promise.resolve([]);
             const rargbFactory = () => Promise.resolve([]);
             const starckQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
             const starckQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
@@ -173,7 +158,8 @@ class TorrentScraperService {
         const queries = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            for (const title of tmdbData.allTitles) {
+            const titlesReverse = [...tmdbData.allTitles].reverse();
+            for (const title of titlesReverse) {
                 queries.push(title);
                 if (yearToUse)
                     queries.push(`${title} ${yearToUse}`);
@@ -435,10 +421,12 @@ class TorrentScraperService {
     mapStarckResult(r, type) {
         if (!r.magnet)
             return null;
-        const quality = this.qualityDetector.extractQualityFromFilename(r.magnet);
+        const dnMatch = r.magnet.match(/dn=([^&]+)/i);
+        const displayName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
+        const quality = this.qualityDetector.extractQualityFromFilename(displayName);
         if (!this.qualityDetector.isValidQuality(quality))
             return null;
-        const season = this.extractSeasonNumber(r.magnet);
+        const season = this.extractSeasonNumber(displayName);
         return {
             title: r.magnet,
             magnet: r.magnet,
@@ -447,9 +435,9 @@ class TorrentScraperService {
             size: 'N/A',
             quality,
             provider: 'Starck',
-            language: this.extractLanguage(r.magnet),
+            language: this.extractLanguage(displayName),
             type,
-            relevanceScore: this.calculateRelevanceScore(r.magnet, season, this.extractLanguage(r.magnet)),
+            relevanceScore: this.calculateRelevanceScore(displayName, season, this.extractLanguage(displayName)),
             sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),

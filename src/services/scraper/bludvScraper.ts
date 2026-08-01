@@ -66,7 +66,7 @@ export class BludvScraper {
       const postUrls = await this.searchPosts(query);
       if (!postUrls.length) return [];
 
-      logger.debug(`BLUDV HTML: "${query}" → ${postUrls.length} posts encontrados`);
+      logger.info(`BLUDV HTML: ${postUrls.length} posts encontrados para "${query}"`);
 
       // Passo 2: Extrair magnets de TODOS os posts em PARALELO
       const postResults = await Promise.all(

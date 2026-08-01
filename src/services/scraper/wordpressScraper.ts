@@ -162,7 +162,7 @@ export class WordPressScraper {
     if (!Array.isArray(response.data)) return [];
 
     const totalMagnets = response.data.reduce((sum: number, p: any) => sum + ((p.content?.rendered || '').match(/magnet:/g) || []).length, 0);
-    logger.debug(`WP ${site.name}: "${searchQuery}" → ${response.data.length} posts, ${totalMagnets} magnets`);
+    logger.info(`WP ${site.name}: ${totalMagnets} magnets em N/A para "${searchQuery}"`);
 
     const results: TorrentResult[] = [];
     for (const post of response.data) {

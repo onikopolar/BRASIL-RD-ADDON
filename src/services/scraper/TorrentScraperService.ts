@@ -7,7 +7,8 @@ import { QualityDetector } from '../../lib/qualityDetector.js';
 import { ImdbScraperService } from '../../catalogo/ImdbScraperService.js';
 import { WordPressScraper, agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { BludvScraper } from './bludvScraper.js';
-import { searchTpb } from './tpbScraper.js';
+// TPB desabilitado — alto índice de falsos positivos
+// import { searchTpb } from './tpbScraper.js';
 // RARGB desabilitado — JS rendering, inacessível com cheerio
 // import { searchRargb } from './rargbScraper.js';
 import { searchStarck } from './starckScraper.js';
@@ -75,20 +76,8 @@ export class TorrentScraperService {
                 return merged;
             }).catch(() => [] as TorrentResult[]);
 
-            const tpbQueryEn = tmdbData?.originalTitle || searchQueries[0] || query;
-            const tpbQueryPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
-            const tpbFactory = () => Promise.all([
-                searchTpb(tpbQueryEn, type),
-                tpbQueryPt !== tpbQueryEn ? searchTpb(tpbQueryPt, type) : Promise.resolve([])
-            ]).then(([en, pt]) => {
-                const seen = new Set<string>();
-                const merged = [...en, ...pt].filter(t => {
-                  if (seen.has(t.infoHash)) return false;
-                  seen.add(t.infoHash);
-                  return true;
-                });
-                return merged.map(r => this.mapTpbResult(r, type)).filter((r): r is TorrentResult => r !== null);
-            }).catch(() => [] as TorrentResult[]);
+            // TPB desabilitado — alto índice de falsos positivos (Dual Audio = EN+JP em animes)
+            const tpbFactory = () => Promise.resolve([] as TorrentResult[]);
 
             // RARGB desabilitado — site usa JS rendering (Cloudflare), cheerio não extrai nada
             const rargbFactory = () => Promise.resolve([] as any[]);
@@ -169,7 +158,9 @@ export class TorrentScraperService {
         const queries: string[] = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            for (const title of tmdbData.allTitles) {
+            // PT primeiro (último do array), depois EN — prioriza busca em português
+            const titlesReverse = [...tmdbData.allTitles].reverse();
+            for (const title of titlesReverse) {
                 queries.push(title);
                 if (yearToUse) queries.push(`${title} ${yearToUse}`);
                 if (type === 'series' && targetSeason !== undefined) {
@@ -435,10 +426,12 @@ export class TorrentScraperService {
     }
     private mapStarckResult(r: { magnet: string; infoHash: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
-        // Usa o proprio magnet como titulo — catalogProvider extrai o nome real via parse-torrent
-        const quality = this.qualityDetector.extractQualityFromFilename(r.magnet);
+        // Extrai display name do parametro dn= do magnet (ex: "Black+Clover+S01E01+1080p+DUAL")
+        const dnMatch = r.magnet.match(/dn=([^&]+)/i);
+        const displayName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
+        const quality = this.qualityDetector.extractQualityFromFilename(displayName);
         if (!this.qualityDetector.isValidQuality(quality)) return null;
-        const season = this.extractSeasonNumber(r.magnet);
+        const season = this.extractSeasonNumber(displayName);
         return {
             title: r.magnet, // catalogProvider substitui pelo canonicalName do parse-torrent
             magnet: r.magnet,
@@ -447,9 +440,9 @@ export class TorrentScraperService {
             size: 'N/A',
             quality,
             provider: 'Starck',
-            language: this.extractLanguage(r.magnet),
+            language: this.extractLanguage(displayName),
             type,
-            relevanceScore: this.calculateRelevanceScore(r.magnet, season, this.extractLanguage(r.magnet)),
+            relevanceScore: this.calculateRelevanceScore(displayName, season, this.extractLanguage(displayName)),
             sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),

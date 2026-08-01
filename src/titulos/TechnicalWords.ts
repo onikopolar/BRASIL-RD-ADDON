@@ -258,7 +258,8 @@ export function getPotentialSequelNumbers(title: string): number[] {
   };
   // Busca no título ORIGINAL (antes de lowercase) pra pegar maiúsculas
   // Exclui matches adjacentes a hífen (ex: "X" em "X-Men" não é romano)
-  const romanMatch = title.match(/(?<!-)\b(I{1,3}|IV|VI{0,3}|IX|XI{0,3})\b(?!-)/gi);
+  // Case-sensitive (sem /i): "x" minúsculo em títulos normalizados NÃO é romano
+  const romanMatch = title.match(/(?<!-)\b(I{1,3}|IV|VI{0,3}|IX|XI{0,3})\b(?!-)/g);
   if (romanMatch) {
     for (const r of romanMatch) {
       const num = romanMap[r.toLowerCase()];

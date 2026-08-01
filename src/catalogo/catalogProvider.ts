@@ -89,7 +89,8 @@ export class CatalogProvider {
     try {
       imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
       if (imdbTitles?.allTitles.length) {
-        searchTitle = imdbTitles.allTitles[0];
+        // Prioriza título PT (allTitles[0]=EN, allTitles[1]=PT se disponível)
+        searchTitle = imdbTitles.allTitles[imdbTitles.allTitles.length - 1] || imdbTitles.allTitles[0];
         seasonYear = imdbTitles.year || null;
         mediaType = imdbTitles.mediaType || null;
       }

@@ -254,7 +254,7 @@ export class SimilarityCalculator {
         this.logger.warn(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
       }
     } else {
-      this.logger.debug(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}"`);
+      this.logger.info(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}"`);
     }
 
     resultado.mediaType = movieInfo.mediaType;
