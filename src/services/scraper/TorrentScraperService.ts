@@ -32,8 +32,7 @@ export class TorrentScraperService {
         type: 'movie' | 'series' = 'movie',
         targetSeason?: number,
         targetYear?: number,
-        imdbId?: string,
-        skipPriority = false
+        imdbId?: string
     ): Promise<TorrentResult[]> {
         const startTime = Date.now();
         try {
@@ -130,20 +129,11 @@ export class TorrentScraperService {
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r): r is TorrentResult => r !== null);
             }).catch(() => [] as TorrentResult[]);
 
-            // SCRAPERS PRINCIPAIS: Comando/BLUDV (WP) + Starck
-            // SCRAPERS FALLBACK: HDR, TPB, RARGB, Indexer, Web
-            // skipPriority=false = so principais | skipPriority=true = so fallbacks
-            if (skipPriority) {
-                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrFactory(), indexerFactory(), webScrapersFactory(), tpbFactory(), rargbFactory()
-                ]);
-                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
-            } else {
-                const [wpResults, starckResults] = await Promise.all([
-                    wpFactory(), starckFactory()
-                ]);
-                allResults.push(...wpResults, ...starckResults);
-            }
+            // Todos os scrapers rodam em paralelo — sem fases
+            const [wpResults, starckResults, hdrResults, tpbResults, rargbResults, indexerResults, webResults] = await Promise.all([
+                wpFactory(), starckFactory(), hdrFactory(), tpbFactory(), rargbFactory(), indexerFactory(), webScrapersFactory()
+            ]);
+            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...tpbResults, ...rargbResults, ...indexerResults, ...webResults);
 
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
@@ -412,11 +402,15 @@ export class TorrentScraperService {
             confidence: 0.75
         };
     }
-    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.title || !r.magnet) return null;
         const quality = this.qualityDetector.extractQualityFromFilename(r.title);
         if (!this.qualityDetector.isValidQuality(quality)) return null;
         const season = this.extractSeasonNumber(r.title);
+        // Usa o idioma extraído diretamente do scraper HDR; fallback para extractLanguage() do título
+        const detectedLanguage = r.language
+            ? this.mapHdrLanguage(r.language)
+            : this.extractLanguage(r.title);
         return {
             title: this.cleanTitle(r.title),
             magnet: r.magnet,
@@ -425,14 +419,25 @@ export class TorrentScraperService {
             size: r.size || 'N/A',
             quality,
             provider: 'HDR Torrent',
-            language: this.extractLanguage(r.title),
+            language: detectedLanguage,
             type,
-            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            relevanceScore: this.calculateRelevanceScore(r.title, season, detectedLanguage),
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.70
         };
+    }
+
+    /** Converte label de idioma do scraper HDR para o formato interno */
+    private mapHdrLanguage(label: string): string {
+        switch (label) {
+            case 'Dual Áudio': return 'pt-BR,en';
+            case 'Dublado': return 'pt-BR';
+            case 'Legendado': return 'legendado';
+            case 'Nacional': return 'pt-BR';
+            default: return 'desconhecido';
+        }
     }
     private mapStarckResult(r: { magnet: string; infoHash: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;

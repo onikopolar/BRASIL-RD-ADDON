@@ -58,7 +58,7 @@ class TorrentScraperService {
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
     }
-    async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId, skipPriority = false) {
+    async searchTorrents(query, type = 'movie', targetSeason, targetYear, imdbId) {
         const startTime = Date.now();
         try {
             let tmdbData = null;
@@ -148,18 +148,10 @@ class TorrentScraperService {
                 });
                 return merged.map(r => this.mapHdrResult(r, type)).filter((r) => r !== null);
             }).catch(() => []);
-            if (skipPriority) {
-                const [hdrResults, indexerResults, webResults, tpbResults, rargbResults] = await Promise.all([
-                    hdrFactory(), indexerFactory(), webScrapersFactory(), tpbFactory(), rargbFactory()
-                ]);
-                allResults.push(...hdrResults, ...indexerResults, ...webResults, ...rargbResults, ...tpbResults);
-            }
-            else {
-                const [wpResults, starckResults] = await Promise.all([
-                    wpFactory(), starckFactory()
-                ]);
-                allResults.push(...wpResults, ...starckResults);
-            }
+            const [wpResults, starckResults, hdrResults, tpbResults, rargbResults, indexerResults, webResults] = await Promise.all([
+                wpFactory(), starckFactory(), hdrFactory(), tpbFactory(), rargbFactory(), indexerFactory(), webScrapersFactory()
+            ]);
+            allResults.push(...wpResults, ...starckResults, ...hdrResults, ...tpbResults, ...rargbResults, ...indexerResults, ...webResults);
             const filteredResults = this.filterResultsBySeason(allResults, targetSeason, type);
             const uniqueResults = this.removeDuplicateResults(filteredResults);
             const duration = Date.now() - startTime;
@@ -422,6 +414,9 @@ class TorrentScraperService {
         if (!this.qualityDetector.isValidQuality(quality))
             return null;
         const season = this.extractSeasonNumber(r.title);
+        const detectedLanguage = r.language
+            ? this.mapHdrLanguage(r.language)
+            : this.extractLanguage(r.title);
         return {
             title: this.cleanTitle(r.title),
             magnet: r.magnet,
@@ -430,14 +425,23 @@ class TorrentScraperService {
             size: r.size || 'N/A',
             quality,
             provider: 'HDR Torrent',
-            language: this.extractLanguage(r.title),
+            language: detectedLanguage,
             type,
-            relevanceScore: this.calculateRelevanceScore(r.title, season, this.extractLanguage(r.title)),
+            relevanceScore: this.calculateRelevanceScore(r.title, season, detectedLanguage),
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.70
         };
+    }
+    mapHdrLanguage(label) {
+        switch (label) {
+            case 'Dual Áudio': return 'pt-BR,en';
+            case 'Dublado': return 'pt-BR';
+            case 'Legendado': return 'legendado';
+            case 'Nacional': return 'pt-BR';
+            default: return 'desconhecido';
+        }
     }
     mapStarckResult(r, type) {
         if (!r.magnet)

@@ -266,13 +266,9 @@ export class RescrapeService {
       searchQuery, type as 'movie' | 'series', undefined, undefined, imdbId
     );
 
-    const resultsFallback = await this.torrentScraper.searchTorrents(
-      searchQuery, type as 'movie' | 'series', undefined, undefined, imdbId, true
-    );
-
     // Merge e deduplica
     const seen = new Set<string>();
-    const allResults = [...resultsPriority, ...resultsFallback].filter(r => {
+    const allResults = [...resultsPriority].filter(r => {
       if (seen.has(r.magnet)) return false;
       seen.add(r.magnet);
       return true;

@@ -213,8 +213,6 @@ export const INDICADORES_BRASIL_TORRENTS = [
   'dublado', 'dublada', 'dublagem',
   // Dual audio
   'dual', 'dual audio',
-  // Legendas
-  'legendado', 'legendada', 'legenda',
   // Nacional
   'nacional',
   // PT-BR codes
@@ -233,6 +231,8 @@ export const INDICADORES_BRASIL_TORRENTS = [
 export const INDICADORES_INTERNACIONAL_TORRENTS = [
   // VO / OV (version original)
   'vo', 'ov',
+  // Legendas (legendado = nao-dublado, tratar como internacional)
+  'legendado', 'legendada', 'legenda',
   // Abreviacoes comuns de fansub
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
   'turg', 'Turg','TURG','fitgirl', 'FitGirl', 'Repack', 'repack',

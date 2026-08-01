@@ -19,6 +19,7 @@ export interface HdrTorrent {
   infoHash: string;
   seeders: number;
   size: string;
+  language: string;
 }
 
 // ── Config do axios ───────────────────────────────────────────────────
@@ -77,6 +78,15 @@ async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
 //  PASSO 2: Extrai magnets de uma página de post
 // ═══════════════════════════════════════════════════════════════════════
 
+function extractLanguage(parentText: string): string {
+  const t = parentText.toLowerCase();
+  if (t.includes('dual') && /áudio|audio/.test(t)) return 'Dual Áudio';
+  if (/dublado|dublada|dublagem/.test(t)) return 'Dublado';
+  if (/legendado|legendada/.test(t)) return 'Legendado';
+  if (/nacional/.test(t)) return 'Nacional';
+  return '';
+}
+
 function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
@@ -91,17 +101,25 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
     const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
     if (!btihMatch) return;
 
-    // Tenta extrair informações de qualidade do texto próximo
+    // Tenta extrair informações do texto próximo ao magnet
     const parentText = $(el).parent().text().trim();
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
     const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+    const language = extractLanguage(parentText);
+
+    // Monta título descritivo: "Nome do Filme [Idioma] [Qualidade]"
+    const parts = [pageTitle];
+    if (language) parts.push(`[${language}]`);
+    if (qualityMatch) parts.push(qualityMatch[0]);
+    const descriptiveTitle = parts.join(' ');
 
     results.push({
-      title: pageTitle,
+      title: descriptiveTitle,
       magnet: href,
       infoHash: btihMatch[1].toLowerCase(),
       seeders: 0,
       size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
+      language,
     });
   });
 
