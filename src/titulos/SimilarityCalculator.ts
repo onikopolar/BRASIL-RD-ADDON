@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { getPotentialSequelNumbers, extrairRangeEpisodios, normalizarTituloTorrent, isTechnicalWord } from './TechnicalWords.js';
+import { getPotentialSequelNumbers, extrairRangeEpisodios, normalizarTituloTorrent, isTechnicalWord, registerStripCandidate } from './TechnicalWords.js';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
@@ -241,7 +241,17 @@ export class SimilarityCalculator {
     // Log compacto: 1 linha com status das 7 condicoes
     const statusCondicoes = `A:${condicaoA.passou?'OK':'X'} B:${condicaoB.passou?'OK':'X'} C:${condicaoC.passou?'OK':'X'} D:${condicaoD.passou?'OK':'X'} E:${condicaoE.passou?'OK':'X'} F:${condicaoF.passou?'OK':'X'} G:${condicaoG.passou?'OK':'X'}`;
     if (!todasPassaram) {
-      this.logger.debug(`REJEITADO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}" | ${partesMotivo.filter(p => p.includes('Faltam') || p.includes('insuficientes') || p.includes('divergente') || p.includes('sequencia')).join('; ')}`);
+      // Mostra TODOS os motivos de rejeição (antes filtrava só alguns)
+      const motivo = partesMotivo.join(' | ');
+      
+      // Detecta "F-only rejection": todas OK menos F → candidato a normalização
+      const fOnly = !condicaoF.passou && condicaoA.passou && condicaoB.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
+      
+      if (fOnly) {
+        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] — candidato a normalização: "${tituloTorrent.substring(0, 80)}" | ${motivo}`);
+      } else {
+        this.logger.debug(`REJEITADO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
+      }
     } else {
       this.logger.debug(`ACEITO [${statusCondicoes}] | "${tituloTorrent.substring(0, 70)}"`);
     }
@@ -456,6 +466,8 @@ export class SimilarityCalculator {
     for (const w of extras) {
       if (!tmdbLengths.has(w.length)) {
         anomalas.push(w);
+        // Auto-learner: registra palavra pra possível auto-inclusão no strip
+        registerStripCandidate(w);
       } else {
         // Comprimento bate com TMDB — verifica conjunto de caracteres
         const tmdbSameLen = palavrasTmdb.filter(t => t.length === w.length);
@@ -469,6 +481,8 @@ export class SimilarityCalculator {
         }
         if (!similar) {
           anomalas.push(w + '≠' + tmdbSameLen.join('|'));
+          // Palavra com mesmo comprimento mas Jaccard baixo — também suspeita
+          registerStripCandidate(w);
         }
       }
     }

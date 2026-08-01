@@ -631,6 +631,10 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'site', 'visite', 'www',
   // Metadados soltos
   'movie', 'film', 'series', 'vol', 'volume', 'extended',
+  // PT: versões estendidas
+  'estendido', 'estendida', 'versao', 'versão',
+  // Domínios/spam nos DNs de magnet
+  'sitedetorrents', 'hidratorrents',
   // Entidades HTML numéricas que escapam da normalização
   '8211', '8230', '038',
   // Lançamentos multi (ex: "S01E01-02-03")
@@ -644,6 +648,7 @@ const TECHNICAL_STRIP_REGEX = [
   /\b[hx]\d{3}\b/gi,            // x264, h265
   /\b\d+\.\d+(?:ch)?\b/gi,      // 5.1, 2.0ch
   /\b(?:19|20)\d{2}\b/g,        // anos (deixa pra validarAno)
+  /\b\d{3,4}x\d{3,4}\b/gi,      // resolução WxH (1280x544, 1920x1080)
 ];
 
 /**
@@ -670,4 +675,127 @@ export function normalizarTituloTorrent(title: string): string {
   }
 
   return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  STRIP AUTO-LEARNER — auto-adiciona palavras ao TECHNICAL_STRIP_WORDS
+//  com verificação reversa no TMDB (se a palavra existe em algum título
+//  real, ela NÃO é termo técnico — é palavra legítima).
+// ═══════════════════════════════════════════════════════════════════════
+
+const AUTO_LEARN_THRESHOLD = 3;       // mínimo de IMDBs diferentes
+const TMDB_API_KEY = typeof process !== 'undefined' ? (process.env as any)?.TMDB_API_KEY : undefined;
+
+const learnerCounts = new Map<string, { count: number; imdbIds: Set<string> }>();
+/** Palavras já verificadas no TMDB como legítimas — nunca serão strip */
+const tmdbVerifiedWords = new Set<string>();
+
+let axiosModule: any = null;
+async function getAxios() {
+  if (!axiosModule) {
+    axiosModule = await import('axios');
+  }
+  return axiosModule.default || axiosModule;
+}
+
+/**
+ * Verifica se uma palavra existe em QUALQUER título do TMDB.
+ * Se existir, é palavra legítima (ex: "korra"), não termo técnico.
+ */
+async function tmdbReverseLookup(word: string): Promise<boolean> {
+  if (!TMDB_API_KEY) {
+    // Sem API key, confia no threshold de IMDBs como fallback
+    return false;
+  }
+  
+  try {
+    const axios = await getAxios();
+    const resp = await axios.get('https://api.themoviedb.org/3/search/multi', {
+      params: {
+        api_key: TMDB_API_KEY,
+        query: word,
+        language: 'pt-BR',
+        page: 1,
+      },
+      timeout: 5000,
+    });
+    
+    const total = resp.data?.total_results || 0;
+    return total > 0;
+  } catch {
+    // Erro na API → assume que NÃO existe (conservador)
+    return false;
+  }
+}
+
+/**
+ * Registra uma palavra anômala detectada em rejeição Condition F.
+ * 
+ * Fluxo:
+ * 1. Acumula ocorrências por IMDB
+ * 2. Ao atingir threshold → verifica TMDB reverso
+ * 3. Se TMDB tem ≥1 resultado → palavra é legítima, NUNCA strip
+ * 4. Se TMDB tem 0 resultados → termo técnico, AUTO-ADICIONA ao strip
+ * 
+ * @param word Palavra anômala (lowercase)
+ * @param imdbId IMDB do torrent onde foi detectada
+ * @returns true se a palavra foi auto-adicionada agora
+ */
+export function registerStripCandidate(word: string, imdbId?: string): boolean {
+  const key = word.toLowerCase();
+  
+  // Já verificado pelo TMDB como palavra real → ignora
+  if (tmdbVerifiedWords.has(key)) return false;
+  
+  if (!learnerCounts.has(key)) {
+    learnerCounts.set(key, { count: 0, imdbIds: new Set() });
+  }
+  
+  const entry = learnerCounts.get(key)!;
+  entry.count++;
+  if (imdbId) entry.imdbIds.add(imdbId);
+  
+  // Threshold: ≥N IMDBs diferentes
+  if (entry.imdbIds.size >= AUTO_LEARN_THRESHOLD && !TECHNICAL_STRIP_WORDS.has(key)) {
+    // Dispara verificação TMDB assíncrona (fire-and-forget)
+    tmdbReverseLookup(key).then(existsInTmdb => {
+      if (existsInTmdb) {
+        // Palavra existe no TMDB → é legítima, NUNCA strip
+        tmdbVerifiedWords.add(key);
+        console.log(`[StripAutoLearner] 🔒 "${key}" existe no TMDB — NÃO é termo técnico, bloqueado permanentemente`);
+      } else {
+        // Palavra NÃO existe no TMDB → é termo técnico
+        TECHNICAL_STRIP_WORDS.add(key);
+        console.log(`[StripAutoLearner] ✅ "${key}" auto-adicionado ao TECHNICAL_STRIP_WORDS (${entry.count}x em ${entry.imdbIds.size} IMDBs, 0 resultados TMDB)`);
+      }
+    }).catch(() => {
+      // Erro na verificação → adiciona mesmo assim (conservador: melhor strip a mais que a menos)
+      TECHNICAL_STRIP_WORDS.add(key);
+      console.log(`[StripAutoLearner] ⚠️ "${key}" auto-adicionado (fallback — erro na verificação TMDB)`);
+    });
+    
+    return true; // vai ser processado async
+  }
+  
+  return false;
+}
+
+/**
+ * Retorna estatísticas do auto-learner.
+ */
+export function getStripLearnerStats() {
+  const candidates = [...learnerCounts.entries()]
+    .filter(([, v]) => v.imdbIds.size >= 2)
+    .sort(([, a], [, b]) => b.imdbIds.size - a.imdbIds.size);
+  
+  return {
+    totalTracked: learnerCounts.size,
+    autoLearned: [...TECHNICAL_STRIP_WORDS].filter(w => learnerCounts.has(w)).length,
+    tmdbBlocked: tmdbVerifiedWords.size,
+    pending: candidates.filter(([w]) => !TECHNICAL_STRIP_WORDS.has(w) && !tmdbVerifiedWords.has(w)).map(([w, v]) => ({
+      word: w,
+      occurrences: v.count,
+      uniqueImdbs: v.imdbIds.size,
+    })),
+  };
 }

@@ -22,6 +22,7 @@ const clientInfo_js_1 = require("./middlewares/clientInfo.js");
 const rateLimit_js_1 = require("./middlewares/rateLimit.js");
 const MetricsService_js_1 = require("./catalogo/MetricsService.js");
 const ultraDebug_js_1 = require("./middlewares/ultraDebug.js");
+const RescrapeService_js_1 = require("./services/RescrapeService.js");
 const logger = new logger_js_1.Logger('Main');
 const cacheService = new CacheService_js_1.CacheService();
 const app = (0, express_1.default)();
@@ -274,6 +275,7 @@ async function startServer() {
         app.use(stremioRouter);
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_js_1.createServer)(app, port);
+        RescrapeService_js_1.RescrapeService.getInstance().start();
     }
     catch (error) {
         logger.error('Falha na inicializacao do servidor', {

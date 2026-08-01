@@ -18,6 +18,7 @@ import { clientInfoMiddleware } from './middlewares/clientInfo.js';
 import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit.js';
 import { metricsService } from './catalogo/MetricsService.js';
 import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug.js';
+import { RescrapeService } from './services/RescrapeService.js';
 
 const logger = new Logger('Main');
 const cacheService = new CacheService();
@@ -306,6 +307,9 @@ async function startServer() {
 
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
+
+        // Inicia o serviço de re-scraping periódico (CAMRip → releases melhores)
+        RescrapeService.getInstance().start();
     } catch (error) {
         logger.error('Falha na inicializacao do servidor', {
             error: error instanceof Error ? error.message : 'Erro desconhecido'

@@ -8,6 +8,7 @@ import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
 import { LanguageDetector } from '../titulos/LanguageDetector.js';
+import { RescrapeService } from '../services/RescrapeService.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -480,6 +481,9 @@ export class AutoMagnetService {
       if (!existingTorrent) {
         // Extrai range de episódios do título (ex: S02E01-03 → start=1, end=3)
         const episodeRange = extrairRangeEpisodios(magnetData.title);
+
+        // Calcula rescrapeAt baseado no TÍTULO (dn do magnet — fonte canônica)
+        const rescrapeAt = RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality);
         
         await createTorrent({
           infoHash: magnetHash,
@@ -495,7 +499,8 @@ export class AutoMagnetService {
           idioma: magnetData.language,
           qualidade: magnetData.quality,
           uploadDate: new Date(),
-          lastSeen: new Date()
+          lastSeen: new Date(),
+          rescrapeAt: rescrapeAt
         });
       }
 

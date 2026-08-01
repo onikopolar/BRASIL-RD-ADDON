@@ -64,7 +64,8 @@ Torrent.init({
     idioma: { type: sequelize_1.DataTypes.STRING(50) },
     qualidade: { type: sequelize_1.DataTypes.STRING(10) },
     uploadDate: { type: sequelize_1.DataTypes.DATE },
-    lastSeen: { type: sequelize_1.DataTypes.DATE }
+    lastSeen: { type: sequelize_1.DataTypes.DATE },
+    rescrapeAt: { type: sequelize_1.DataTypes.DATE, allowNull: true, defaultValue: null }
 }, {
     sequelize,
     modelName: 'Torrent',

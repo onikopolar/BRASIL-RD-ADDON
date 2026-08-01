@@ -70,6 +70,7 @@ interface TorrentAttributes {
   qualidade?: string;
   uploadDate: Date;
   lastSeen: Date;
+  rescrapeAt?: Date | null;
 }
 
 class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
@@ -87,6 +88,7 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public qualidade?: string;
   public uploadDate!: Date;
   public lastSeen!: Date;
+  public rescrapeAt?: Date | null;
 }
 
 Torrent.init(
@@ -104,7 +106,8 @@ Torrent.init(
     idioma:     { type: DataTypes.STRING(50) },
     qualidade:  { type: DataTypes.STRING(10) },
     uploadDate: { type: DataTypes.DATE },
-    lastSeen:   { type: DataTypes.DATE }
+    lastSeen:   { type: DataTypes.DATE },
+    rescrapeAt: { type: DataTypes.DATE, allowNull: true, defaultValue: null }
   },
   {
     sequelize,
