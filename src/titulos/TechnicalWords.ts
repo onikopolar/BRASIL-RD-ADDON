@@ -54,7 +54,7 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes',
   'lapumia', 'comoeubaixo', 'bludv', 'BLUDV', 'WWW.BLUDV.COM',
-  'luanharper','SiGLA', 'SF', 'WEB-DL', 'web-dl'
+  'luanharper','SiGLA', 'SF', 'WEB-DL', 'web-dl', 'AZTORRENTS'
 ];
 
 // Função auxiliar para verificar se uma palavra é técnica
@@ -101,7 +101,7 @@ export const INDICADORES_BRASIL_TORRENTS = [
   // Abreviacoes comuns em releases (ex: ITA.POR.SUBS)
   'por', 'pb',
   // Marcadores de temporada (PT-BR)
-  'temporada', 'completa', 'completo',
+  'temporada', 'completa', 'completo', 'AZTORRENTS',
 ];
 
 /** Palavras que indicam que um torrent eh internacional / nao-PT-BR */
@@ -521,7 +521,7 @@ const TECHNICAL_STRIP_WORDS = new Set([
   'versão', 'visite', 'vob', 'vol', 'volume', 'vp9',
   'web', 'web-dl', 'webm', 'webrip', 'wmv', 'www',
   'www', 'www.', 'x264', 'x265', 'xebec', 'xvid',
-  'xyz', 'yify', 'yts', 'áudio'
+  'xyz', 'yify', 'yts', 'áudio', 'AZTORRENTS',
 ]);
 
 // Regex de qualidade/codec (padrões que não são palavras isoladas)

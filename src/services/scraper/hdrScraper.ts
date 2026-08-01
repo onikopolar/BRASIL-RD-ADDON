@@ -67,7 +67,7 @@ async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
       results.push({ title: text, postUrl: fullUrl });
     });
 
-    return results.slice(0, 20);
+    return results.slice(0, 40);
   } catch (err: any) {
     logger.warn('HDR busca falhou', { query: query.substring(0, 50), error: err.message });
     return [];
@@ -105,7 +105,9 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
     const parentText = $(el).parent().text().trim();
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
     const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    const language = extractLanguage(parentText);
+    // Idioma: primeiro do texto local, fallback para o título da página
+    let language = extractLanguage(parentText);
+    if (!language) language = extractLanguage(pageTitle);
 
     // Monta título descritivo: "Nome do Filme [Idioma] [Qualidade]"
     const parts = [pageTitle];

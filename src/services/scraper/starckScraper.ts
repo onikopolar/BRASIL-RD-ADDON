@@ -62,7 +62,7 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
       });
     });
 
-    return results.slice(0, 20);
+    return results.slice(0, 40);
   } catch (err: any) {
     logger.warn('Starck busca falhou', { query: query.substring(0, 50), error: err.message });
     return [];

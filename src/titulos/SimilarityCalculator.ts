@@ -197,7 +197,7 @@ export class SimilarityCalculator {
     const condicaoA = this.validarPalavrasMinimas(melhor);
     const condicaoB = this.validarTituloCompleto(melhor);
     const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent, temIndicadorPt);
-    const condicaoD = this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent);
+    const condicaoD = this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent, tipoMidia);
     const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
     // F: Pula se é série (SxxExx) — episódios têm subtítulos legítimos (ex: "Celebs")
     const temEp = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
@@ -343,12 +343,16 @@ export class SimilarityCalculator {
   }
 
   /** D: Nenhum número de sequência fora do esperado pelo TMDB.
-   *    Ignora números em contexto de episódio/temporada. */
+   *    Ignora números em contexto de episódio/temporada. Pula para séries (tv). */
   private validarSequencia(
     tituloTorrent: string,
     titulosValidos: string[],
-    anoTorrent: number | null
+    anoTorrent: number | null,
+    tipoMidia?: 'movie' | 'tv'
   ): { passou: boolean; motivo: string } {
+    // Séries têm números de temporada legítimos — não são "sequências"
+    if (tipoMidia === 'tv') return { passou: true, motivo: '' };
+    
     // Se título menciona episódio/temporada, números são de episódio, não sequência
     const temContextoEp = /\b(?:episodio|episódio|temporada|season|episode|temp)\b/i.test(tituloTorrent);
     if (temContextoEp) return { passou: true, motivo: '' };

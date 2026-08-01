@@ -201,7 +201,8 @@ export class EpisodeMatcher {
       /(\d+)\s*ª?\s*temporada/i,     // "2ª temporada", "2 temporada"
       /season\s*(\d+)/i,
       /s(\d+)/i,
-      /(\d+)\s*ª?\s*temp/i
+      /(\d+)\s*ª?\s*temp/i,
+      /[a-z]{2,}\.(\d{1,2})(?:\s|-|$)/i, // "who.4", "Who.8 -" (não "5.1", "2005")
     ];
 
     for (const pattern of patterns) {

@@ -79,14 +79,16 @@ export class TitleFilter {
 
         // 2. Valida episódio (se aplicável)
         if (episodioAlvo !== undefined) {
-          const compat = this.episodeMatcher.episodioEhCompativel(
-            tituloTorrent, metadados.episode, episodioAlvo, temporadaAlvo
-          );
-          if (!compat.compativel) {
-            // this.logger.warn('Episódio incompatível', {
-            //   tituloTorrent: tituloTorrent.substring(0, 60), episodioAlvo, motivo: compat.motivo
-            // });
-            return { matches: false, similarity: 0, torrentMetadata: metadados, reason: compat.motivo };
+          // Se tem temporada detectada mas não tem episódio → provável pack de temporada
+          if (metadados.season && metadados.episode === undefined && !metadados.isCompleteSeason) {
+            // Deixa passar — SimilarityCalculator decide se é compatível
+          } else {
+            const compat = this.episodeMatcher.episodioEhCompativel(
+              tituloTorrent, metadados.episode, episodioAlvo, temporadaAlvo
+            );
+            if (!compat.compativel) {
+              return { matches: false, similarity: 0, torrentMetadata: metadados, reason: compat.motivo };
+            }
           }
         }
       }
