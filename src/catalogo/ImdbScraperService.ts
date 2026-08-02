@@ -192,6 +192,16 @@ export class ImdbScraperService {
         }
       }
 
+      // OMDB → título em inglês para complementar (ex: "Cidade de Deus" → "City of God")
+      let englishTitle = '';
+      try {
+        const omdbUrl = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
+        const omdbResp = await axios.get(omdbUrl, { timeout: 5000 });
+        if (omdbResp.data?.Response === 'True' && omdbResp.data?.Title) {
+          englishTitle = omdbResp.data.Title;
+        }
+      } catch { /* OMDB offline, sem problema */ }
+
       if (!originalTitle) {
         logger.warn('TMDB: sem título', { imdbId });
         return this.createEmptyResult(imdbId);
@@ -210,6 +220,14 @@ export class ImdbScraperService {
         allTitles.push(normalizedOriginal);
       } else {
         allTitles.push(normalizedOriginal);
+      }
+      
+      // Adiciona título em inglês se diferente (ex: "City of God" para "Cidade de Deus")
+      if (englishTitle) {
+        const normalizedEn = this.normalizeTitle(englishTitle);
+        if (normalizedEn && normalizedEn !== normalizedOriginal && normalizedEn !== normalizedPortuguese) {
+          allTitles.push(normalizedEn);
+        }
       }
 
       const uniqueTitles = Array.from(new Set(allTitles.filter(title => title.trim().length > 0)));

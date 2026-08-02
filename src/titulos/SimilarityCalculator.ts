@@ -2,7 +2,29 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { getPotentialSequelNumbers, extrairRangeEpisodios, normalizarTituloTorrent, isTechnicalWord, registerStripCandidate } from './TechnicalWords.js';
+import { getPotentialSequelNumbers, extrairRangeEpisodios, isTechnicalWord, TECHNICAL_STRIP_WORDS, isCollectionTitle } from './TechnicalWords.js';
+import fs from 'fs';
+import path from 'path';
+
+// Cache: palavra → existe em algum título no TMDB?
+const omdbWordCache = new Map<string, boolean>();
+const STRIP_WORDS_PATH = path.resolve(process.cwd(), 'data', 'strip-words.txt');
+
+// Fila global de background: processa 1 palavra por vez, sem duplicatas
+const stripQueue: Set<string> = new Set();
+let stripQueueRunning = false;
+
+/** Detecta tokens que são lixo de magnet/tracker — nunca devem virar strip */
+function isJunkToken(token: string): boolean {
+  // Hashes hex (SHA1=40, MD5=32, SHA256=64 — comprimentos comuns em magnets)
+  if (/^[0-9a-f]{32}$/i.test(token)) return true;
+  if (/^[0-9a-f]{40}$/i.test(token)) return true;
+  if (/^[0-9a-f]{64}$/i.test(token)) return true;
+  // Trackers e parâmetros URL que escapam dos scrapers
+  if (/^(?:udp|http|https|wss):\/\//i.test(token)) return true;
+  if (/^[?&]/.test(token)) return true; // parâmetros URL soltos
+  return false;
+}
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
@@ -72,8 +94,16 @@ export class SimilarityCalculator {
 
     const torqueYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
 
+    // ═══ EARLY REJECT: Idioma internacional explícito (ANTES do matching pesado) ═══
+    // Delega 100% ao LanguageDetector — ele já classifica via INDICADORES_INTERNACIONAL_TORRENTS
+    // Rejeita se há indicadores internacionais (hindi, english, turg, legendado...) SEM nenhum PT
+    const idiomaPre = this.languageDetector.verificarIdioma(torrentTitle);
+    if (idiomaPre.palavrasEn.length > 0 && idiomaPre.palavrasPt.length === 0) {
+      return { matches: false, similarity: 0, reason: `Idioma internacional: ${idiomaPre.motivo}` };
+    }
+
     // Compara palavras do torrent contra cada titulo TMDB e decide com regras unificadas
-    const resultado = this.compararTitulos(
+    const resultado = await this.compararTitulos(
       torrentTitle,
       movieInfo,
       torqueYear,
@@ -85,94 +115,132 @@ export class SimilarityCalculator {
   }
 
   /** Compara palavras do torrent contra cada titulo TMDB e escolhe o melhor match */
-  private compararTitulos(
+  private async compararTitulos(
     tituloTorrent: string,
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
     anoTorrent: number | null,
     temporadaAlvo?: number
-  ): SmartTitleMatch {
+  ): Promise<SmartTitleMatch> {
     const titulosValidos = movieInfo.allTitles.filter(t => t && t.trim().length > 0);
     if (titulosValidos.length === 0) {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
-    // Quebra titulo do torrent em palavras (sem numeros soltos, sem SxxExx)
-    const palavrasTorrent = this.normalizarParaComparacao(tituloTorrent)
-      .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w) && !/^s\d{1,2}e\d{1,3}$/i.test(w));
+    // Normalizacao leve: lowercase + split, sem filtro de palavras tecnicas
+    const tokenizar = (txt: string) => txt.toLowerCase()
+      .replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim()
+      .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
 
-    // Titulo vazio depois da normalizacao = lixo (ex: "Download" stripado)
+    const palavrasTorrent = tokenizar(tituloTorrent);
     if (palavrasTorrent.length === 0) {
-      return { matches: false, similarity: 0, reason: 'Título vazio após normalização' };
+      return { matches: false, similarity: 0, reason: 'Título vazio' };
     }
 
-    const setTorrent = new Set(palavrasTorrent);
-
-    // Compara contra cada titulo TMDB (PT e EN) e escolhe o melhor
     interface ScoreTitulo {
-      titulo: string;
-      palavrasTmdb: string[];
-      encontradas: number;
-      faltando: string[];
-      totalTmdb: number;
-      tmdbCompleto: boolean;
-      proporcao: number;
+      titulo: string; palavrasTmdb: string[]; encontradas: number;
+      faltando: string[]; totalTmdb: number; proporcao: number;
+      extrasTorrent: number; // palavras do torrent sem match no TMDB
     }
 
     let melhor: ScoreTitulo = {
-      titulo: '',
-      palavrasTmdb: [],
-      encontradas: 0,
-      faltando: [],
-      totalTmdb: 0,
-      tmdbCompleto: false,
-      proporcao: 0,
+      titulo: '', palavrasTmdb: [], encontradas: 0, faltando: [], totalTmdb: 0, proporcao: 0,
+      extrasTorrent: 0,
     };
 
-    let t = 0;
-    while (t < titulosValidos.length) {
-      const palavrasTitulo = this.normalizarParaComparacao(titulosValidos[t])
-        .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
+    for (let t = 0; t < titulosValidos.length; t++) {
+      const palavrasTitulo = tokenizar(titulosValidos[t]);
 
-      const setTitulo = new Set(palavrasTitulo);
-      let enc = 0;
-      const falt: string[] = [];
-      for (const palavra of palavrasTitulo) {
-        if (setTorrent.has(palavra)) { enc++; }
-        else { falt.push(palavra); }
-      }
-
-      const total = setTitulo.size;
-
-      const score: ScoreTitulo = {
-        titulo: titulosValidos[t],
-        palavrasTmdb: palavrasTitulo,
-        encontradas: enc,
-        faltando: falt,
-        totalTmdb: total,
-        tmdbCompleto: falt.length === 0,
-        proporcao: total > 0 ? enc / total : 0,
+      // Helper: duas palavras são "parecidas"? Match exato OU LCS cobre ≥75% da menor (mín 3 chars)
+      const palavrasParecidas = (a: string, b: string): boolean => {
+        if (a === b) return true;
+        if (a.length < 3 || b.length < 3) return false; // stopwords não fazem fuzzy
+        const lcs = this.calcularLCS(a, b);
+        const minLen = Math.min(a.length, b.length);
+        return lcs >= 3 && lcs / minLen >= 0.75; // ex: lemda↔lenda (4/5=0.80), mas carro↔park (2/4=0.50)
       };
 
-      // Criterio: mais palavras TMDB encontradas
-      if (t === 0 || score.encontradas > melhor.encontradas) {
-        melhor = score;
+      // ── TMDB → Torrent ──
+      let enc = 0;
+      const falt: string[] = [];
+      for (const palavraTmdb of palavrasTitulo) {
+        const match = palavrasTorrent.some(p => palavrasParecidas(palavraTmdb, p));
+        if (match) {
+          enc += 1;
+        } else {
+          falt.push(palavraTmdb);
+        }
       }
 
-      t++;
+      // ── Torrent → TMDB ──
+      let extras = 0;
+      const pendingStripCheck: string[] = [];
+      for (const palavraTorrent of palavrasTorrent) {
+        if (isTechnicalWord(palavraTorrent)) continue;
+        if (palavrasTitulo.some(p => palavrasParecidas(palavraTorrent, p))) continue;
+        if (palavraTorrent.length <= 2) { extras++; continue; }
+        // Episódio/temporada (S06E05, 2x04...) → ignora
+        if (extrairRangeEpisodios(palavraTorrent) !== null) continue;
+        // Lixo de magnet link: hashes (32/40/64 hex), trackers, parâmetros URL
+        if (isJunkToken(palavraTorrent)) continue;
+        // Cache hit? Decide na hora. Senão, conta como extra e verifica depois.
+        if (omdbWordCache.has(palavraTorrent)) {
+          if (!omdbWordCache.get(palavraTorrent)) {
+            this.autoAprenderStripWord(palavraTorrent);
+          }
+        } else {
+          pendingStripCheck.push(palavraTorrent);
+        }
+        extras++;
+      }
+
+      // Dispara verificação em background (não bloqueia a resposta)
+      if (pendingStripCheck.length > 0) {
+        this.enfileirarStripWords(pendingStripCheck);
+      }
+
+      // Score bidirecional
+      const totalTorrent = palavrasTorrent.filter(w => !isTechnicalWord(w)).length || 1;
+      const proporcao = (enc + (totalTorrent - extras)) / (palavrasTitulo.length + totalTorrent);
+
+      this.logger.debug(`Match "${titulosValidos[t]}" → torrent`, {
+        tmdb: palavrasTitulo.join(' '),
+        torrent: palavrasTorrent.join(' '),
+        tmdbWords: palavrasTitulo.length,
+        torrentWords: totalTorrent,
+        scoreTMDBtoTorrent: enc.toFixed(1),
+        faltando: falt.join(','),
+        extrasTorrent: extras,
+        proporcao: (proporcao * 100).toFixed(0) + '%',
+      });
+
+      const score: ScoreTitulo = {
+        titulo: titulosValidos[t], palavrasTmdb: palavrasTitulo,
+        encontradas: enc, faltando: falt, totalTmdb: palavrasTitulo.length,
+        proporcao, extrasTorrent: extras,
+      };
+
+      if (t === 0 || score.proporcao > melhor.proporcao) {
+        melhor = score;
+      }
     }
 
-    // Decide se aceita ou rejeita usando as 3 condicoes unificadas (A && B && C)
-    const resultado = this.decidirMatch(
-      tituloTorrent,
-      movieInfo,
-      melhor,
-      palavrasTorrent,
-      titulosValidos,
-      anoTorrent,
-      temporadaAlvo
+    return this.decidirMatch(
+      tituloTorrent, movieInfo, melhor, palavrasTorrent, titulosValidos, anoTorrent, temporadaAlvo
     );
+  }
 
-    return resultado;
+  /** Longest Common Subsequence entre 2 strings */
+  private calcularLCS(a: string, b: string): number {
+    const m = a.length, n = b.length;
+    let prev = new Array(n + 1).fill(0);
+    for (let i = 1; i <= m; i++) {
+      const curr = new Array(n + 1).fill(0);
+      for (let j = 1; j <= n; j++) {
+        curr[j] = a[i - 1] === b[j - 1] ? prev[j - 1] + 1 : Math.max(prev[j], curr[j - 1]);
+      }
+      prev = curr;
+    }
+    return prev[n];
   }
 
 
@@ -180,7 +248,7 @@ export class SimilarityCalculator {
   private decidirMatch(
     tituloTorrent: string,
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
-    melhor: { titulo: string; palavrasTmdb: string[]; encontradas: number; faltando: string[]; totalTmdb: number; tmdbCompleto: boolean; proporcao: number },
+    melhor: { titulo: string; palavrasTmdb: string[]; encontradas: number; faltando: string[]; totalTmdb: number; proporcao: number },
     palavrasTorrent: string[],
     titulosValidos: string[],
     anoTorrent: number | null,
@@ -188,34 +256,20 @@ export class SimilarityCalculator {
   ): SmartTitleMatch {
     const anoTmdb = movieInfo.year;
     const tipoMidia = movieInfo.mediaType || 'movie';
-    const temTemporada = !!(temporadaAlvo && this.temTemporadaExplicita(tituloTorrent, temporadaAlvo));
-    const temIndicadorPt = this.languageDetector.isPortugueseContent(tituloTorrent);
 
-    // Filme tolera 1 ano de diferenca, serie tolera 3
-    const toleranciaAno = tipoMidia === 'tv' ? 15 : 1;
+    // Coletânea: relaxa ano (pode cobrir 2003-2011) e ignora número de sequência
+    const isColecao = isCollectionTitle(tituloTorrent);
+    const toleranciaAno = isColecao ? 10 : (tipoMidia === 'tv' ? 15 : 1);
 
-    const condicaoA = this.validarPalavrasMinimas(melhor);
+    const condicaoA = this.validarPalavrasMinimas(melhor, anoTorrent, anoTmdb, tituloTorrent);
     const condicaoB = this.validarTituloCompleto(melhor);
-    const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent, temIndicadorPt);
-    const condicaoD = this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent, tipoMidia);
+    const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent);
+    // Coletânea: "4 Filmes" não é sequência do filme 4
+    const condicaoD = isColecao ? { passou: true, motivo: 'Coletânea: sequência ignorada' } : this.validarSequencia(tituloTorrent, titulosValidos, anoTorrent, tipoMidia);
     const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
-    // F: Pula se é série (SxxExx) — episódios têm subtítulos legítimos (ex: "Celebs")
-    const temEp = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
-    // Usa TODAS as palavras de todos os títulos TMDB (não só do melhor match)
-    // Ex: PT tem "star wars", EN não — sem isso F rejeita "Star Wars" do torrent
-    const todasPalavrasTmdb = new Set<string>();
-    for (const titulo of titulosValidos) {
-      for (const palavra of this.normalizarParaComparacao(titulo).split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w))) {
-        todasPalavrasTmdb.add(palavra);
-      }
-    }
-    const condicaoF = temEp
-      ? { passou: true, motivo: '' }
-      : this.validarComprimentoPalavras(palavrasTorrent, [...todasPalavrasTmdb]);
-    const condicaoG = this.validarSequenciaNumero(tituloTorrent, palavrasTorrent, titulosValidos);
+    const condicaoG = isColecao ? { passou: true, motivo: 'Coletânea: número ignorado' } : this.validarSequenciaNumero(tituloTorrent, palavrasTorrent, titulosValidos);
 
-    // A: palavras mínimas do TMDB (trava títulos diferentes). B: informativo.
-    const todasPassaram = condicaoA.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoF.passou && condicaoG.passou;
+    const todasPassaram = condicaoA.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
 
     // Monta o motivo juntando as falhas (ou sucessos)
     const partesMotivo: string[] = [];
@@ -224,7 +278,6 @@ export class SimilarityCalculator {
     if (!condicaoC.passou) partesMotivo.push(condicaoC.motivo);
     if (!condicaoD.passou) partesMotivo.push(condicaoD.motivo);
     if (!condicaoE.passou) partesMotivo.push(condicaoE.motivo);
-    if (!condicaoF.passou) partesMotivo.push(condicaoF.motivo);
     if (!condicaoG.passou) partesMotivo.push(condicaoG.motivo);
     if (todasPassaram) {
       partesMotivo.push(`Tudo OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras`);
@@ -239,20 +292,9 @@ export class SimilarityCalculator {
       reason: partesMotivo.join(' | '),
     };
 
-    // Log compacto
-    const statusCondicoes = `A:${condicaoA.passou?'OK':'X'} C:${condicaoC.passou?'OK':'X'} D:${condicaoD.passou?'OK':'X'} E:${condicaoE.passou?'OK':'X'} F:${condicaoF.passou?'OK':'X'} G:${condicaoG.passou?'OK':'X'}`;
+    const statusCondicoes = `A:${condicaoA.passou?'OK':'X'} C:${condicaoC.passou?'OK':'X'} D:${condicaoD.passou?'OK':'X'} E:${condicaoE.passou?'OK':'X'} G:${condicaoG.passou?'OK':'X'}`;
     if (!todasPassaram) {
-      const motivo = partesMotivo.join(' | ');
-      
-      const fOnly = !condicaoF.passou && condicaoA.passou && condicaoC.passou && condicaoD.passou && condicaoE.passou && condicaoG.passou;
-      
-      if (fOnly) {
-        this.logger.warn(`🔧 F-ONLY [${statusCondicoes}] aceito: "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
-        resultado.matches = true;
-        resultado.similarity = 0.85;
-      } else {
-        this.logger.warn(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${motivo}`);
-      }
+      this.logger.debug(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${partesMotivo.join(' | ')}`);
     } else {
       this.logger.info(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}"`);
     }
@@ -261,35 +303,57 @@ export class SimilarityCalculator {
     return resultado;
   }
 
-  /** A: Palavras do TMDB precisam existir no torrent (faltando, nao estranhas).
-   *    Edge-gap: tolera 1 palavra faltando se estiver na ponta do titulo TMDB. */
+  /** A: Score bidirecional (match exato + fuzzy ≥75%). Sem ano → exige 0 extras.
+   *     Coletâneas (trilogia, quadrilogia, etc.) têm threshold relaxado. */
   private validarPalavrasMinimas(
-    melhor: { titulo: string; palavrasTmdb: string[]; faltando: string[]; encontradas: number; totalTmdb: number }
+    melhor: { titulo: string; palavrasTmdb: string[]; faltando: string[]; encontradas: number; totalTmdb: number; proporcao: number; extrasTorrent?: number },
+    anoTorrent?: number | null,
+    anoTmdb?: number,
+    tituloTorrent?: string
   ): { passou: boolean; motivo: string } {
-    if (melhor.faltando.length === 0) {
-      return {
-        passou: true,
-        motivo: `Vocabulario OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras`
-      };
+    if (melhor.totalTmdb === 0) return { passou: false, motivo: 'TMDB sem palavras' };
+
+    const extras = melhor.extrasTorrent ?? 0;
+    const semAno = anoTorrent === null || anoTorrent === undefined || anoTmdb === undefined;
+
+    // ── Coletânea (trilogia, quadrilogia, etc.): threshold relaxado ──
+    // Torrents de pack contêm o filme mas não o subtítulo completo.
+    // Ex: "Quadrilogia Piratas do Caribe" → só bate "piratas do caribe" (3-4/8 palavras)
+    if (tituloTorrent && isCollectionTitle(tituloTorrent)) {
+      // ≥2 palavras da franquia bastam (ex: "Jogos Vorazes" = 2 palavras)
+      if (melhor.encontradas >= 2 && extras <= 3) {
+        return { passou: true, motivo: `Coletânea: ${melhor.encontradas}/${melhor.totalTmdb} palavras da franquia${extras > 0 ? ` +${extras} extra(s)` : ''}` };
+      }
+      if (semAno && extras > 3) {
+        return { passou: false, motivo: `Coletânea sem ano + ${extras} palavra(s) extra(s) → título diferente` };
+      }
+      return { passou: false, motivo: `Coletânea: match baixo ${melhor.encontradas}/${melhor.totalTmdb} palavras. Faltando: [${melhor.faltando.join(', ')}]` };
     }
 
-    // Edge-gap: tolera 1 palavra faltando se for "cola" (≤ 3 chars)
-    // Palavras-core (≥ 4 chars) sao obrigatorias — identificam o titulo
-    if (melhor.faltando.length === 1 && melhor.palavrasTmdb.length >= 3) {
-      const palavra = melhor.faltando[0];
-      const ehCola = palavra.length <= 3;
-      if (ehCola) {
-        return {
-          passou: true,
-          motivo: `Palavra-cola opcional: "${palavra}" (≤3 chars), ${melhor.encontradas}/${melhor.totalTmdb}`
-        };
+    // Se não tem ano pra validar → NENHUM extra tolerado
+    if (semAno && extras > 0) {
+      return { passou: false, motivo: `Sem ano para validar + ${extras} palavra(s) extra(s) no torrent → título diferente` };
+    }
+
+    // Todas palavras TMDB batem: threshold relaxado. Se ano bate exato, tolera mais extras.
+    const anoExato = !semAno && anoTorrent === anoTmdb;
+    const maxExtras = anoExato ? 4 : 2;
+    if (melhor.faltando.length === 0 && melhor.proporcao >= 0.6 && extras <= maxExtras) {
+      return { passou: true, motivo: `Match OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao*100).toFixed(0)}%)${extras > 0 ? ` +${extras} extra(s)` : ''}${anoExato ? ' [ano exato]' : ''}` };
+    }
+
+    // Tolera 1 palavra curta (≤3 chars) com score baixo
+    if (melhor.faltando.length === 1 && melhor.palavrasTmdb.length >= 3 && extras <= 2) {
+      if (melhor.faltando[0].length <= 3 && melhor.proporcao >= 0.6) {
+        return { passou: true, motivo: `Palavra-cola: "${melhor.faltando[0]}" (≤3), ${melhor.encontradas}/${melhor.totalTmdb} palavras` };
       }
     }
 
-    return {
-      passou: false,
-      motivo: `Palavras faltando: [${melhor.faltando.join(', ')}] (${melhor.encontradas}/${melhor.totalTmdb})`
-    };
+    if (extras > 2) {
+      return { passou: false, motivo: `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao*100).toFixed(0)}%). +${extras} extras no torrent` };
+    }
+
+    return { passou: false, motivo: `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao*100).toFixed(0)}%). Faltando: [${melhor.faltando.join(', ')}]` };
   }
 
   /** B: Reporta palavras do TMDB faltando no torrent.
@@ -312,8 +376,7 @@ export class SimilarityCalculator {
     tolerancia: number,
     _tipoMidia: string,
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
-    tituloTorrent: string,
-    temIndicadorPt: boolean
+    tituloTorrent: string
   ): { passou: boolean; motivo: string } {
     // TMDB de 1 palavra → verifica ambiguidade (ex: "Soul" em "Don't Tell a Soul 2021")
     // Só quando TODOS os títulos TMDB são 1 palavra — se há título multi-palavra
@@ -450,53 +513,6 @@ export class SimilarityCalculator {
     };
   }
 
-  /** F: Palavras do torrent com comprimento fora do padrão TMDB indicam título diferente.
-   *    Se comprimento bate, verifica sobreposição de caracteres com TMDB (evita "assalto" ≈ "mestres"). */
-  private validarComprimentoPalavras(
-    palavrasTorrent: string[],
-    palavrasTmdb: string[]
-  ): { passou: boolean; motivo: string } {
-    const setTmdb = new Set(palavrasTmdb);
-    const tmdbLengths = new Set(palavrasTmdb.map(w => w.length));
-    if (palavrasTmdb.length < 2) return { passou: true, motivo: '' }; // TMDB muito curto
-
-    // Palavras do torrent que NAO estao no TMDB e NAO sao tecnicas
-    const extras = palavrasTorrent.filter(w => !setTmdb.has(w) && !isTechnicalWord(w) && w.length > 3);
-
-    const anomalas: string[] = [];
-    for (const w of extras) {
-      if (!tmdbLengths.has(w.length)) {
-        anomalas.push(w);
-        // Auto-learner: registra palavra pra possível auto-inclusão no strip
-        registerStripCandidate(w);
-      } else {
-        // Comprimento bate com TMDB — verifica conjunto de caracteres
-        const tmdbSameLen = palavrasTmdb.filter(t => t.length === w.length);
-        let similar = false;
-        const wChars = new Set(w.split(''));
-        for (const t of tmdbSameLen) {
-          const tChars = new Set(t.split(''));
-          const intersection = [...wChars].filter(c => tChars.has(c)).length;
-          const union = new Set([...wChars, ...tChars]).size;
-          if (intersection / union >= 0.5) { similar = true; break; }
-        }
-        if (!similar) {
-          anomalas.push(w + '≠' + tmdbSameLen.join('|'));
-          // Palavra com mesmo comprimento mas Jaccard baixo — também suspeita
-          registerStripCandidate(w);
-        }
-      }
-    }
-
-    if (anomalas.length > 0) {
-      return {
-        passou: false,
-        motivo: `Palavras com comprimento fora do TMDB: [${anomalas.join(', ')}] | TMDB: [${[...tmdbLengths].join(',')}]`
-      };
-    }
-    return { passou: true, motivo: '' };
-  }
-
   private temTemporadaExplicita(titulo: string, temporada: number): boolean {
     const lower = titulo.toLowerCase();
     const padroes = [`s${temporada.toString().padStart(2, '0')}`, `s${temporada}`, `season ${temporada}`, `temporada ${temporada}`, `temporada ${temporada}ª`, ` ${temporada}ª temporada`, `t${temporada}`, `t${temporada.toString().padStart(2, '0')}`];
@@ -509,21 +525,116 @@ export class SimilarityCalculator {
 
   /** Delega normalização para TechnicalWords — remove só palavras técnicas, mantém SxxExx */
   normalizarParaComparacao(titulo: string): string {
-    return normalizarTituloTorrent(titulo);
+    // Mantido por compatibilidade com chamadores externos (catalogProvider)
+    return titulo.toLowerCase().replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
   }
 
   private extrairAnoDoTitulo(titulo: string): number | null {
     // Extrai todos os anos (19xx ou 20xx)
     const anos = titulo.match(/\b(19|20)\d{2}\b/g);
     if (!anos || anos.length === 0) return null;
-    // Se o primeiro número do título é um ano E é igual ao ano extraído,
-    // pode ser nome de filme (ex: "1917"), não ano de lançamento.
-    // Nesse caso, usa o SEGUNDO ano encontrado (se houver)
     const primeiroNumero = titulo.match(/\b\d{4}\b/);
     if (primeiroNumero && anos[0] === primeiroNumero[0] && anos.length > 1) {
       return parseInt(anos[1]);
     }
     return parseInt(anos[0]);
+  }
+
+  /** Verifica no TMDB (HTML scraper) se uma palavra existe em algum título.
+   *  Tenta pt-BR primeiro, depois inglês. */
+  private async palavraExisteNoOmdb(word: string): Promise<boolean> {
+    if (omdbWordCache.has(word)) return omdbWordCache.get(word)!;
+
+    const headers = {
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'Accept': 'text/html',
+    };
+
+    try {
+      // 1) Tenta pt-BR
+      let url = `https://www.themoviedb.org/search?query=${encodeURIComponent(word)}&language=pt-BR`;
+      let resp = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { ...headers, 'Accept-Language': 'pt-BR,pt;q=0.9' } });
+      let html = await resp.text();
+      if (/\/movie\/\d+/.test(html) || /\/tv\/\d+/.test(html)) {
+        omdbWordCache.set(word, true);
+        return true;
+      }
+
+      // 2) Tenta inglês como fallback
+      url = `https://www.themoviedb.org/search?query=${encodeURIComponent(word)}&language=en-US`;
+      resp = await fetch(url, { signal: AbortSignal.timeout(10000), headers: { ...headers, 'Accept-Language': 'en-US,en;q=0.9' } });
+      html = await resp.text();
+      const existe = /\/movie\/\d+/.test(html) || /\/tv\/\d+/.test(html);
+      omdbWordCache.set(word, existe);
+      return existe;
+    } catch {
+      // Erro/timeout → conservador: assume que existe (evita poluir strip com títulos reais)
+      omdbWordCache.set(word, true);
+      return true;
+    }
+  }
+
+  /** Auto-aprender: adiciona palavra ao strip-words.txt */
+  private autoAprenderStripWord(word: string): void {
+    try {
+      const existing = new Set<string>();
+      if (fs.existsSync(STRIP_WORDS_PATH)) {
+        const content = fs.readFileSync(STRIP_WORDS_PATH, 'utf8');
+        for (const line of content.split('\n')) {
+          const w = line.trim().toLowerCase();
+          if (w) existing.add(w);
+        }
+      }
+      if (!existing.has(word.toLowerCase())) {
+        fs.appendFileSync(STRIP_WORDS_PATH, word.toLowerCase() + '\n');
+        // Atualiza a memória IMEDIATAMENTE pra já valer na sessão atual
+        TECHNICAL_STRIP_WORDS.add(word.toLowerCase());
+        this.logger.info(`📝 Strip-word aprendida: "${word}" → data/strip-words.txt`);
+      }
+    } catch (err) {
+      this.logger.error(`❌ Erro ao salvar strip-word "${word}": ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  /** Adiciona palavras na fila global de background (1 por vez, sem duplicatas) */
+  private enfileirarStripWords(words: string[]): void {
+    for (const w of words) {
+      if (!omdbWordCache.has(w)) stripQueue.add(w);
+    }
+    if (!stripQueueRunning) {
+      this.processarFilaStrip().catch(err => {
+        this.logger.error('❌ Erro na fila de strip:', err);
+        stripQueueRunning = false;
+      });
+    }
+  }
+
+  /** Processa a fila global sequencialmente: 1 palavra por vez, 3s delay, 2 tentativas */
+  private async processarFilaStrip(): Promise<void> {
+    stripQueueRunning = true;
+    const delay = (ms: number) => new Promise(r => setTimeout(r, ms));
+    this.logger.info(`🔄 Fila de strip iniciada: ${stripQueue.size} palavras pendentes`);
+
+    while (stripQueue.size > 0) {
+      const word = stripQueue.values().next().value!;
+      stripQueue.delete(word);
+      if (omdbWordCache.has(word)) continue;
+
+      let existe = true;
+      for (let tentativa = 0; tentativa < 2; tentativa++) {
+        try {
+          await delay(3000);
+          existe = await this.palavraExisteNoOmdb(word);
+          break;
+        } catch { /* timeout → retry */ }
+      }
+
+      if (!existe) {
+        this.autoAprenderStripWord(word);
+      }
+    }
+    this.logger.info('✅ Fila de strip concluída');
+    stripQueueRunning = false;
   }
 }
 

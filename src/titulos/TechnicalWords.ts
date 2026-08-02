@@ -6,7 +6,7 @@
 // Acrônimos técnicos para remoção durante normalização
 export const TECHNICAL_ACRONYMS = [
   'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
-  '5.1', '7.1', '2.0', '5.1ch', '7.1ch', '2ch', 'hd', 'uhd', 'fhd', 'qhd', 'whd',
+  '5.1', '7.1', '2.0', '5.1ch', '7.1ch', '2ch', '1ch', 'hd', 'uhd', 'fhd', 'qhd', 'whd',
   'dd', 'ddp', 'dtsx', 'dtsma', 'lpcm', 'dsd', 'pcm', 'wav', 'flac', 'alac',
   'nf', 'amzn', 'atvp', 'hmax', 'dsnp', 'hulu', 'appletv', 'netflix', 'prime',
   'hdr10', 'hdr10+', 'hlg', 'dv', 'dolbyvision', 'atmos', 'dtsx',
@@ -24,6 +24,20 @@ export const TECHNICAL_ACRONYMS = [
   'ntsc', 'pal', 'secam', 'atsc', 'dvb', 'isdb',
   'ip', 'tcp', 'udp', 'http', 'https', 'ftp', 'sftp',
   'url', 'uri', 'urn', 'uuid', 'guid', 'hash', 'md5', 'sha1', 'sha256',
+  // Qualidades e formatos de torrent
+  '1080p', '720p', '2160p', '480p', '4k', '8k', 'fullhd', 'full-hd',
+  'bluray', 'blu-ray', 'bdrip', 'brrip', 'webrip', 'web-dl', 'webdl',
+  'hdtv', 'dvdrip', 'dvd', 'bd', 'remux', 'brrip', 'web',
+  // Formatos de vídeo / encoding
+  'matte', 'imax',
+  // Idioma
+  'dublado', 'dublada', 'dual', 'legendado', 'legendada', 'nacional',
+  'portugues', 'português', 'pt-br', 'ptbr', 'brazilian',
+  // Sufixos de arquivo / sites / tags comuns de torrent
+  'www', 'com', 'org', 'net', 'tv', 'br', 'bludv', 'comando', 'comandotorrents',
+  'torrents', 'filmes', 'hd', 'full', 'sf', 'dl', 'rip', 'xvid', 'divx',
+  'mp3', 'aac', 'ac3', 'dts', 'eac3', 'ddp', 'dd', 'dolby',
+  'h264', 'h265', 'x264', 'x265', 'avc', 'hevc', 'vp9', 'av1',
 ];
 
 // Lista específica de grupos de release internacionais conhecidos
@@ -32,7 +46,7 @@ export const INTERNATIONAL_RELEASE_GROUPS = [
   'skgtv', 'rartv', 'ettv', 'eztv', 'vtv', 'yts', 'yify', 'rarbg',
   'turbo', 'cakes', 'galaxyrg', 'ctrlhd', 'framestor', 'tayto', 'ntb',
   'cmrg', 'evolve', 'mteam', 'chd', 'hds', 'fum', 'tbs', 'flux', 'tgx',
-  'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws',
+  'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws', 'gopo', 'grym', 'mld',
 
   'sva', 'exc', 'phd', 'grym', 'jyk', 
   'sparks',
@@ -58,13 +72,25 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'seriesbr', 'filmesbr', 'bluraybr', 'hdbr',
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes',
   'lapumia', 'comoeubaixo', 'bludv', 'BLUDV', 'WWW.BLUDV.COM',
-  'luanharper','SiGLA', 'SF', 'WEB-DL', 'web-dl', 'AZTORRENTS'
+  'luanharper','SiGLA', 'SF', 'WEB-DL', 'web-dl', 'AZTORRENTS',
+  // Coleções / packs
+  'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia', 'coletanea',
+   'franquia', 'saga', 'duologia',
 ];
 
-// Função auxiliar para verificar se uma palavra é técnica
+// Cache interno: junta todas as palavras "não-título" (técnicas + grupos + trackers)
+const _ALL_NON_TITLE_WORDS = new Set<string>([
+  ...TECHNICAL_ACRONYMS,
+  ...BRAZILIAN_RELEASE_GROUPS,
+  ...INTERNATIONAL_RELEASE_GROUPS,
+  ...INTERNATIONAL_TRACKERS,
+].map(w => w.toLowerCase()));
+
+// Função auxiliar para verificar se uma palavra é técnica/metadado (não parte do título)
+// Inclui palavras carregadas do strip-words.txt via TECHNICAL_STRIP_WORDS (definido abaixo)
 export function isTechnicalWord(word: string): boolean {
-  const lowerWord = word.toLowerCase();
-  return TECHNICAL_ACRONYMS.includes(lowerWord);
+  const lower = word.toLowerCase();
+  return _ALL_NON_TITLE_WORDS.has(lower) || (typeof TECHNICAL_STRIP_WORDS !== 'undefined' && TECHNICAL_STRIP_WORDS.has(lower));
 }
 
 // Função para verificar se é grupo de release internacional
@@ -125,6 +151,18 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
 ];
 
 // ─── FUNCOES ───
+
+// Palavras que indicam coletânea/pack de filmes
+const COLLECTION_WORDS = new Set([
+  'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
+  'coletanea', 'franquia', 'duologia', 'saga',
+]);
+
+/** Verifica se o título do torrent é uma coletânea (trilogia, quadrilogia, etc.) */
+export function isCollectionTitle(title: string): boolean {
+  const lower = title.toLowerCase();
+  return [...COLLECTION_WORDS].some(w => lower.includes(w));
+}
 
 // Função para verificar se título contém indicadores internacionais
 export function containsInternationalIndicators(title: string): {
@@ -492,40 +530,68 @@ console.log('[DEBUG] [TechnicalWords] Iniciada verificação de grupos internaci
 // ═══════════════════════════════════════════════════════════════════════
 
 /** Palavras puramente técnicas que devem ser removidas na normalização */
-const TECHNICAL_STRIP_WORDS = new Set([
+export const TECHNICAL_STRIP_WORDS: Set<string> = new Set([
   '# Strip Words auto-aprendidas — 1 palavra por linha', '.COM', '.com', '038', '1080p', '10bit',
-  '10bits', '2.0', '2160p', '2ch', '2k', '360p',
-  '3d', '3gp', '480p', '4k', '5.1', '5.1ch',
-  '6ch', '7.1', '7.1ch', '720p', '8211', '8230',
-  '8k', 'BAIXARAPIDO.COM', 'BRRip', 'COMOEUBAIXO.COM', 'RAPIDOTORRENTS', 'WWW.RAPIDOTORRENTS.COM',
-  'aac', 'ac3', 'acesse', 'atmos', 'audio', 'av1',
-  'avc', 'avi', 'bd', 'bdrip', 'blu', 'bludv',
-  'bluray', 'bone', 'brrip', 'btm', 'cc', 'com',
-  'comando', 'comando1', 'comandotorrents', 'completa', 'complete', 'coyote',
-  'dd', 'ddp', 'ddp5', 'deejayahmed', 'divx', 'dl',
-  'douglasvip', 'dovi', 'download', 'dts', 'dts-hd', 'dtshd',
-  'dual', 'dub', 'dubbed', 'dublada', 'dublado', 'dublagem',
-  'dv', 'dvd', 'dvdrip', 'eac3', 'eng', 'esp',
-  'estendida', 'estendido', 'ethel', 'ettv', 'extended', 'extras',
-  'eztv', 'fhd', 'film', 'filmes', 'flac', 'flv',
-  'fre', 'fullhd', 'ger', 'grace', 'h264', 'h265',
-  'hd', 'hdr', 'hdr', 'hdr10', 'hdr10p', 'hdr10plus',
-  'hdtv', 'hevc', 'hidratorrents', 'hidratorrents', 'imax', 'info',
-  'io', 'ion10', 'ita', 'jeremiah', 'jpn', 'kor',
-  'legenda', 'legendada', 'legendado', 'leroy', 'listao', 'm2ts',
-  'm4v', 'mang0', 'mkv', 'mov', 'movie', 'mp3',
-  'mp4', 'mpeg', 'mpg', 'net', 'ogg', 'ogv',
-  'opus', 'org', 'parts', 'pitt', 'pong', 'por',
-  'psa', 'rapidotorrents', 'rarbg', 'rdnyb', 'reenc', 'remastered',
-  'remux', 'rmvb', 'rus', 's01', 's02', 's03',
-  's04', 's05', 's06', 's07', 's08', 'sd',
-  'sdr', 'season', 'series', 'sf', 'site', 'sitedetorrents',
-  'starck', 'starckfilmes', 'sujaidr', 'syncup', 'temporada', 'to',
-  'tpb', 'truehd', 'ts', 'tv', 'uhd', 'versao',
-  'versão', 'visite', 'vob', 'vol', 'volume', 'vp9',
-  'web', 'web-dl', 'webm', 'webrip', 'wmv', 'www',
-  'www', 'www.', 'x264', 'x265', 'xebec', 'xvid',
-  'xyz', 'yify', 'yts', 'áudio', 'AZTORRENTS',
+  '10bits', '1280x720', '1986_dvdrip', '1989_olha', '1ch', '2.0',
+  '2160p', '2ch', '2k', '360p', '3cd', '3d',
+  '3gp', '3lt0n', '480p', '480x360', '4k', '5.1',
+  '5.1ch', '600mb', '6ch', '7.1', '7.1ch', '720p',
+  '8211', '8230', '8k', '900mb', 'AZTORRENTS', 'BAIXARAPIDO.COM',
+  'BRRip', 'COMOEUBAIXO.COM', 'RAPIDOTORRENTS', 'WWW.RAPIDOTORRENTS.COM', 'a', 'aac',
+  'ac3', 'acesse', 'acmb', 'adoidado', 'aguerbot', 'ai',
+  'alan_680', 'alemaops', 'amb3r', 'andretpf', 'aninha', 'ao',
+  'apertem', 'arromba', 'as', 'atmos', 'audio', 'av',
+  'av1', 'avc', 'avi', 'avi_legendado', 'axxo', 'az3do',
+  'b', 'baixarfilmesdubladosviatorrent', 'bd', 'bdrip', 'blogspot', 'blu',
+  'bludv', 'bludvxxx', 'bluray', 'bone', 'brrip', 'brshares',
+  'btih', 'btm', 'btzoo', 'by', 'by_sloth', 'byndr',
+  'bz', 'c', 'ca', 'cc', 'cidad', 'cintos',
+  'cl', 'com', 'comando', 'comando1', 'comandofilmes', 'comandotorrents',
+  'completa', 'complete', 'coppersurfer', 'coyote', 'curtindo', 'cze',
+  'd', 'da', 'dd', 'ddp', 'ddp5', 'de',
+  'deejayahmed', 'defende', 'derew', 'divx', 'dl', 'do',
+  'documen', 'douglasvip', 'dovi', 'download', 'dr', 'dts',
+  'dts-hd', 'dtshd', 'du', 'dual', 'dub', 'dubbed',
+  'dublada', 'dublado', 'dublado_dvdrip', 'dublagem', 'dv', 'dvd',
+  'dvdrip', 'dvdripdublado', 'dvdrmz', 'e', 'eac3', 'edonkers',
+  'eletr', 'em', 'en', 'eng', 'es', 'esp',
+  'esqueceram', 'estendida', 'estendido', 'ethel', 'ettv', 'eu',
+  'extended', 'extras', 'eztv', 'eztvx', 'faeul', 'falando_dublado',
+  'feiti', 'fhd', 'film', 'filmes', 'filmesepicos', 'fim_dvdrip_xvid_dublado',
+  'flac', 'flv', 'fm', 'fr', 'fre', 'fullhd',
+  'galaxyrg265', 'genero_comedia', 'ger', 'gji', 'glotorrents', 'grace',
+  'guivon', 'h', 'h264', 'h265', 'hd', 'hdr',
+  'hdr', 'hdr10', 'hdr10p', 'hdr10plus', 'hdtv', 'hevc',
+  'hidratorrent', 'hidratorrents', 'hidratorrents', 'hipertorrent', 'homicide_1991_mamet_criterion_subs', 'i',
+  'ia', 'iextv', 'ii', 'imax', 'in', 'incr',
+  'indom', 'info', 'internetwarriors', 'io', 'ion10', 'ita',
+  'jeremiah', 'jpn', 'karnstein', 'kitrinipapia', 'kleysonlima', 'kor',
+  'la', 'legenda', 'legendada', 'legendado', 'leroy', 'lico',
+  'listao', 'loucademia', 'm', 'm2ts', 'm4v', 'makingoff',
+  'mang0', 'mazarop', 'me', 'mgb', 'mkv', 'mlsub',
+  'morgnadow', 'mov', 'movie', 'movienet', 'mp3', 'mp4',
+  'mpeg', 'mpg', 'my', 'na', 'naufrago_cast', 'nbaonlineservice',
+  'ncia', 'net', 'no', 'o', 'odiss', 'of',
+  'ogg', 'ogv', 'openbittorrent', 'opentrackr', 'opus', 'or',
+  'org', 'os', 'ou', 'parker_subs', 'parts', 'pentelho',
+  'pequeninos', 'picaretas', 'pitt', 'platoon_toavi', 'pong', 'popero80',
+  'por', 'porquinho', 'portugu', 'prod_subs', 'psa', 'pt',
+  'pt_br_su', 'ptpt', 'publictracker', 'pulicu', 'qu', 'r',
+  'rapidotorrents', 'rarbg', 'ratinha', 'rcules', 'rdnyb', 'recome',
+  'reenc', 'remastered', 'remux', 'rmvb', 'rus', 's',
+  'sb', 'scenelovers', 'sd', 'sdr', 'sdtv', 'se',
+  'season', 'series', 'sf', 'site', 'sitedetorrents', 'sl',
+  'so', 'sp', 'starck', 'starckfilmes', 'successfulcrab', 'sujaidr',
+  'syncup', 'tamb', 'te', 'temporada', 'the', 'thepiratefilmes',
+  'thisisthefortnitemovieright', 'to', 'tobeeornottobee', 'torrentus', 'tpb', 'tr',
+  'trackerfix', 'treinamento', 'truehd', 'ts', 'tv', 'udio',
+  'uhd', 'um', 'upbybeth', 'usuariox123', 'v', 'va',
+  'veis', 'versao', 'versão', 'vh', 'vhsrip', 'vi',
+  'visite', 'voasse', 'vob', 'vol', 'volume', 'vp9',
+  'wa', 'web', 'web-dl', 'webm', 'webrip', 'wmv',
+  'wolverdonfilmes', 'www', 'www', 'www.', 'x264', 'x265',
+  'xebec', 'xvid', 'xvid_eng', 'xyz', 'xyzkkk999', 'yemekyedim',
+  'yify', 'yts', 'áudio'
 ]);
 
 // Regex de qualidade/codec (padrões que não são palavras isoladas)

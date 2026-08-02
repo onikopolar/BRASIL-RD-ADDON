@@ -288,6 +288,12 @@ export class CatalogProvider {
     imdbTitles: ImdbTitles | null = null,
     isPackFallback = false
   ): Promise<void> {
+    // Flag temporária: pular banco durante testes
+    if (process.env.SKIP_DB_WRITE === 'true') {
+      this.logger.info('⏭️  DB write SKIPPED (SKIP_DB_WRITE=true)', { count: torrents.length });
+      return;
+    }
+
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 

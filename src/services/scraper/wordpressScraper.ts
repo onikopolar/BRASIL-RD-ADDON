@@ -140,7 +140,7 @@ export class WordPressScraper {
 
     const searchQuery = cleanQuery || query; // fallback pro original se limpar tudo
     const encodedQuery = encodeURIComponent(searchQuery);
-    const apiUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodedQuery}&per_page=15&_fields=id,title,link,content,date`;
+    const apiUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodedQuery}&per_page=15&_fields=id,title,link,content,excerpt,date`;
 
     // DNS bypass + Crawlee-style anti-bot headers
     const response = await axios.get(apiUrl, {
@@ -165,12 +165,32 @@ export class WordPressScraper {
     logger.info(`WP ${site.name}: ${totalMagnets} magnets em N/A para "${searchQuery}"`);
 
     const results: TorrentResult[] = [];
+    const queryWords = searchQuery.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !/^(de|do|da|dos|das|e|a|o|em|no|na|os|as|um|uma|the|of|and|or|in|on|at|to|for|is|it)$/i.test(w));
     for (const post of response.data) {
       try {
-        const extracted = await this.extractMagnetsFromPost(post, site.name, type);
-        // if (extracted.length) {
-        //   logger.debug(`WP ${site.name}: ${extracted.length} magnets de "${(post.title?.rendered || '').substring(0, 60)}"`);
-        // }
+        const postTitle = (post.title?.rendered || '').toLowerCase();
+        
+        // Pula posts "Listão" — compilações genéricas sem labels individuais nos magnets
+        if (/\blist[aã]o\b/i.test(postTitle)) {
+          logger.debug(`WP ${site.name}: pulando post listão "${(post.title?.rendered || '').substring(0, 50)}"`);
+          continue;
+        }
+        
+        // Post é relevante se título contém palavras da query.
+        // Queries curtas (≤2 palavras): exige match no TÍTULO (excerpt é ruidoso).
+        // Queries longas: título OU excerpt bastam.
+        const postExcerpt = (post.excerpt?.rendered || '').toLowerCase();
+        let postIsRelevant: boolean;
+        if (queryWords.length === 0) {
+          postIsRelevant = true;
+        } else if (queryWords.length <= 2) {
+          // Query curta: pelo menos UMA palavra no TÍTULO (ignora excerpt)
+          postIsRelevant = queryWords.some(w => postTitle.includes(w));
+        } else {
+          // Query longa: basta UMA palavra no título OU excerpt
+          postIsRelevant = queryWords.some(w => postTitle.includes(w) || postExcerpt.includes(w));
+        }
+        const extracted = await this.extractMagnetsFromPost(post, site.name, type, queryWords, postIsRelevant);
         results.push(...extracted);
       } catch {
         // Post individual com problema, ignora
@@ -183,7 +203,9 @@ export class WordPressScraper {
   private async extractMagnetsFromPost(
     post: any,
     provider: string,
-    type: 'movie' | 'series'
+    type: 'movie' | 'series',
+    queryWords?: string[],
+    postIsRelevant: boolean = false
   ): Promise<TorrentResult[]> {
     const title = post.title?.rendered || '';
     const content = post.content?.rendered || '';
@@ -237,9 +259,25 @@ export class WordPressScraper {
     const seriesInfo = this.extractSeriesEpisodes($, content, title);
 
     const elementos = magnetLinks.toArray();
+    // Posts genéricos (Listão) podem ter 700+ magnets — limita para não processar tudo
+    const MAX_GENERIC_MAGNETS = 50;
+    let scannedGeneric = 0;
+
     for (const el of elementos) {
+      // Se post não é relevante e já escaneamos muitos magnets, para
+      if (!postIsRelevant && scannedGeneric >= MAX_GENERIC_MAGNETS) break;
+      if (!postIsRelevant) scannedGeneric++;
+
       const magnet = $(el).attr('href');
       if (!magnet) continue;
+
+      // Filtra por query: se post é relevante (título bate), extrai tudo.
+      // Se post é genérico (ex: "Listão"), filtra cada magnet pelo texto ao redor.
+      if (!postIsRelevant && queryWords && queryWords.length > 0) {
+        const contextText = ($(el).parent().text() + ' ' + ($(el).prev().text() || '')).toLowerCase();
+        const match = queryWords.some(w => contextText.includes(w));
+        if (!match) continue;
+      }
 
       const episodeLabel = this.extractEpisodeLabel($, el);
 
