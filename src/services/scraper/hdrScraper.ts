@@ -20,6 +20,8 @@ export interface HdrTorrent {
   seeders: number;
   size: string;
   language: string;
+  /** Título original extraído do HTML do post */
+  originalTitle?: string;
 }
 
 // ── Config do axios ───────────────────────────────────────────────────
@@ -94,6 +96,50 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
   // Título da página (fallback do postTitle da busca)
   const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
 
+  // ═══ Extrai Título Original direto do DOM ═══
+  // Estrutura: <b>Título Original:</b> The Matrix<br />
+  let originalTitle: string | undefined;
+  const tituloEl = $('b, strong').toArray().find(el => /T[ií]tulo\s+Original/i.test($(el).text()));
+  if (tituloEl) {
+    const parentHtml = $(tituloEl).parent().html() || '';
+    const elHtml = $(tituloEl).toString();
+    const idx = parentHtml.indexOf(elHtml);
+    if (idx !== -1) {
+      const after = parentHtml.substring(idx + elHtml.length);
+      const endIdx = after.indexOf('<');
+      const raw = endIdx !== -1 ? after.substring(0, endIdx) : after;
+      originalTitle = raw.replace(/^[:\s]+/, '').trim();
+    }
+  }
+
+  // ═══ Encontra limites da seção DUAL ═══
+  // Estrutura: <h3>::VERSÃO DUAL ÁUDIO::</h3> ...magnets... <h3>::VERSÃO LEGENDADA::</h3>
+  let dualStartPos = -1;
+  let legendadoPos = html.length;
+
+  const h3Elements = $('h3').toArray();
+  for (let i = 0; i < h3Elements.length; i++) {
+    const text = $(h3Elements[i]).text().trim();
+    if (dualStartPos === -1 && /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i.test(text)) {
+      dualStartPos = html.indexOf($(h3Elements[i]).toString());
+    } else if (dualStartPos !== -1 && /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i.test(text)) {
+      legendadoPos = html.indexOf($(h3Elements[i]).toString());
+      break;
+    }
+  }
+
+  // Se não achou seção DUAL, verifica se o post TEM seção LEGENDADA
+  // Post 100% legendado → retorna vazio
+  if (dualStartPos === -1) {
+    const hasLegendadoSection = h3Elements.some(el => 
+      /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i.test($(el).text().trim())
+    );
+    if (hasLegendadoSection) {
+      return []; // post é só legendado, não retorna nada
+    }
+  }
+
+  // ═══ Coleta magnets na seção DUAL ═══
   $('a[href^="magnet:"]').each((_i, el) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -101,15 +147,21 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
     const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
     if (!btihMatch) return;
 
+    // Verifica se o magnet está na seção DUAL
+    if (dualStartPos !== -1) {
+      const magnetHtml = $(el).toString();
+      const magnetPos = html.indexOf(magnetHtml);
+      if (magnetPos < dualStartPos || magnetPos >= legendadoPos) return;
+    }
+
     // Tenta extrair informações do texto próximo ao magnet
     const parentText = $(el).parent().text().trim();
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
     const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    // Idioma: primeiro do texto local, fallback para o título da página
     let language = extractLanguage(parentText);
     if (!language) language = extractLanguage(pageTitle);
 
-    // Monta título descritivo: "Nome do Filme [Idioma] [Qualidade]"
+    // Monta título descritivo
     const parts = [pageTitle];
     if (language) parts.push(`[${language}]`);
     if (qualityMatch) parts.push(qualityMatch[0]);
@@ -122,6 +174,7 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
       seeders: 0,
       size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
       language,
+      originalTitle,
     });
   });
 

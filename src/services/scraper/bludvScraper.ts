@@ -180,6 +180,7 @@ export class BludvScraper {
         season: undefined,
         lastUpdated: new Date(),
         confidence: 0.9,
+        originalTitle: metadata.originalTitle,
       });
     }
 
@@ -187,64 +188,73 @@ export class BludvScraper {
   }
 
   // ═══ Extrai APENAS os magnets da seção DUAL ÁUDIO do post ═══
+  // Estrutura real do BLUDV:
+  //   <strong>VERSÃO MKV DUAL ÁUDIO</strong>        ← início coleta
+  //     SERVIDOR PARA DOWNLOAD → Magnet DUAL ✅
+  //   <strong>VERSÃO MP4 LEGENDADO</strong>          ← PARAR aqui
+  //     SERVIDOR PARA DOWNLOAD → Magnet LEGENDADO ❌
   private extractDualSectionMagnets($: any, contentHtml: string): any[] {
-    // Pega todo o texto visível pra achar a seção DUAL
     const allMagnets = $('a[href^="magnet:"]').toArray();
     if (!allMagnets.length) return [];
 
-    // Percorre os elementos do .content em ordem, procurando a seção DUAL
-    const contentEl = $('.content').get(0);
-    if (!contentEl) return allMagnets; // fallback: sem .content, retorna todos
+    // ═══ Passo 1: Encontra o <strong> que marca o início da seção DUAL ═══
+    const strongEls = $('.content strong, .content b').toArray();
+    let dualStrongIdx = -1;
+    let legendadoStrongIdx = -1;
 
-    // Acha o texto que marca a seção DUAL ÁUDIO
-    const fullText = $('.content').text() || '';
-    // Marcadores de seção PT-BR: "***VERSÃO MKV DUAL ÁUDIO***" ou "***DUBLADO***"
-    const dualMatch = fullText.match(/\*{2,3}\s*(?:VERS[ÃA]O\s+(?:MKV|WEB-DL|BLURAY|4K|720p|1080p)\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*\*{2,3}/i);
-    
-    if (!dualMatch) {
-      // Se não achou marcador DUAL, retorna todos (post pode ter estrutura diferente)
+    for (let i = 0; i < strongEls.length; i++) {
+      const text = $(strongEls[i]).text().trim();
+      
+      // Detecta início da seção DUAL (DUAL ÁUDIO ou DUBLADO)
+      if (dualStrongIdx === -1 && /\b(?:DUAL\s+[ÁA]UDIO|DUBLADO)\b/i.test(text)) {
+        dualStrongIdx = i;
+        continue;
+      }
+      
+      // Depois do DUAL, detecta limite LEGENDADO
+      if (dualStrongIdx !== -1 && legendadoStrongIdx === -1 && /\b(?:LEGENDADO|LEGENDADA)\b/i.test(text)) {
+        legendadoStrongIdx = i;
+        break; // já achamos o boundary, não precisa continuar
+      }
+    }
+
+    if (dualStrongIdx === -1) {
+      // Não achou seção DUAL → retorna todos (post pode ter estrutura diferente)
       return allMagnets;
     }
 
-    const dualMarker = dualMatch[0];
-    const dualIndex = fullText.indexOf(dualMarker);
+    // ═══ Passo 2: Determina posições no HTML ═══
+    const dualHtml = $(strongEls[dualStrongIdx]).toString();
+    const dualPos = contentHtml.indexOf(dualHtml);
+    if (dualPos === -1) return allMagnets;
 
-    // Busca o PRÓXIMO marcador de seção depois do DUAL (ex: "***VERSÃO WEB-DL")
-    // Próximo marcador de seção: qualquer *** ou ** com texto significativo
-    const nextSectionRegex = /\*{2,3}\s*[A-ZÁÀÃÉÊÍÓÔÚÇ0-9]{3,}/gi;
-    let nextSectionIndex = fullText.length;
-    let searchFrom = dualIndex + dualMarker.length;
-    
-    let nextMatch;
-    while ((nextMatch = nextSectionRegex.exec(fullText)) !== null) {
-      if (nextMatch.index > searchFrom) {
-        nextSectionIndex = nextMatch.index;
-        break;
-      }
-      nextSectionRegex.lastIndex = nextMatch.index + 1;
+    let legendadoPos = contentHtml.length;
+    if (legendadoStrongIdx !== -1) {
+      const legendadoHtml = $(strongEls[legendadoStrongIdx]).toString();
+      const pos = contentHtml.indexOf(legendadoHtml);
+      if (pos > dualPos) legendadoPos = pos;
     }
 
-    // Coleta os magnets entre dualIndex e nextSectionIndex
+    // ═══ Passo 3: Coleta magnets entre dualPos e legendadoPos ═══
     const dualMagnets: any[] = [];
     for (const el of allMagnets) {
-      // Pega o texto próximo ao magnet pra determinar a posição
-      const elText = $(el).parent().text().trim() || $(el).text().trim();
-      const elIndex = fullText.indexOf(elText.substring(0, 30));
+      const magnetHtml = $(el).toString();
+      const magnetPos = contentHtml.indexOf(magnetHtml);
       
-      if (elIndex >= dualIndex && elIndex < nextSectionIndex) {
+      if (magnetPos > dualPos && magnetPos < legendadoPos) {
         dualMagnets.push(el);
       }
     }
 
-    // Fallback: se a busca por posição falhou, retorna todos
-    return dualMagnets.length > 0 ? dualMagnets : allMagnets;
+    return dualMagnets;
   }
 
-  // ═══ Extrai metadados do post (Áudio, Qualidade, Tamanho) ═══
+  // ═══ Extrai metadados do post (Áudio, Qualidade, Tamanho, Título Original) ═══
   private extractPostMetadata($: any, content: string): {
     quality?: string;
     size?: string;
     language?: string;
+    originalTitle?: string;
   } {
     const text = $('.content').text() || $.text() || content.replace(/<[^>]+>/g, '');
 
@@ -252,10 +262,19 @@ export class BludvScraper {
     const sizeMatch = text.match(/Tamanho[:\s]*([^\n<]+)/i);
     const audioMatch = text.match(/Áudio[:\s]*([^\n<]+)/i);
 
+    // Extrai Título Original da seção >>INFORMAÇÕES DO FILME<<
+    // Padrão: "Título Original: Nome Do Filme" ou "Título Original: Nome Do Filme (Ano)"
+    const originalTitleMatch = text.match(/T[ií]tulo\s+Original[:\s]+([^\n<]+)/i);
+    const originalTitle = originalTitleMatch?.[1]
+      ? originalTitleMatch[1].replace(/\(\d{4}\)$/, '').trim()
+      : undefined;
+    const originalTitleFinal = (originalTitle && originalTitle.length >= 3) ? originalTitle : undefined;
+
     return {
       quality: qualityMatch ? qualityMatch[1].trim() : undefined,
       size: sizeMatch ? sizeMatch[1].trim() : undefined,
       language: audioMatch ? audioMatch[1].trim() : undefined,
+      originalTitle: originalTitleFinal,
     };
   }
 

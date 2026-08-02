@@ -159,7 +159,7 @@ export class TorrentScraperService {
     //  MAPEAMENTOS (simplificados — qualidade/idioma delegados ao pipeline)
     // ═══════════════════════════════════════════════════════════
 
-    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
         // Usa o nome real do magnet (dn=) como título — tem season, idioma e qualidade
         const dnMatch = r.magnet.match(/dn=([^&]+)/i);
@@ -181,7 +181,8 @@ export class TorrentScraperService {
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
             lastUpdated: new Date(),
-            confidence: 0.70
+            confidence: 0.70,
+            originalTitle: r.originalTitle,
         };
     }
 
@@ -195,7 +196,7 @@ export class TorrentScraperService {
         }
     }
 
-    private mapStarckResult(r: { magnet: string; infoHash: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
         const dnMatch = r.magnet.match(/dn=([^&]+)/i);
         const displayName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
@@ -215,7 +216,8 @@ export class TorrentScraperService {
             sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),
-            confidence: 0.70
+            confidence: 0.70,
+            originalTitle: r.originalTitle,
         };
     }
 

@@ -12,7 +12,7 @@
     "dev": "node scripts/dev.js",
     "dev:tunnel": "node scripts/dev-tunnel.js",
     "dev:stremio": "ts-node src/server.ts",
-    "dev:local": "npx cross-env PORT=7001 LOG_LEVEL=info node dist/server.js",
+    "dev:local": "npx cross-env PORT=7001 LOG_LEVEL=debug node dist/server.js",
     "test": "jest",
     "clean": "rm -rf dist",
     "rebuild": "npm run clean && npm run build",

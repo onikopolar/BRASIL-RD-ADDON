@@ -25,6 +25,7 @@ interface ScrapedTorrent {
   title: string;
   canonicalName?: string; // nome do magnet (dn) via parse-torrent — fonte CANÔNICA
   magnetInfoHash?: string; // infoHash do magnet (cache — evita re-parse)
+  originalTitle?: string; // título original extraído do HTML do post (BLUDV: "Título Original: ...")
   magnet: string;
   seeders: number;
   leechers: number;
@@ -252,7 +253,8 @@ export class CatalogProvider {
     // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
     const results = await Promise.allSettled(
       naoLegendado.map((t) => {
-        const tituloParaValidar = t.canonicalName || t.title;
+        // Prioridade: originalTitle (HTML do site) > canonicalName (dn do magnet) > title (nome do torrent)
+        const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
         return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
       })
     );

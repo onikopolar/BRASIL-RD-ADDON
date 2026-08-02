@@ -154,7 +154,8 @@ class TorrentScraperService {
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
             lastUpdated: new Date(),
-            confidence: 0.70
+            confidence: 0.70,
+            originalTitle: r.originalTitle,
         };
     }
     mapHdrLanguage(label) {
@@ -187,7 +188,8 @@ class TorrentScraperService {
             sizeInBytes: 0,
             season: season ?? undefined,
             lastUpdated: new Date(),
-            confidence: 0.70
+            confidence: 0.70,
+            originalTitle: r.originalTitle,
         };
     }
     calculateSizeInBytes(sizeStr) {

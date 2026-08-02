@@ -16,6 +16,8 @@ const STARCK_BASE = 'https://www.starck-oficial.com';
 export interface StarckTorrent {
   magnet: string;
   infoHash: string;
+  /** Título original extraído do HTML do post ("Nome Original: ...") */
+  originalTitle?: string;
 }
 
 // ── Config do axios (igual TPB/WordPress) ─────────────────────────────
@@ -70,15 +72,41 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Extrai magnets base64 da página de post
+//  PASSO 2: Extrai magnets base64 + Nome Original da página de post
 // ═══════════════════════════════════════════════════════════════════════
 
-function decodeBase64Magnets(html: string): StarckTorrent[] {
+function decodeBase64Magnets(html: string): { magnets: StarckTorrent[]; originalTitle?: string } {
+  const $$ = cheerio.load(html);
+
+  // ═══ Extrai Nome Original do DOM ═══
+  // Estrutura: <span>Nome Original:</span><span>The Matrix Resurrections</span>
+  const nomeOrigSpan = $$('span').toArray().find(el => /Nome\s+Original/i.test($$(el).text()));
+  const originalTitle = nomeOrigSpan
+    ? $$(nomeOrigSpan).next('span').text().trim() || undefined
+    : undefined;
+
+  // ═══ Extrai magnets (base64) ═══
   const results: StarckTorrent[] = [];
   const seen = new Set<string>();
 
   const b64Regex = /[A-Za-z0-9+/]{60,}={0,2}/g;
   let match;
+
+  // Primeiro encontra as posições de todos os marcadores de idioma no texto
+  const bodyText = ($$('body').text() || '').replace(/\s+/g, ' ');
+  // Encontra marcadores de LEGENDADO no texto (para filtrar depois)
+  const legendadoPositions: number[] = [];
+  const legendadoRe = /\b(?:legendado|legendada|legenda)\b/gi;
+  let lm;
+  while ((lm = legendadoRe.exec(bodyText)) !== null) {
+    legendadoPositions.push(lm.index);
+  }
+  // Encontra o PRIMEIRO marcador LEGENDADO (boundary)
+  // Starck: "Dublado Download 1080p" → magnet → "Dual Áudio Download 2160p" → magnet
+  // Se tiver "Legendado Download", a partir dali são legendados
+  const firstLegendadoIdx = legendadoPositions.length > 0
+    ? Math.min(...legendadoPositions)
+    : bodyText.length;
 
   while ((match = b64Regex.exec(html)) !== null) {
     const b64 = match[0];
@@ -94,16 +122,32 @@ function decodeBase64Magnets(html: string): StarckTorrent[] {
       const btihMatch = decoded.match(/btih:([a-fA-F0-9]{40})/i);
       if (!btihMatch) continue;
 
+      // Verifica se o magnet está DEPOIS do primeiro marcador LEGENDADO
+      if (firstLegendadoIdx < bodyText.length) {
+        // Pega o contexto próximo ao magnet no texto
+        const dnMatch = decoded.match(/dn=([^&]+)/i);
+        const dn = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : '';
+        const dnIdx = bodyText.indexOf(dn.substring(0, 20));
+        if (dnIdx !== -1 && dnIdx >= firstLegendadoIdx) {
+          continue; // magnet está na seção legendada → pular
+        }
+        // Também verifica se o magnet NAME contém "legendado"
+        if (/legendado|legendada/i.test(dn)) {
+          continue;
+        }
+      }
+
       results.push({
         magnet: decoded,
         infoHash: btihMatch[1].toLowerCase(),
+        originalTitle,
       });
     } catch {
       // Base64 inválido, ignora
     }
   }
 
-  return results;
+  return { magnets: results, originalTitle };
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -131,7 +175,8 @@ export async function searchStarck(
         batch.map(async (item) => {
           try {
             const res = await axios.get(item.postUrl, axiosConfig);
-            return decodeBase64Magnets(res.data);
+            const result = decodeBase64Magnets(res.data);
+            return result.magnets;
           } catch {
             return [];
           }

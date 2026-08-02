@@ -13,6 +13,8 @@ export interface TorrentResult {
     season?: number;
     lastUpdated: Date;
     confidence: number;
+    /** Título original extraído do HTML do post (ex: BLUDV "Título Original: ...") */
+    originalTitle?: string;
 }
 
 export interface TorrentIndexerResult {

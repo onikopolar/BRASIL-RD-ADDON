@@ -255,6 +255,13 @@ export class WordPressScraper {
 
     if (!magnetLinks.length) return [];
 
+  // ═══ FILTRO ANTI-LEGENDADO: só processa magnets entre DUAL ÁUDIO e LEGENDADO ═══
+    // Comando estrutura: :: DUAL ÁUDIO :: → magnets → :: LEGENDADO :: → magnets (ignorar)
+    const { dualIndex, legendadoIndex } = this.findSectionBoundaries($, content);
+    if (legendadoIndex !== null) {
+      logger.debug(`WP: limite LEGENDADO encontrado — ignorando magnets após posição HTML ${legendadoIndex}`);
+    }
+
     const metadata = this.extractPostMetadata($, content);
     const seriesInfo = this.extractSeriesEpisodes($, content, title);
 
@@ -270,6 +277,20 @@ export class WordPressScraper {
 
       const magnet = $(el).attr('href');
       if (!magnet) continue;
+
+      // ═══ Pula magnets FORA da seção DUAL (antes do DUAL ou depois do LEGENDADO) ═══
+      if (legendadoIndex !== null || dualIndex !== null) {
+        if (el.startIndex !== undefined) {
+          if (dualIndex !== null && el.startIndex < dualIndex) continue; // antes do DUAL
+          if (legendadoIndex !== null && el.startIndex >= legendadoIndex) continue; // depois do LEGENDADO
+        } else {
+          const hrefPos = content.indexOf(magnet);
+          if (hrefPos !== -1) {
+            if (dualIndex !== null && hrefPos < dualIndex) continue;
+            if (legendadoIndex !== null && hrefPos >= legendadoIndex) continue;
+          }
+        }
+      }
 
       // Filtra por query: se post é relevante (título bate), extrai tudo.
       // Se post é genérico (ex: "Listão"), filtra cada magnet pelo texto ao redor.
@@ -329,6 +350,7 @@ export class WordPressScraper {
         season,
         lastUpdated: new Date(post.date || Date.now()),
         confidence: 0.85,
+        originalTitle: metadata.originalTitle,
       });
     }
 
@@ -339,6 +361,7 @@ export class WordPressScraper {
     quality?: string;
     size?: string;
     language?: string;
+    originalTitle?: string;
   } {
     const text = $('body').text() || $.text() || content.replace(/<[^>]+>/g, '');
 
@@ -346,10 +369,19 @@ export class WordPressScraper {
     const sizeMatch = text.match(/Tamanho[:\s]*([^\n<]+)/i);
     const audioMatch = text.match(/Áudio[:\s]*([^\n<]+)/i);
 
+    // Extrai Título Original da ficha técnica
+    // Padrão: "Título Original: Nome" ou "Titulo Original: Nome"
+    const originalTitleMatch = text.match(/T[ií]tulo\s+Original[:\s]+([^\n<]+)/i);
+    const rawOriginal = originalTitleMatch?.[1]
+      ? originalTitleMatch[1].replace(/\(\d{4}\)$/, '').trim()
+      : undefined;
+    const originalTitle = (rawOriginal && rawOriginal.length >= 3) ? rawOriginal : undefined;
+
     return {
       quality: qualityMatch ? qualityMatch[1].trim() : undefined,
       size: sizeMatch ? sizeMatch[1].trim() : undefined,
       language: audioMatch ? audioMatch[1].trim() : undefined,
+      originalTitle,
     };
   }
 
@@ -517,5 +549,85 @@ export class WordPressScraper {
     if (unit === 'MB') return num * 1024 * 1024;
     if (unit === 'KB') return num * 1024;
     return 0;
+  }
+
+  /** Encontra os limites da seção DUAL ÁUDIO no HTML.
+   *  Comando estrutura real:
+   *    <h2>:: DUAL ÁUDIO ::</h2>   ← dualIndex (início da coleta)
+   *      ...magnets DUAL...
+   *    <h2>:: LEGENDADO ::</h2>    ← legendadoIndex (fim da coleta)
+   *      ...magnets LEGENDADO (ignorados)...
+   *
+   *  NÃO confunde com metadados ("Legenda: Português") nem títulos de post.
+   */
+  private findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
+    // Procura APENAS em h2 e strong — são os marcadores de seção reais
+    const selectors = ['h2', 'strong'];
+    let dualIndex: number | null = null;
+    let legendadoIndex: number | null = null;
+
+    for (const sel of selectors) {
+      const elements = $(sel);
+      for (let i = 0; i < elements.length; i++) {
+        const text = $(elements[i]).text().trim();
+
+        // Detecta :: DUAL ÁUDIO :: como início da seção
+        if (dualIndex === null && /::\s*DUAL\s+[ÁA]UDIO\s*::/i.test(text)) {
+          const html = $(elements[i]).toString();
+          const pos = content.indexOf(html);
+          if (pos !== -1) dualIndex = pos;
+        }
+
+        // Detecta :: LEGENDADO :: como fim da seção (apenas depois do DUAL)
+        if (dualIndex !== null && legendadoIndex === null && /::\s*LEGENDADO\s*::/i.test(text)) {
+          const html = $(elements[i]).toString();
+          const pos = content.indexOf(html);
+          if (pos !== -1 && pos > dualIndex) legendadoIndex = pos;
+        }
+      }
+    }
+
+    // Fallback: se não achou :: DUAL ÁUDIO ::, procura qualquer DUAL em h2/strong
+    if (dualIndex === null) {
+      for (const sel of selectors) {
+        const elements = $(sel);
+        for (let i = 0; i < elements.length; i++) {
+          const text = $(elements[i]).text().trim();
+          if (/\bDUAL\s+[ÁA]UDIO\b/i.test(text) && !/ADICIONADO/i.test(text)) {
+            const html = $(elements[i]).toString();
+            const pos = content.indexOf(html);
+            if (pos !== -1) { dualIndex = pos; break; }
+          }
+        }
+        if (dualIndex !== null) break;
+      }
+    }
+
+    // Fallback legendado: procura :: LEGENDADO :: ou LEGENDADO standalone em h2/strong
+    if (legendadoIndex === null) {
+      for (const sel of selectors) {
+        const elements = $(sel);
+        for (let i = 0; i < elements.length; i++) {
+          const text = $(elements[i]).text().trim();
+          // Só match se for "LEGENDADO" standalone (não "Legenda:" que é metadata)
+          if (/\bLEGENDADO\b/.test(text) && !/:/.test(text)) {
+            const html = $(elements[i]).toString();
+            const pos = content.indexOf(html);
+            if (pos !== -1 && (dualIndex === null || pos > dualIndex)) {
+              legendadoIndex = pos;
+              break;
+            }
+          }
+        }
+        if (legendadoIndex !== null) break;
+      }
+    }
+
+    return { dualIndex, legendadoIndex };
+  }
+
+  /** @deprecated — substituído por findSectionBoundaries */
+  private findLegendadoBoundary($: any, content: string): number | null {
+    return this.findSectionBoundaries($, content).legendadoIndex;
   }
 }

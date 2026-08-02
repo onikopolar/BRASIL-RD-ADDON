@@ -27,8 +27,12 @@ export class LanguageDetector {
     return LanguageDetector.instance;
   }
 
-  private readonly indicadoresPt: Set<string> = new Set(INDICADORES_BRASIL_TORRENTS);
-  private readonly indicadoresEn: Set<string> = new Set(INDICADORES_INTERNACIONAL_TORRENTS);
+  private readonly indicadoresPt: Set<string> = new Set(
+    INDICADORES_BRASIL_TORRENTS.map(w => w.toLowerCase())
+  );
+  private readonly indicadoresEn: Set<string> = new Set(
+    INDICADORES_INTERNACIONAL_TORRENTS.map(w => w.toLowerCase())
+  );
 
   verificarIdioma(tituloTorrent: string): {
     ehPortugues: boolean;
