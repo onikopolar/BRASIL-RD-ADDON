@@ -32,10 +32,14 @@ export const INTERNATIONAL_RELEASE_GROUPS = [
   'skgtv', 'rartv', 'ettv', 'eztv', 'vtv', 'yts', 'yify', 'rarbg',
   'turbo', 'cakes', 'galaxyrg', 'ctrlhd', 'framestor', 'tayto', 'ntb',
   'cmrg', 'evolve', 'mteam', 'chd', 'hds', 'fum', 'tbs', 'flux', 'tgx',
-  'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws', 'xforce',
-  'sva', 'exc', 'phd', 'grym', 'jyk', 'kings', 'dimension', 'sparks',
-  'geckos', 'loki', 'memento', 'quid', 'mazemaze', 'kognitiv',
-  'anoxmous', 'bamboozle', 'cab', 'c0ke', 'cm8', 'crimson', 'drones', 'ebi', 'rartv', '[rartv]'
+  'ife', 'legion', 'mrm', 'playbd', 'strife', 'viet', 'ws',
+
+  'sva', 'exc', 'phd', 'grym', 'jyk', 
+  'sparks',
+  'geckos', 'quid', 'mazemaze', 'kognitiv',
+  'anoxmous', 'bamboozle', 'cab', 'c0ke', 'cm8', 'crimson', 'drones', 'ebi', 'rartv', '[rartv]',
+  'nogrp', 'nogroup', 'unknown',
+  'ben', 'benth',
 ];
 
 // Lista específica de trackers internacionais conhecidos

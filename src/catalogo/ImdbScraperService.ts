@@ -182,6 +182,16 @@ export class ImdbScraperService {
         });
       }
 
+      // Se título original é não-latino, busca em inglês (animes, etc)
+      if (originalTitle && !/^[a-z0-9\s\-\.':,!]+$/i.test(originalTitle)) {
+        const enDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, mediaType === 'tv' ? 'tv' : 'movie', 'en-US');
+        const enTitle = mediaType === 'tv' ? enDetails?.name : enDetails?.title;
+        if (enTitle) {
+          logger.debug('TMDB título original trocado para EN', { imdbId, original: enTitle.substring(0, 40) });
+          originalTitle = enTitle;
+        }
+      }
+
       if (!originalTitle) {
         logger.warn('TMDB: sem título', { imdbId });
         return this.createEmptyResult(imdbId);
@@ -282,14 +292,14 @@ export class ImdbScraperService {
     }
   }
 
-  private async fetchDetailsFromTMDB(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<any> {
+  private async fetchDetailsFromTMDB(tmdbId: number, mediaType: 'movie' | 'tv', langOverride?: string): Promise<any> {
     try {
       const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
       
       const response = await axios.get(`${this.tmdbBaseUrl}/${endpoint}/${tmdbId}`, {
         params: {
           api_key: this.tmdbApiKey,
-          language: this.language
+          language: langOverride || this.language
         },
         timeout: 10000
       });

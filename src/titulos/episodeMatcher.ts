@@ -230,7 +230,8 @@ export class EpisodeMatcher {
       /\bseason\s*\d{1,3}\b/,      // Season 1, season01
       /\bt\d{1,3}\b/,              // T1, T01 (usado em sites BR)
       /\btemporada\s*\d{1,3}\b/,   // Temporada 1
-      /\b\d{1,2}ª?\s*temporada\b/  // 1ª temporada
+      /\b\d{1,2}ª?\s*temporada\b/, // 1ª temporada
+      /\b\d{1,2}x\d{1,3}\b/,       // 01x11, 8x262
     ];
     return padroes.some(p => p.test(lower));
   }

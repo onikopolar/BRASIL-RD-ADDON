@@ -223,11 +223,6 @@ export class CatalogProvider {
     return match ? parseInt(match[1]) : null;
   }
 
-  private extrairEpisodioDoTitulo(title: string): string | null {
-    const m = title.match(/S(\d+)\s*[Ee](\d+)/i);
-    return m ? `S${m[1]}E${m[2]}` : null;
-  }
-
   private async filterAndValidateTorrents(
     torrents: ScrapedTorrent[],
     imdbId: string | null,
@@ -239,7 +234,6 @@ export class CatalogProvider {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
     // ═══ PASSO 1: Parse de TODOS os magnets (via parse-torrent) ═══
-    // Injeta canonicalName ANTES de qualquer filtro — o magnet é a fonte da verdade
     const dadosMagnets = await Promise.all(
       torrents.map(t => analisarMagnet(t.magnet).catch(() => null))
     );
@@ -248,82 +242,32 @@ export class CatalogProvider {
       if (dadosMagnets[i]?.infoHash) t.magnetInfoHash = dadosMagnets[i]!.infoHash;
     });
 
-    // ═══ PASSO 1.5: Filtra episódios de série quando request é movie ═══
-    if (request.type === 'movie') {
-      const antes = torrents.length;
-      torrents = torrents.filter(t => {
-        const nome = t.canonicalName || t.title;
-        const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(nome);
-        if (temEpisodio) {
-          this.logger.debug('Ignorado episodio em filme', { titulo: nome.substring(0, 60) });
-          return false;
-        }
-        return true;
-      });
-      if (torrents.length < antes) {
-        this.logger.info('Filtrado episodios de filme', { removidos: antes - torrents.length, restantes: torrents.length });
-      }
-    }
-
-    // ═══ PASSO 2: Pre-filtro PT-BR usando canonicalName (magnet) ═══
-    // Verifica APENAS indicadores explicitos de idioma (dual, dublado, grupos BR).
-    // NAO usa TMDB — nomes de magnet e titulos TMDB nao tem relacao direta.
-    // O dn do magnet ja contem o idioma real do torrent.
-    const ptTorrents = torrents.filter(t => {
-      const nome = t.canonicalName || t.title;
-      const resultado = this.titleFilter.verificarIdiomaDetalhado(nome);
-
-      // Se o provider explicitamente diz que é Legendado → rejeitar direto
-      if (t.language && LEGENDADO_REGEX.test(t.language)) {
-        return false;
-      }
-
-      // Se o provider detectou idioma PT-BR (ex: BLUDV/Comando via HTML),
-      // só rejeita se o magnet tiver indicadores INTERNACIONAIS FORTES (rartv, ntb, etc).
-      // Magnet sem indicador nenhum (ex: "Rick.Morty.S05E01.1080p.WEB-DL") → confia no HTML.
-      if (t.language && /portugu[eê]s|dual|dublado/i.test(t.language)) {
-        const temInternacional = resultado.palavrasEn && resultado.palavrasEn.length > 0;
-        if (!temInternacional) return true;
-        return false; // HTML PT-BR mas magnet tem rartv/ntb/etc
-      }
-
-      return resultado.ehPortugues;
+    // ═══ PASSO 2: Rejeitar Legendado (hard reject) ═══
+    // O resto da validação (PT-BR, similaridade) é delegado ao titleFilter
+    const naoLegendado = torrents.filter(t => {
+      if (t.language && LEGENDADO_REGEX.test(t.language)) return false;
+      return true;
     });
-    const falsoPositivo = torrents.filter(t =>
-      !ptTorrents.includes(t) && t.canonicalName
-    );
-    if (falsoPositivo.length > 0) {
-      const enWords = new Set<string>();
-      falsoPositivo.forEach(t => {
-        const dn = t.canonicalName || '';
-        const matches = dn.match(/\[([^\]]+)\]$/);
-        if (matches) matches[1].split(',').forEach(w => enWords.add(w.trim()));
-      });
-      this.logger.info(`🧹 ${falsoPositivo.length} falsos PT-BR rejeitados (${[...enWords].join(', ')})`, { imdbId });
-    }
 
     // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
-    // Usa canonicalName do magnet quando disponível, scraper title como fallback
     const results = await Promise.allSettled(
-      ptTorrents.map((t) => {
+      naoLegendado.map((t) => {
         const tituloParaValidar = t.canonicalName || t.title;
         return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
       })
     );
 
     const valid: ScrapedTorrent[] = [];
-    const invalid: ScrapedTorrent[] = torrents.filter(t => !ptTorrents.includes(t));
+    const invalid: ScrapedTorrent[] = [];
 
     results.forEach((result, i) => {
-      const torrent = ptTorrents[i];
+      const torrent = naoLegendado[i];
       if (result.status === 'fulfilled' && result.value.matches) {
-        const epExtraido = this.extrairEpisodioDoTitulo(torrent.title);
         this.logger.info('🎯 EPISÓDIO ACEITO', {
           imdbId,
           alvo: `S${season || '?'}E${episode || '?'}`,
           torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
           canonical: !!torrent.canonicalName,
-          episodioTorrent: epExtraido || 'N/A',
           provider: torrent.provider,
           infoHash: dadosMagnets[torrents.indexOf(torrent)]?.infoHash?.substring(0, 12) || 'N/A'
         });

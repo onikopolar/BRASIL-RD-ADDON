@@ -327,11 +327,17 @@ export class SimilarityCalculator {
       if (palavras.length > maxWords) maxWords = palavras.length;
     }
     const temSxxExx = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
-    if (minWords <= 1 && maxWords <= 1 && !temSxxExx) {
+    if (minWords <= 1 && maxWords <= 1) {
+      // Pra títulos TMDB de 1 palavra: só permite palavras técnicas extras
+      // Qualquer palavra NÃO-técnica além do título TMDB → ambiguidade (ex: "Dexter Ressurreição")
+      const tmdbWord = movieInfo.allTitles[0].toLowerCase();
       const palavrasTitulo = this.normalizarParaComparacao(tituloTorrent)
         .split(' ').filter(w => w.length > 0 && !/^\d+$/.test(w));
-      if (palavrasTitulo.length > minWords + 1) {
-        return { passou: false, motivo: `TMDB de 1 palavra ("${movieInfo.allTitles[0]}") em título maior — ambiguo` };
+      const palavrasEstranhas = palavrasTitulo.filter(w =>
+        w !== tmdbWord && !isTechnicalWord(w)
+      );
+      if (palavrasEstranhas.length > 1) {
+        return { passou: false, motivo: `TMDB de 1 palavra ("${tmdbWord}") — palavras extras: [${palavrasEstranhas.join(', ')}]` };
       }
     }
     if (anoTorrent === null || anoTmdb === undefined) {
