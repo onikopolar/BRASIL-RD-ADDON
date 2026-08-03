@@ -64,7 +64,18 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
       });
     });
 
-    return results.slice(0, 40);
+    // ── Pós-filtro: título do post deve conter TODAS as palavras da query ──
+    // Evita que "last twilight" retorne "The Last of Us" (só tem "last", não "twilight")
+    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
+    const filtered = queryWords.length > 1
+      ? results.filter(r => {
+          const titleLower = r.title.toLowerCase();
+          return queryWords.every(qw => titleLower.includes(qw));
+        })
+      : results;
+
+    logger.debug(`Starck: ${results.length} links → ${filtered.length} após filtro de query "${query.substring(0, 40)}"`);
+    return filtered.slice(0, 40);
   } catch (err: any) {
     logger.warn('Starck busca falhou', { query: query.substring(0, 50), error: err.message });
     return [];
