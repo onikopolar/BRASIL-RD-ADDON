@@ -52,7 +52,7 @@ export class TorrentScraperService {
             const ptDiferente = qPt !== qEn;
 
             const [wpResults, starckResults, hdrResults] = await Promise.all([
-                // WordPress + Bludv
+                // WordPress + Bludv (Comando e Starck via WP API não funciona — Starck retorna vazio)
                 Promise.all([
                     this.bludvScraper.search(qEn, type).catch(() => []),
                     this.bludvScraper.search(qPt, type).catch(() => []),
@@ -67,7 +67,7 @@ export class TorrentScraperService {
                     });
                 }).catch(() => []),
 
-                // Starck
+                // Starck (scraper dedicado — WP API não funciona pra Starck)
                 Promise.all([
                     searchStarck(qEn, type),
                     ptDiferente ? searchStarck(qPt, type) : Promise.resolve([])
@@ -82,10 +82,13 @@ export class TorrentScraperService {
                 // HDR
                 Promise.all([
                     searchHdr(qEn, type),
-                    ptDiferente ? searchHdr(qPt, type) : Promise.resolve([])
-                ]).then(([en, pt]) => {
+                    ptDiferente ? searchHdr(qPt, type) : Promise.resolve([]),
+                    // HDR usa "1ª Temporada" em vez de "Temporada 1" — tenta formato ordinal
+                    // HDR search é case-sensitive, capitaliza primeira letra
+                    targetSeason ? searchHdr(`${query.replace(/\s+Temporada\s+\d+$/i, '').replace(/\b\w/g, (c: string) => c.toUpperCase())} ${targetSeason}ª Temporada`, type) : Promise.resolve([]),
+                ]).then(([en, pt, ord]) => {
                     const seen = new Set<string>();
-                    return [...en, ...pt]
+                    return [...en, ...pt, ...ord]
                         .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapHdrResult(r, type))
                         .filter((r): r is TorrentResult => r !== null);
@@ -159,7 +162,7 @@ export class TorrentScraperService {
     //  MAPEAMENTOS (simplificados — qualidade/idioma delegados ao pipeline)
     // ═══════════════════════════════════════════════════════════
 
-    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string; year?: number }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
         // Usa o nome real do magnet (dn=) como título — tem season, idioma e qualidade
         const dnMatch = r.magnet.match(/dn=([^&]+)/i);
@@ -183,17 +186,8 @@ export class TorrentScraperService {
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
+            year: r.year,
         };
-    }
-
-    private mapHdrLanguage(label: string): string {
-        switch (label) {
-            case 'Dual Áudio': return 'Dual Áudio';
-            case 'Dublado': return 'Dublado';
-            case 'Legendado': return 'Legendado';
-            case 'Nacional': return 'Nacional';
-            default: return 'desconhecido';
-        }
     }
 
     private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string }, type: 'movie' | 'series'): TorrentResult | null {
@@ -221,6 +215,16 @@ export class TorrentScraperService {
         };
     }
 
+    private mapHdrLanguage(label: string): string {
+        switch (label) {
+            case 'Dual Áudio': return 'Dual Áudio';
+            case 'Dublado': return 'Dublado';
+            case 'Legendado': return 'Legendado';
+            case 'Nacional': return 'Nacional';
+            default: return 'desconhecido';
+        }
+    }
+
     // ═══════════════════════════════════════════════════════════
     //  HELPERS
     // ═══════════════════════════════════════════════════════════
@@ -239,7 +243,7 @@ export class TorrentScraperService {
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: 3 // Bludv, WP Comando, Starck, HDR
+            provedoresAtivos: 3 // Bludv, WP (Comando + Starck), HDR
         };
     }
 }

@@ -219,7 +219,7 @@ export class WordPressScraper {
     
     // Se não achou magnets, procura links de redirect (systemads.net, etc)
     if (!magnetLinks.length) {
-      const redirectLinks = $('a[href*="systemads.net"], a[href*="link.tl"], a[href*="encurta.net"]');
+      const redirectLinks = $('a[href*="systemads.net"], a[href*="link.tl"], a[href*="encurta.net"], a[href*="filmedl.com"]');
       if (redirectLinks.length) {
         logger.debug(`WP: ${redirectLinks.length} redirects encontrados, resolvendo...`);
         const resolvedMagnets: { el: any; magnet: string }[] = [];
@@ -351,38 +351,72 @@ export class WordPressScraper {
         lastUpdated: new Date(post.date || Date.now()),
         confidence: 0.85,
         originalTitle: metadata.originalTitle,
+        year: metadata.year,
       });
     }
 
     return results;
   }
 
-  private extractPostMetadata($: any, content: string): {
+  // ═══ Extrai metadados do post via DOM estruturado ═══
+  // Comando: <b>Título Original:</b> The Menu<br />
+  // Starck:  <span>Nome Original:</span><span>The Menu</span>
+  private extractPostMetadata($: any, _content: string): {
     quality?: string;
     size?: string;
     language?: string;
     originalTitle?: string;
+    year?: number;
   } {
-    const text = $('body').text() || $.text() || content.replace(/<[^>]+>/g, '');
+    // Helper: extrai valor de um campo do metadata pelo texto do <b>/<strong>
+    const getMetaValue = (fieldNames: string[]): string | undefined => {
+      for (const name of fieldNames) {
+        const el = $('b, strong').toArray().find((el: any) => {
+          const t = $(el).text().trim().toLowerCase();
+          return t === name.toLowerCase() || t === (name + ':').toLowerCase();
+        });
+        if (!el) continue;
+        const parentHtml = $(el).parent().html() || '';
+        const elHtml = $(el).toString();
+        const idx = parentHtml.indexOf(elHtml);
+        if (idx === -1) continue;
+        const after = parentHtml.substring(idx + elHtml.length);
 
-    const qualityMatch = text.match(/Qualidade[:\s]*([^\n<]+)/i);
-    const sizeMatch = text.match(/Tamanho[:\s]*([^\n<]+)/i);
-    const audioMatch = text.match(/Áudio[:\s]*([^\n<]+)/i);
+        // Tenta texto direto após a tag (ex: <b>Lançamento:</b> 2024<br>)
+        const endIdx = after.indexOf('<');
+        const directValue = (endIdx !== -1 ? after.substring(0, endIdx) : after).replace(/^[:\s]+/, '').trim();
+        if (directValue && directValue.length >= 2) return directValue;
 
-    // Extrai Título Original da ficha técnica
-    // Padrão: "Título Original: Nome" ou "Titulo Original: Nome"
-    const originalTitleMatch = text.match(/T[ií]tulo\s+Original[:\s]+([^\n<]+)/i);
-    const rawOriginal = originalTitleMatch?.[1]
-      ? originalTitleMatch[1].replace(/\(\d{4}\)$/, '').trim()
+        // Fallback: valor dentro de <a> (ex: <b>Lançamento:</b> <a href="...">2024</a>)
+        const linkMatch = after.match(/<a\b[^>]*>([^<]+)<\/a>/i);
+        if (linkMatch?.[1]?.trim().length >= 2) return linkMatch[1].trim();
+      }
+      return undefined;
+    };
+
+    // Starck: <span>Nome Original:</span><span>The Menu</span>
+    const starckOrig = $('span').toArray().find((el: any) => /Nome\s+Original/i.test($(el).text()));
+    const starckTitle = starckOrig ? $(starckOrig).next('span').text().trim() : undefined;
+
+    const originalTitleRaw = starckTitle
+      || getMetaValue(['Título Original', 'Titulo Original']);
+    const originalTitle = (originalTitleRaw && originalTitleRaw.length >= 3)
+      ? originalTitleRaw.replace(/\(\d{4}\)$/, '').trim()
       : undefined;
-    const originalTitle = (rawOriginal && rawOriginal.length >= 3) ? rawOriginal : undefined;
 
     return {
-      quality: qualityMatch ? qualityMatch[1].trim() : undefined,
-      size: sizeMatch ? sizeMatch[1].trim() : undefined,
-      language: audioMatch ? audioMatch[1].trim() : undefined,
+      quality: getMetaValue(['Qualidade']),
+      size: getMetaValue(['Tamanho']),
+      language: getMetaValue(['Áudio', 'Idioma']),
       originalTitle,
+      year: this.parseYear(getMetaValue(['Lançamento'])),
     };
+  }
+
+  private parseYear(value: string | undefined): number | undefined {
+    if (!value) return undefined;
+    const m = value.match(/\b(19|20)\d{2}\b/);
+    return m ? parseInt(m[0]) : undefined;
   }
 
   private extractSeriesEpisodes(
@@ -466,6 +500,17 @@ export class WordPressScraper {
   // Segue um link de redirect (systemads.net, etc) para achar o magnet real
   private async resolveRedirectToMagnet(redirectUrl: string): Promise<string | null> {
     try {
+      // ═══ Starck: filmedl.com/?id=BASE64 — magnet no próprio URL ═══
+      if (redirectUrl.includes('filmedl.com')) {
+        const idMatch = redirectUrl.match(/[?&]id=([^&]+)/i);
+        if (idMatch) {
+          const decoded = decodeURIComponent(idMatch[1]);
+          const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+          if (magnet.startsWith('magnet:?')) return magnet;
+        }
+        return null;
+      }
+
       // Não segue redirects automaticamente — queremos pegar o Location header
       const resp = await axios.get(redirectUrl, {
         timeout: 8000,

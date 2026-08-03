@@ -1,6 +1,4 @@
-import path from 'path';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
-import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { TorboxService } from '../debrid/RealDebridService.js';
 import { RdTorrentCacheService } from '../debrid/RdTorrentCacheService.js';
 import { CacheService } from '../debrid/CacheService.js';
@@ -11,25 +9,28 @@ import { getStatusMessage } from './statusHelpers.js';
 // Envia video MP4 de status diretamente (sem redirect) para o Stremio Web tocar
 function sendStatusVideo(res: any, resolveLogger: Logger, requestId: string, videoUrl: string) {
   const filename = videoUrl.split('/').pop() || 'downloading_v2.mp4';
-  const filePath = path.join(__dirname, '..', 'videos', filename);
 
-  resolveLogger.info('🎬 ENVIANDO vídeo de status DIRETO (sendFile)', {
+  resolveLogger.info('🎬 ENVIANDO vídeo de status DIRETO (redirect)', {
     requestId,
     filename,
   });
 
-  res.setHeader('Content-Type', 'video/mp4');
-  res.setHeader('Accept-Ranges', 'bytes');
+  // Redirect para o vídeo estático (compatível com Android/Web)
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.sendFile(filePath);
+  res.redirect(302, `/static/videos/${filename}`);
 }
 
 const logger = new Logger('ResolveRoutes');
-const autoMagnetService = new AutoMagnetService();
 const cacheService = new CacheService();
 const rdTorrentCacheService = new RdTorrentCacheService();
+const torboxService = new TorboxService(); // singleton — evita recriar HTTP client por request
 const CACHE_TTL = 24 * 60 * 60 * 1000;
+const resolveLogger = new Logger('🔄RESOLVE'); // singleton — evita recriar Logger por request
+
+// Dedup de requisições em voo: evita que múltiplos RESOLVE simultâneos
+// pro mesmo infoHash disparem N chamadas ao Torbox
+const emVoo = new Map<string, Promise<any>>();
 
 function createStreamFromStaticResponse(
     staticResponseService: StaticResponseService,
@@ -65,25 +66,12 @@ async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
 
 // Essa função NUNCA rejeita – sempre retorna um objeto com status
 async function processMagnetWithTorbox(
-    magnet: string, apiKey: string, season?: number, episode?: number, type: string = 'movie', quality?: string
+    magnet: string, apiKey: string, infoHash: string,
+    season?: number, episode?: number, type: string = 'movie', quality?: string
 ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string; torrentId?: string }> {
-    const magnetHash = await extrairInfoHashDoMagnet(magnet);
-    if (!magnetHash) return { success: false, status: 'error', message: 'Magnet link inválido' };
-
-    const isSeries = type === 'series' || season !== undefined;
-    const magnetData = {
-        imdbId: 'resolve-' + Date.now(),
-        title: isSeries ? `Stream S${season || '?'}E${episode || '?'}` : 'Stream Filme',
-        magnet, quality: '1080p', seeds: 50,
-        category: isSeries ? 'serie' : 'filme', language: 'pt-BR',
-        addedAt: new Date().toISOString(), imdbSeason: season, imdbEpisode: episode
-    };
-
-    const torboxService = new TorboxService();
-
     // Tenta buscar no cache / Torbox existente
     try {
-        const cached = await rdTorrentCacheService.getTorrentId(magnetHash, apiKey, torboxService);
+        const cached = await rdTorrentCacheService.getTorrentId(infoHash, apiKey, torboxService);
         if (cached.torrentId) {
             // 1 chamada à API: busca info e reusa no getStreamLink (evita 2ª chamada)
             const details = await torboxService.getTorrentInfo(cached.torrentId, apiKey);
@@ -102,31 +90,70 @@ async function processMagnetWithTorbox(
         // Fallback: tenta adicionar o magnet
     }
 
-    // Tenta adicionar o magnet – nunca deixa a exceção escapar
+    // Magnet não existe no Torbox → adiciona diretamente
+    // (sem passar por processTorboxOnClick que chamaria findExistingTorrent de novo)
     try {
-        const processResult = await autoMagnetService.processTorboxOnClick(magnetData, apiKey);
-        return processResult as any;
-    } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
-        // "Download already queued" = torrent ja esta na fila, tratar como baixando
-        if (/already queued|already exists|already added/i.test(errorMessage)) {
+        const torrentId = await torboxService.addMagnet(magnet, apiKey);
+
+        try {
+            const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
+            const ready = torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached';
+            let streamLink: string | undefined;
+            if (ready) {
+                const linkResult = await rdTorrentCacheService.getStreamLink(
+                    torrentId, apiKey, season, episode, torboxService, quality, torrentInfo
+                );
+                streamLink = linkResult.streamLink || undefined;
+            }
             return {
                 success: true,
-                status: 'queued',
-                message: 'Torrent ja esta na fila do Torbox'
+                status: torrentInfo.download_state,
+                streamLink,
+                message: `Torrent adicionado: ${torrentInfo.download_state}`,
+                torrentId,
+            };
+        } catch (infoErr) {
+            // getTorrentInfo falhou → torrent em fila
+            return {
+                success: true,
+                status: 'downloading',
+                message: 'Torrent na fila do Torbox, aguardando processamento',
             };
         }
-        return {
-            success: false,
-            status: 'error',
-            message: errorMessage
-        };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+        if (/already queued|already exists|already added/i.test(errorMessage)) {
+            // Tenta achar o torrent existente via cache (já populei com getTorrentId acima? não — ele retornou null)
+            // Tenta findExistingTorrent agora (pode ter sido adicionado entre a 1ª tentativa e agora)
+            try {
+                const existing = await torboxService.findExistingTorrent(infoHash, apiKey);
+                if (existing?.id) {
+                    const tid = String(existing.id);
+                    const details = await torboxService.getTorrentInfo(tid, apiKey);
+                    let streamLink: string | undefined;
+                    if (details.download_state === 'completed' || details.download_state === 'cached') {
+                        const linkResult = await rdTorrentCacheService.getStreamLink(
+                            tid, apiKey, season, episode, torboxService, quality, details
+                        );
+                        streamLink = linkResult.streamLink || undefined;
+                    }
+                    return {
+                        success: true,
+                        status: details.download_state,
+                        streamLink,
+                        message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
+                        torrentId: tid,
+                    };
+                }
+            } catch {}
+            return { success: true, status: 'queued', message: 'Torrent já está na fila do Torbox' };
+        }
+        return { success: false, status: 'error', message: errorMessage };
     }
 }
 
 export const setupResolveRoutes = (app: any) => {
     app.get('/resolve/torbox/:apiKey/:infoHash/null/:fileIndex/:filename', async (req: any, res: any) => {
-        const resolveLogger = new Logger('🔄RESOLVE');
         const apiKey = req.params.apiKey;
         const infoHash = req.params.infoHash;
         const fileIndex = parseInt(req.params.fileIndex) || 0;
@@ -162,21 +189,40 @@ export const setupResolveRoutes = (app: any) => {
             return res.redirect(302, cachedDirectLink);
         }
 
-        resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
+        // Dedup em voo: se já tem requisição processando o mesmo infoHash, espera ela
+        const dedupKey = `${apiKey.substring(0,8)}:${infoHash}`;
+        let promiseEmVoo = emVoo.get(dedupKey);
+        if (!promiseEmVoo) {
+          promiseEmVoo = (async () => {
+            try {
+              resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
+                requestId: req._ultraDebugId,
+                infoHash,
+              });
+
+              if (!apiKey || apiKey.length < 10 || !infoHash || infoHash.length < 40) {
+                throw new Error('Parâmetros inválidos');
+              }
+
+              const magnetLink = `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
+              return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality);
+            } finally {
+              emVoo.delete(dedupKey);
+            }
+          })();
+          emVoo.set(dedupKey, promiseEmVoo);
+        } else {
+          resolveLogger.info('🔄 RESOLVE DEDUP - Aguardando requisição em voo', {
             requestId: req._ultraDebugId,
             infoHash,
-        });
+          });
+        }
 
         // Fallback de segurança: sempre teremos um stream para retornar
         let streamResponse: any = null;
 
         try {
-            if (!apiKey || apiKey.length < 10 || !infoHash || infoHash.length < 40) {
-                throw new Error('Parâmetros inválidos');
-            }
-
-            const magnetLink = `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
-            const tbResult = await processMagnetWithTorbox(magnetLink, apiKey, season, episode, type, quality);
+            const tbResult = await promiseEmVoo;
 
             resolveLogger.info('📊 RESULTADO TORBOX', {
                 requestId: req._ultraDebugId,
@@ -284,7 +330,10 @@ export const setupResolveRoutes = (app: any) => {
             const magnet = Buffer.from(req.params.magnet, 'base64').toString();
             if (!apiKey) throw new Error('API key obrigatória');
 
-            const tbResult = await processMagnetWithTorbox(magnet, apiKey, season, episode, type);
+            const magnetHash = await extrairInfoHashDoMagnet(magnet);
+            if (!magnetHash) throw new Error('Magnet inválido');
+
+            const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type);
 
             if (tbResult.success) {
                 if ((tbResult.status === 'ready' || tbResult.status === 'completed' || tbResult.status === 'cached') && tbResult.streamLink) {
@@ -343,7 +392,6 @@ export const setupResolveRoutes = (app: any) => {
             const apiKey = req.query.apiKey as string;
             if (!apiKey) return res.status(400).json({ success: false, error: 'API key obrigatória' });
 
-            const torboxService = new TorboxService();
             const magnetHash = await extrairInfoHashDoMagnet(magnet);
             if (!magnetHash) return res.status(400).json({ success: false, error: 'Magnet inválido' });
 

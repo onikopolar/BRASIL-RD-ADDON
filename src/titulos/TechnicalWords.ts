@@ -156,6 +156,8 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
 const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
   'coletanea', 'franquia', 'duologia', 'saga',
+  'all seasons', 'todas as temporadas', 'temporada completa', 'complete season',
+  'season pack', 'complete series', 'serie completa',
 ]);
 
 /** Verifica se o título do torrent é uma coletânea (trilogia, quadrilogia, etc.) */

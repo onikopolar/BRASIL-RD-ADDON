@@ -23,6 +23,7 @@ const clientInfo_js_1 = require("./middlewares/clientInfo.js");
 const rateLimit_js_1 = require("./middlewares/rateLimit.js");
 const MetricsService_js_1 = require("./catalogo/MetricsService.js");
 const ultraDebug_js_1 = require("./middlewares/ultraDebug.js");
+const etag_js_1 = require("./middlewares/etag.js");
 const RescrapeService_js_1 = require("./services/RescrapeService.js");
 const logger = new logger_js_1.Logger('Main');
 const cacheService = new CacheService_js_1.CacheService();
@@ -67,7 +68,7 @@ async function initializeDatabase() {
         }
     }
 }
-const cacheMaxAge = 600;
+const cacheMaxAge = 300;
 app.use((req, res, next) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
         res.setHeader('Cache-Control', `max-age=${cacheMaxAge}, public, must-revalidate`);
@@ -81,6 +82,10 @@ app.use((req, res, next) => {
     }
     next();
 });
+app.use((0, etag_js_1.etagMiddleware)({
+    excludePaths: ['/resolve'],
+    defaultMaxAge: 300,
+}));
 app.get('/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res) => {
     const ultraLogger = new logger_js_1.Logger('CONFIGURE');
     ultraLogger.info(' Servindo página de configuração HTML', {
@@ -90,6 +95,7 @@ app.get('/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res
         host: req.get('host'),
         protocol: req.protocol,
     });
+    res.setHeader('Cache-Control', 'max-age=3600, public');
     res.setHeader('content-type', 'text/html');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.end((0, configureTemplate_js_1.configureTemplate)(manifest_js_1.manifest));
@@ -107,8 +113,9 @@ app.get('/torbox=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 80),
     });
+    res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest_js_1.manifest);
 });
 app.get('/realdebrid=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0, ultraDebug_js_1.manifestDebugMiddleware)(), (req, res) => {
@@ -121,8 +128,9 @@ app.get('/realdebrid=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter
         host: req.get('host'),
         origin: req.get('origin'),
     });
+    res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest_js_1.manifest);
 });
 app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_js_1.torrentioRateLimiter, async (req, res) => {

@@ -20,6 +20,7 @@ import { clientInfoMiddleware } from './middlewares/clientInfo.js';
 import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit.js';
 import { metricsService } from './catalogo/MetricsService.js';
 import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug.js';
+import { etagMiddleware } from './middlewares/etag.js';
 import { RescrapeService } from './services/RescrapeService.js';
 
 const logger = new Logger('Main');
@@ -73,8 +74,10 @@ async function initializeDatabase() {
     }
 }
 
-// Cache middleware
-const cacheMaxAge = 600;
+// ── Cache + ETag middleware ──
+// Estratégia: Cache-Control de 5min (reduzido de 10min) + ETag para 304
+// Rotas específicas (manifest, resolve) definem seus próprios headers antes
+const cacheMaxAge = 300;
 app.use((req: any, res: any, next: any) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
         res.setHeader('Cache-Control', `max-age=${cacheMaxAge}, public, must-revalidate`);
@@ -89,6 +92,13 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
+// ETag: calcula hash do body, retorna 304 se If-None-Match bater
+// Exclui /resolve (já tem no-store, é streaming/redirect)
+app.use(etagMiddleware({
+    excludePaths: ['/resolve'],
+    defaultMaxAge: 300, // 5 min default
+}));
+
 // Configure
 app.get('/configure', configureDebugMiddleware(), (req: any, res: any) => {
     const ultraLogger = new Logger('CONFIGURE');
@@ -99,6 +109,7 @@ app.get('/configure', configureDebugMiddleware(), (req: any, res: any) => {
         host: req.get('host'),
         protocol: req.protocol,
     });
+    res.setHeader('Cache-Control', 'max-age=3600, public');
     res.setHeader('content-type', 'text/html');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.end(configureTemplate(manifest));
@@ -118,8 +129,9 @@ app.get('/torbox=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMidd
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 80),
     });
+    res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest);
 });
 
@@ -134,8 +146,9 @@ app.get('/realdebrid=:apiKey/manifest.json', torrentioRateLimiter, manifestDebug
         host: req.get('host'),
         origin: req.get('origin'),
     });
+    res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID');
+    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest);
 });
 

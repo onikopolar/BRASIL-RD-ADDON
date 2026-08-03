@@ -22,6 +22,8 @@ export interface HdrTorrent {
   language: string;
   /** Título original extraído do HTML do post */
   originalTitle?: string;
+  /** Ano de lançamento extraído do HTML do post */
+  year?: number;
 }
 
 // ── Config do axios ───────────────────────────────────────────────────
@@ -89,7 +91,7 @@ function extractLanguage(parentText: string): string {
   return '';
 }
 
-function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
+function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: string): HdrTorrent[] {
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
 
@@ -112,34 +114,59 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
     }
   }
 
-  // ═══ Encontra limites da seção DUAL ═══
-  // Estrutura: <h3>::VERSÃO DUAL ÁUDIO::</h3> ...magnets... <h3>::VERSÃO LEGENDADA::</h3>
-  let dualStartPos = -1;
-  let legendadoPos = html.length;
-
-  const h3Elements = $('h3').toArray();
-  for (let i = 0; i < h3Elements.length; i++) {
-    const text = $(h3Elements[i]).text().trim();
-    if (dualStartPos === -1 && /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i.test(text)) {
-      dualStartPos = html.indexOf($(h3Elements[i]).toString());
-    } else if (dualStartPos !== -1 && /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i.test(text)) {
-      legendadoPos = html.indexOf($(h3Elements[i]).toString());
-      break;
+  // ═══ Extrai Ano de Lançamento direto do DOM ═══
+  // Estrutura: <b>Lançamento</b>: 2020<br />
+  let year: number | undefined;
+  const lancamentoEl = $('b, strong').toArray().find(el => /^Lançamento$/i.test($(el).text().trim()));
+  if (lancamentoEl) {
+    const parentHtml = $(lancamentoEl).parent().html() || '';
+    const elHtml = $(lancamentoEl).toString();
+    const idx = parentHtml.indexOf(elHtml);
+    if (idx !== -1) {
+      const after = parentHtml.substring(idx + elHtml.length);
+      const endIdx = after.indexOf('<');
+      const raw = endIdx !== -1 ? after.substring(0, endIdx) : after;
+      const yearStr = raw.replace(/^[:\s]+/, '').trim();
+      const m = yearStr.match(/\b(19|20)\d{2}\b/);
+      if (m) year = parseInt(m[0]);
     }
   }
 
-  // Se não achou seção DUAL, verifica se o post TEM seção LEGENDADA
-  // Post 100% legendado → retorna vazio
-  if (dualStartPos === -1) {
-    const hasLegendadoSection = h3Elements.some(el => 
-      /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i.test($(el).text().trim())
-    );
-    if (hasLegendadoSection) {
-      return []; // post é só legendado, não retorna nada
+  // ═══ Encontra seções DUAL/LEGENDADO via flags ═══
+  // Estrutura: <h3>::DUBLADO::</h3> <div>...magnets...</div> <h3>::VERSÃO LEGENDADA::</h3>
+  const reDual = /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i;
+  const reLeg = /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i;
+
+  const h3Elements = $('h3').toArray();
+  const h3Texts: string[] = [];
+  let emSecaoDual = false;
+  let temSecaoDual = false;
+  let temSecaoLegendado = false;
+
+  for (let i = 0; i < h3Elements.length; i++) {
+    const text = $(h3Elements[i]).text().trim();
+    h3Texts.push(text);
+    if (reDual.test(text)) {
+      emSecaoDual = true;
+      temSecaoDual = true;
+    } else if (reLeg.test(text)) {
+      emSecaoDual = false;
+      temSecaoLegendado = true;
+      break; // tudo depois de LEGENDADO é ignorado
     }
+  }
+
+  // Post 100% legendado → retorna vazio
+  if (!temSecaoDual) {
+    if (temSecaoLegendado) {
+      logger.debug(`HDR LEGENDADO-only | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
+      return [];
+    }
+    logger.debug(`HDR sem DUAL/LEG | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
   }
 
   // ═══ Coleta magnets na seção DUAL ═══
+  // Itera todos os magnets e verifica se estão em seção DUAL via h3 precedente
   $('a[href^="magnet:"]').each((_i, el) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -147,11 +174,11 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
     const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
     if (!btihMatch) return;
 
-    // Verifica se o magnet está na seção DUAL
-    if (dualStartPos !== -1) {
-      const magnetHtml = $(el).toString();
-      const magnetPos = html.indexOf(magnetHtml);
-      if (magnetPos < dualStartPos || magnetPos >= legendadoPos) return;
+    // Se tem seção LEGENDADA, verifica se o magnet está antes do h3 LEGENDADO
+    if (temSecaoLegendado) {
+      const $prevH3 = $(el).prevAll('h3').first();
+      const prevText = $prevH3.text().trim();
+      if (reLeg.test(prevText)) return; // magnet em seção LEGENDADA → ignorar
     }
 
     // Tenta extrair informações do texto próximo ao magnet
@@ -175,6 +202,7 @@ function extractMagnetsFromPost(html: string, postTitle: string): HdrTorrent[] {
       size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
       language,
       originalTitle,
+      year,
     });
   });
 
@@ -194,7 +222,15 @@ export async function searchHdr(
   try {
     // PASSO 1: Busca → URLs de posts
     const links = await searchHdrLinks(query);
-    if (links.length === 0) return [];
+    if (links.length === 0) {
+      logger.info(`HDR: 0 magnets em ${Date.now() - startTime}ms para "${query.substring(0, 50)}" (0 links)`);
+      return [];
+    }
+
+    logger.debug(`HDR busca: ${links.length} links para "${query.substring(0, 50)}"`, {
+      links: links.slice(0, 5).map(l => l.title.substring(0, 60)),
+      total: links.length,
+    });
 
     // PASSO 2: Para cada post, extrai magnets (paralelo, max 8)
     const batchSize = 8;
@@ -206,7 +242,7 @@ export async function searchHdr(
         batch.map(async (item) => {
           try {
             const res = await axios.get(item.postUrl, axiosConfig);
-            return extractMagnetsFromPost(res.data, item.title);
+            return extractMagnetsFromPost(res.data, item.title, item.postUrl);
           } catch {
             return [];
           }

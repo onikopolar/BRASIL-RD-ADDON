@@ -11,6 +11,7 @@ export const setupBasicRoutes = (app: any, manifest: any) => {
     // Health check
     app.get('/health', (req: any, res: any) => {
         logger.debug('Health check solicitado', { ip: req.ip });
+        res.setHeader('Cache-Control', 'max-age=60, public');
         res.json({ 
             status: 'ok', 
             service: 'Brasil RD Addon', 

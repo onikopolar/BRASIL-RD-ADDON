@@ -26,6 +26,7 @@ interface ScrapedTorrent {
   canonicalName?: string; // nome do magnet (dn) via parse-torrent — fonte CANÔNICA
   magnetInfoHash?: string; // infoHash do magnet (cache — evita re-parse)
   originalTitle?: string; // título original extraído do HTML do post (BLUDV: "Título Original: ...")
+  year?: number; // ano de lançamento extraído do HTML do post
   magnet: string;
   seeders: number;
   leechers: number;
@@ -253,9 +254,11 @@ export class CatalogProvider {
     // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
     const results = await Promise.allSettled(
       naoLegendado.map((t) => {
-        // Prioridade: originalTitle (HTML do site) > canonicalName (dn do magnet) > title (nome do torrent)
+        // originalTitle (HTML) → comparação com TMDB (título limpo)
+        // canonicalName/title (dn magnet) → detecção de idioma (tem "DUAL", "DUBLADO")
         const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
-        return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode);
+        const tituloParaIdioma = t.canonicalName || t.title;
+        return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
       })
     );
 
@@ -269,15 +272,49 @@ export class CatalogProvider {
           imdbId,
           alvo: `S${season || '?'}E${episode || '?'}`,
           torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
-          canonical: !!torrent.canonicalName,
+          canonical: !!torrent.originalTitle,
           provider: torrent.provider,
           infoHash: dadosMagnets[torrents.indexOf(torrent)]?.infoHash?.substring(0, 12) || 'N/A'
         });
         valid.push(torrent);
       } else {
+        const motivo = result.status === 'fulfilled' ? (result.value.reason || '?') : 'erro';
+        this.logger.debug('❌ REJEITADO', {
+          imdbId,
+          alvo: `S${season || '?'}E${episode || '?'}`,
+          titulo: (torrent.canonicalName || torrent.title).substring(0, 80),
+          originalTitle: torrent.originalTitle?.substring(0, 60) || 'N/A',
+          provider: torrent.provider,
+          year: torrent.year ?? 'N/A',
+          motivo: motivo.substring(0, 120),
+        });
         invalid.push(torrent);
       }
     });
+
+    // Log consolidado: motivos de rejeição agrupados (INFO, sem flood)
+    if (invalid.length > 0) {
+      const razoes: Record<string, number> = {};
+      for (const r of results) {
+        if (r.status === 'fulfilled' && !r.value.matches) {
+          const motivo = r.value.reason?.split('|')[0]?.trim() || 'desconhecido';
+          razoes[motivo] = (razoes[motivo] || 0) + 1;
+        } else if (r.status === 'rejected') {
+          razoes['erro interno'] = (razoes['erro interno'] || 0) + 1;
+        }
+      }
+      const topRazoes = Object.entries(razoes).sort((a,b) => b[1]-a[1]).slice(0, 5)
+        .map(([k,v]) => `${v}x ${k}`).join(' | ');
+      this.logger.info('📋 Rejeitados', {
+        imdbId,
+        alvo: `S${season || '?'}E${episode || '?'}`,
+        total: invalid.length,
+        motivos: topRazoes || 'N/A',
+        aceitos: valid.length,
+        scraped: torrents.length,
+        lendario: torrents.length - naoLegendado.length,
+      });
+    }
 
     return { valid, invalid };
   }
@@ -309,7 +346,7 @@ export class CatalogProvider {
           await this.autoMagnetService.autoAddMagnet(
             torrent.magnet, torrent.canonicalName || torrent.title, imdbId, request.type,
             torrent.seeders, torrent.quality, torrent.size, season, episodeValue,
-            torrent.magnetInfoHash, torrent.provider
+            torrent.magnetInfoHash, torrent.provider, torrent.originalTitle
           );
         } catch (error) {
           this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });

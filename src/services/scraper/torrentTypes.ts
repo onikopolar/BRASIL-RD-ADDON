@@ -15,6 +15,8 @@ export interface TorrentResult {
     confidence: number;
     /** Título original extraído do HTML do post (ex: BLUDV "Título Original: ...") */
     originalTitle?: string;
+    /** Ano de lançamento extraído do HTML do post (ex: "Lançamento: 2020") */
+    year?: number;
 }
 
 export interface TorrentIndexerResult {

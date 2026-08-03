@@ -67,10 +67,11 @@ class TorrentScraperService {
                 }).catch(() => []),
                 Promise.all([
                     (0, hdrScraper_js_1.searchHdr)(qEn, type),
-                    ptDiferente ? (0, hdrScraper_js_1.searchHdr)(qPt, type) : Promise.resolve([])
-                ]).then(([en, pt]) => {
+                    ptDiferente ? (0, hdrScraper_js_1.searchHdr)(qPt, type) : Promise.resolve([]),
+                    targetSeason ? (0, hdrScraper_js_1.searchHdr)(`${query.replace(/\s+Temporada\s+\d+$/i, '').replace(/\b\w/g, (c) => c.toUpperCase())} ${targetSeason}ª Temporada`, type) : Promise.resolve([]),
+                ]).then(([en, pt, ord]) => {
                     const seen = new Set();
-                    return [...en, ...pt]
+                    return [...en, ...pt, ...ord]
                         .filter(t => { if (seen.has(t.infoHash))
                         return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapHdrResult(r, type))
@@ -156,16 +157,8 @@ class TorrentScraperService {
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
+            year: r.year,
         };
-    }
-    mapHdrLanguage(label) {
-        switch (label) {
-            case 'Dual Áudio': return 'Dual Áudio';
-            case 'Dublado': return 'Dublado';
-            case 'Legendado': return 'Legendado';
-            case 'Nacional': return 'Nacional';
-            default: return 'desconhecido';
-        }
     }
     mapStarckResult(r, type) {
         if (!r.magnet)
@@ -191,6 +184,15 @@ class TorrentScraperService {
             confidence: 0.70,
             originalTitle: r.originalTitle,
         };
+    }
+    mapHdrLanguage(label) {
+        switch (label) {
+            case 'Dual Áudio': return 'Dual Áudio';
+            case 'Dublado': return 'Dublado';
+            case 'Legendado': return 'Legendado';
+            case 'Nacional': return 'Nacional';
+            default: return 'desconhecido';
+        }
     }
     calculateSizeInBytes(sizeStr) {
         if (!sizeStr || sizeStr === 'Tamanho não especificado')

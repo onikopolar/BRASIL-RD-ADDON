@@ -181,6 +181,7 @@ export class BludvScraper {
         lastUpdated: new Date(),
         confidence: 0.9,
         originalTitle: metadata.originalTitle,
+        year: metadata.year,
       });
     }
 
@@ -219,8 +220,10 @@ export class BludvScraper {
     }
 
     if (dualStrongIdx === -1) {
-      // Não achou seção DUAL → retorna todos (post pode ter estrutura diferente)
-      return allMagnets;
+      // Não achou seção DUAL → verifica se o post TEM seção LEGENDADO
+      // Se tem LEGENDADO sem DUAL, o post é 100% legendado → retorna vazio
+      const hasLegendado = strongEls.some((el: any) => /\b(?:LEGENDADO|LEGENDADA)\b/i.test($(el).text().trim()));
+      return hasLegendado ? [] : allMagnets;
     }
 
     // ═══ Passo 2: Determina posições no HTML ═══
@@ -249,33 +252,46 @@ export class BludvScraper {
     return dualMagnets;
   }
 
-  // ═══ Extrai metadados do post (Áudio, Qualidade, Tamanho, Título Original) ═══
-  private extractPostMetadata($: any, content: string): {
+  // ═══ Extrai metadados do post via DOM estruturado ═══
+  // Estrutura: <span><strong><em>Título Original:</em></strong> The Menu</span>
+  private extractPostMetadata($: any, _content: string): {
     quality?: string;
     size?: string;
     language?: string;
     originalTitle?: string;
+    year?: number;
   } {
-    const text = $('.content').text() || $.text() || content.replace(/<[^>]+>/g, '');
+    // Helper: extrai valor de um campo do metadata pelo nome do <em>
+    const getMetaValue = (fieldName: string): string | undefined => {
+      const em = $('em').toArray().find((el: any) => $(el).text().trim().toLowerCase() === fieldName.toLowerCase());
+      if (!em) return undefined;
+      const parentSpan = $(em).closest('span');
+      if (!parentSpan.length) return undefined;
+      // Pega o texto completo do span e remove o nome do campo (ex: "Título Original:")
+      const fullText = parentSpan.text().trim();
+      const prefix = $(em).text().trim();
+      const value = fullText.substring(fullText.indexOf(prefix) + prefix.length).trim();
+      return value || undefined;
+    };
 
-    const qualityMatch = text.match(/Qualidade[:\s]*([^\n<]+)/i);
-    const sizeMatch = text.match(/Tamanho[:\s]*([^\n<]+)/i);
-    const audioMatch = text.match(/Áudio[:\s]*([^\n<]+)/i);
-
-    // Extrai Título Original da seção >>INFORMAÇÕES DO FILME<<
-    // Padrão: "Título Original: Nome Do Filme" ou "Título Original: Nome Do Filme (Ano)"
-    const originalTitleMatch = text.match(/T[ií]tulo\s+Original[:\s]+([^\n<]+)/i);
-    const originalTitle = originalTitleMatch?.[1]
-      ? originalTitleMatch[1].replace(/\(\d{4}\)$/, '').trim()
+    const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
+    const originalTitle = (originalTitleRaw && originalTitleRaw.length >= 3)
+      ? originalTitleRaw.replace(/\(\d{4}\)$/, '').trim()
       : undefined;
-    const originalTitleFinal = (originalTitle && originalTitle.length >= 3) ? originalTitle : undefined;
 
     return {
-      quality: qualityMatch ? qualityMatch[1].trim() : undefined,
-      size: sizeMatch ? sizeMatch[1].trim() : undefined,
-      language: audioMatch ? audioMatch[1].trim() : undefined,
-      originalTitle: originalTitleFinal,
+      quality: getMetaValue('Qualidade:'),
+      size: getMetaValue('Tamanho:'),
+      language: getMetaValue('Áudio:'),
+      originalTitle,
+      year: this.parseYear(getMetaValue('Lançamento:')),
     };
+  }
+
+  private parseYear(value: string | undefined): number | undefined {
+    if (!value) return undefined;
+    const m = value.match(/\b(19|20)\d{2}\b/);
+    return m ? parseInt(m[0]) : undefined;
   }
 
   // ═══ Extrai label de episódio do texto ═══
