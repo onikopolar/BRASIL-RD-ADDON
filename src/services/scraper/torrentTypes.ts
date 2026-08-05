@@ -17,6 +17,7 @@ export interface TorrentResult {
     originalTitle?: string;
     /** Ano de lançamento extraído do HTML do post (ex: "Lançamento: 2020") */
     year?: number;
+    canonicalName?: string; 
 }
 
 export interface TorrentIndexerResult {

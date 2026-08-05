@@ -13,7 +13,7 @@ const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
         this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
-        this.version = '6.2.0';
+        this.version = '6.3.0';
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
@@ -141,8 +141,12 @@ class TorrentScraperService {
         const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
         const season = this.episodeMatcher.extractSeasonFromTitle(magnetName);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
+        const finalTitle = r.title || magnetName;
+        if (!r.title) {
+            logger.debug('Título bruto ausente, usando magnet como título', { magnetName: magnetName.substring(0, 60) });
+        }
         return {
-            title: magnetName,
+            title: finalTitle,
             magnet: r.magnet,
             seeders: r.seeders,
             leechers: 0,
@@ -158,6 +162,7 @@ class TorrentScraperService {
             confidence: 0.70,
             originalTitle: r.originalTitle,
             year: r.year,
+            canonicalName: magnetName,
         };
     }
     mapStarckResult(r, type) {

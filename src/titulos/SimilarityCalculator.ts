@@ -102,11 +102,13 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: `Idioma internacional: ${idiomaPre.motivo}` };
     }
 
+    // Passa o título bruto adiante para ser usado na validação de temporada/episódio
     const resultado = await this.compararTitulos(
       torrentTitle,
       movieInfo,
       torqueYear,
-      torrentMetadata?.season
+      torrentMetadata?.season,
+      rawTitleForLanguage
     );
     resultado.mediaType = movieInfo.mediaType;
     return resultado;
@@ -116,7 +118,8 @@ export class SimilarityCalculator {
     tituloTorrent: string,
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
     anoTorrent: number | null,
-    temporadaAlvo?: number
+    temporadaAlvo?: number,
+    tituloBruto?: string  // título completo do post (ex: "The Walking Dead 2017 – 8ª Temporada Completa...")
   ): Promise<SmartTitleMatch> {
     const titulosValidos = movieInfo.allTitles.filter(t => t && t.trim().length > 0);
     if (titulosValidos.length === 0) {
@@ -135,7 +138,8 @@ export class SimilarityCalculator {
         .filter(w => w.length > 0 && !/^\d+$/.test(w));
 
     const sequelTorrent = getPotentialSequelNumbers(tituloTorrent);
-    const rangeTorrent = extrairRangeEpisodios(tituloTorrent);
+    // rangeTorrent não utilizado diretamente, mantido por clareza
+    // const rangeTorrent = extrairRangeEpisodios(tituloTorrent);
 
     const palavrasTorrent = [...tokenizar(tituloTorrent), ...sequelTorrent.map(String)];
     if (palavrasTorrent.length === 0) {
@@ -190,7 +194,7 @@ export class SimilarityCalculator {
 
       const tmdbEhCurto = palavrasTitulo.length <= 2;
 
-      // TMDB → Torrent
+      // TMDB -> Torrent
       let enc = 0;
       const falt: string[] = [];
       for (const palavraTmdb of palavrasTitulo) {
@@ -201,11 +205,11 @@ export class SimilarityCalculator {
         else falt.push(palavraTmdb);
       }
 
-      // Torrent → TMDB: extras
+      // Torrent -> TMDB: extras
       let extras = 0;
       for (const palavraTorrent of palavrasTorrent) {
         if (isTechnicalWord(palavraTorrent)) continue;
-        if (palavrasTitulo.some(p => palavrasParecidas(palavraTorrent, p, tmdbEhCurto))) continue;
+        if (palavrasTitulo.some(p => palavrasParecidas(p, palavraTorrent, tmdbEhCurto))) continue;
         if (extrairRangeEpisodios(palavraTorrent) !== null) continue;
         if (palavraTorrent.length <= 2) {
           extras++;
@@ -216,17 +220,6 @@ export class SimilarityCalculator {
 
       const totalTorrent = palavrasTorrent.filter(w => !isTechnicalWord(w)).length || 1;
       const proporcao = (enc + (totalTorrent - extras)) / (palavrasTitulo.length + totalTorrent);
-
-      this.logger.debug(`Match "${titulo}" → torrent`, {
-        tmdb: palavrasTitulo.join(' '),
-        torrent: palavrasTorrent.join(' '),
-        tmdbWords: palavrasTitulo.length,
-        torrentWords: totalTorrent,
-        scoreTMDBtoTorrent: enc.toFixed(1),
-        faltando: falt.join(','),
-        extrasTorrent: extras,
-        proporcao: (proporcao * 100).toFixed(0) + '%',
-      });
 
       const score: ScoreTitulo = {
         titulo,
@@ -250,7 +243,8 @@ export class SimilarityCalculator {
       palavrasTorrent,
       titulosValidos,
       anoTorrent,
-      temporadaAlvo
+      temporadaAlvo,
+      tituloBruto
     );
   }
 
@@ -285,17 +279,32 @@ export class SimilarityCalculator {
     palavrasTorrent: string[],
     titulosValidos: string[],
     anoTorrent: number | null,
-    temporadaAlvo?: number
+    temporadaAlvo?: number,
+    tituloBruto?: string  // título bruto do post para validação de temporada/episódio
   ): SmartTitleMatch {
     const anoTmdb = movieInfo.year;
     const tipoMidia = movieInfo.mediaType || 'movie';
 
     const isColecao = isCollectionTitle(tituloTorrent);
-    const toleranciaAno = isColecao ? 10 : tipoMidia === 'tv' ? 5 : 2;
+    const toleranciaAno = 0; // Confia 100% no ano do scraper
 
+    // Validação de palavras com base no título de similaridade (originalTitle)
     const condicaoA = this.validarPalavrasMinimas(melhor, anoTorrent, anoTmdb, tituloTorrent, temporadaAlvo);
     const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent);
-    const condicaoE = this.validarTemporada(tituloTorrent, temporadaAlvo);
+    
+    // Validação de temporada usando o título bruto (contém a temporada real)
+    const tituloParaTemporada = tituloBruto || tituloTorrent;
+    const condicaoE = this.validarTemporada(tituloParaTemporada, temporadaAlvo);
+
+    // Log para depuração
+    this.logger.debug('Decidindo match', {
+      similaridade: tituloTorrent.substring(0, 60),
+      temporadaValidadaCom: tituloParaTemporada.substring(0, 60),
+      alvo: `S${temporadaAlvo}`,
+      condicaoA: condicaoA.passou ? 'OK' : 'X',
+      condicaoC: condicaoC.passou ? 'OK' : 'X',
+      condicaoE: condicaoE.passou ? 'OK' : 'X',
+    });
 
     const todasPassaram = condicaoA.passou && condicaoC.passou && condicaoE.passou;
 
@@ -315,10 +324,11 @@ export class SimilarityCalculator {
     };
 
     const statusCondicoes = `A:${condicaoA.passou ? 'OK' : 'X'} C:${condicaoC.passou ? 'OK' : 'X'} E:${condicaoE.passou ? 'OK' : 'X'}`;
+    // Log de decisão final
     if (!todasPassaram) {
       this.logger.debug(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${partesMotivo.join(' | ')}`);
     } else {
-      this.logger.info(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}"`);
+      this.logger.info(`✅ [${statusCondicoes}] "${tituloTorrent.substring(0, 60)}" | ${partesMotivo.join(' | ')}`);
     }
 
     resultado.mediaType = movieInfo.mediaType;
@@ -348,41 +358,36 @@ export class SimilarityCalculator {
     // Coletânea
     if (tituloTorrent && isCollectionTitle(tituloTorrent)) {
       if (melhor.encontradas >= 2 && extras <= 4) {
-        return {
-          passou: true,
-          motivo: `Coletânea: ${melhor.encontradas}/${melhor.totalTmdb} palavras da franquia${extras > 0 ? ` +${extras} extra(s)` : ''}${semAno ? ' [sem ano]' : ''}`,
-        };
+        const motivo = `Coletânea: ${melhor.encontradas}/${melhor.totalTmdb} palavras da franquia${extras > 0 ? ` +${extras} extra(s)` : ''}${semAno ? ' [sem ano]' : ''}`;
+        this.logger.debug(`Coletânea aceita: ${motivo}`);
+        return { passou: true, motivo };
       }
-      return {
-        passou: false,
-        motivo: `Coletânea: match baixo ${melhor.encontradas}/${melhor.totalTmdb} palavras. Faltando: [${melhor.faltando.join(', ')}]`,
-      };
+      const motivo = `Coletânea: match baixo ${melhor.encontradas}/${melhor.totalTmdb} palavras. Faltando: [${melhor.faltando.join(', ')}]`;
+      this.logger.debug(`Coletânea rejeitada: ${motivo}`);
+      return { passou: false, motivo };
     }
 
     // Exceção para packs de temporada sem ano
     if (semAno && extras > 0 && temporadaAlvo !== undefined && tituloTorrent) {
       if (this.temTemporadaExplicita(tituloTorrent, temporadaAlvo)) {
         if (extras <= 3 && melhor.encontradas >= melhor.totalTmdb) {
-          return {
-            passou: true,
-            motivo: `Pack temporada S${temporadaAlvo} sem ano — ${extras} extras aceitas`,
-          };
+          const motivo = `Pack temporada S${temporadaAlvo} sem ano — ${extras} extras aceitas`;
+          this.logger.debug(`Pack aceito: ${motivo}`);
+          return { passou: true, motivo };
         }
       }
     }
 
     if (semAno && extras > 0) {
-      return {
-        passou: false,
-        motivo: `Sem ano para validar + ${extras} palavra(s) extra(s) no torrent → título diferente`,
-      };
+      const motivo = `Sem ano para validar + ${extras} palavra(s) extra(s) no torrent → título diferente`;
+      this.logger.debug(`Rejeitado: ${motivo}`);
+      return { passou: false, motivo };
     }
 
     if (!semAno && melhor.totalTmdb <= 2 && anoTorrent !== anoTmdb && extras > 0) {
-      return {
-        passou: false,
-        motivo: `Título curto (${melhor.totalTmdb}pal) + ano ${anoTorrent}≠${anoTmdb} + ${extras} extra(s) → provável outro filme`,
-      };
+      const motivo = `Título curto (${melhor.totalTmdb}pal) + ano ${anoTorrent}≠${anoTmdb} + ${extras} extra(s) → provável outro filme`;
+      this.logger.debug(`Rejeitado: ${motivo}`);
+      return { passou: false, motivo };
     }
 
     const anoExato = !semAno && Math.abs(anoTorrent! - anoTmdb!) <= 1;
@@ -393,48 +398,42 @@ export class SimilarityCalculator {
     }
 
     if (!semAno && melhor.totalTmdb <= 2 && anoTorrent !== anoTmdb && !anoExato) {
-      return {
-        passou: false,
-        motivo: `Título curto (${melhor.totalTmdb}pal) + ano divergente: ${anoTorrent}≠${anoTmdb} → conteúdo diferente`,
-      };
+      const motivo = `Título curto (${melhor.totalTmdb}pal) + ano divergente: ${anoTorrent}≠${anoTmdb} → conteúdo diferente`;
+      this.logger.debug(`Rejeitado: ${motivo}`);
+      return { passou: false, motivo };
     }
 
     if (melhor.faltando.length === 0 && melhor.proporcao >= 0.6 && extras <= maxExtras) {
-      return {
-        passou: true,
-        motivo: `Match OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%)${extras > 0 ? ` +${extras} extra(s)` : ''}${anoExato ? ' [ano exato]' : ''}`,
-      };
+      const motivo = `Match OK: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%)${extras > 0 ? ` +${extras} extra(s)` : ''}${anoExato ? ' [ano exato]' : ''}`;
+      this.logger.debug(`Aceito: ${motivo}`);
+      return { passou: true, motivo };
     }
 
     if (melhor.faltando.length === 1 && melhor.palavrasTmdb.length >= 3 && extras <= 2) {
       const palavra = melhor.faltando[0];
       const isNumero = /^\d+$/.test(palavra);
       if (!isNumero && palavra.length <= 3 && melhor.proporcao >= 0.6) {
-        return {
-          passou: true,
-          motivo: `Palavra-cola: "${palavra}" (≤3), ${melhor.encontradas}/${melhor.totalTmdb} palavras`,
-        };
+        const motivo = `Palavra-cola: "${palavra}" (<=3), ${melhor.encontradas}/${melhor.totalTmdb} palavras`;
+        this.logger.debug(`Aceito por palavra-cola: ${motivo}`);
+        return { passou: true, motivo };
       }
     }
 
     if (extras > 2) {
-      return {
-        passou: false,
-        motivo: `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%). +${extras} extras no torrent`,
-      };
+      const motivo = `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%). +${extras} extras no torrent`;
+      this.logger.debug(`Rejeitado: ${motivo}`);
+      return { passou: false, motivo };
     }
 
     if (anoExato && extras === 0 && melhor.faltando.length <= 2 && melhor.encontradas >= 2) {
-      return {
-        passou: true,
-        motivo: `Ano exato (${anoTorrent}=${anoTmdb}): ${melhor.encontradas}/${melhor.totalTmdb} palavras`,
-      };
+      const motivo = `Ano exato (${anoTorrent}=${anoTmdb}): ${melhor.encontradas}/${melhor.totalTmdb} palavras`;
+      this.logger.debug(`Aceito por ano exato: ${motivo}`);
+      return { passou: true, motivo };
     }
 
-    return {
-      passou: false,
-      motivo: `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%). Faltando: [${melhor.faltando.join(', ')}]`,
-    };
+    const motivo = `Match baixo: ${melhor.encontradas}/${melhor.totalTmdb} palavras (${(melhor.proporcao * 100).toFixed(0)}%). Faltando: [${melhor.faltando.join(', ')}]`;
+    this.logger.debug(`Rejeitado: ${motivo}`);
+    return { passou: false, motivo };
   }
 
   private validarAnoCompativel(
@@ -484,6 +483,8 @@ export class SimilarityCalculator {
     tituloTorrent: string,
     temporadaAlvo?: number
   ): { passou: boolean; motivo: string } {
+    this.logger.debug(`Validando temporada para: "${tituloTorrent.substring(0, 70)}" alvo S${temporadaAlvo}`);
+
     const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
     if (temporadaAlvo === undefined && temEpisodio) {
       return { passou: false, motivo: 'SxxExx em filme — provável episódio de série' };
@@ -493,12 +494,18 @@ export class SimilarityCalculator {
     const epRange = extrairRangeEpisodios(tituloTorrent);
     if (epRange) {
       const passou = epRange.season === temporadaAlvo;
+      if (!passou) {
+        this.logger.debug(`Temporada detectada: S${epRange.season} vs alvo S${temporadaAlvo}`);
+      }
       return { passou, motivo: passou ? '' : `Temporada divergente: S${epRange.season} vs S${temporadaAlvo}` };
     }
 
     const sMatch = tituloTorrent.match(/\bs(\d{1,2})\b(?!\s*e\d)/i);
     if (sMatch) {
       const ts = parseInt(sMatch[1]);
+      if (ts !== temporadaAlvo) {
+        this.logger.debug(`Temporada via regex: S${ts} vs alvo S${temporadaAlvo}`);
+      }
       return {
         passou: ts === temporadaAlvo,
         motivo: ts !== temporadaAlvo ? `Temporada divergente: S${ts} vs S${temporadaAlvo}` : '',
@@ -510,19 +517,9 @@ export class SimilarityCalculator {
 
   private temTemporadaExplicita(titulo: string, temporada: number): boolean {
     const range = extrairRangeEpisodios(titulo);
-    if (range && range.season === temporada && range.episodeStart === 0 && range.episodeEnd === 0) {
-      return true;
-    }
-    // Fallback para formatos como S05, season 5, t5 (sem a palavra "temporada")
-    const lower = titulo.toLowerCase();
-    const padroes = [
-      `s${temporada.toString().padStart(2, '0')}`,
-      `s${temporada}`,
-      `season ${temporada}`,
-      `t${temporada}`,
-      `t${temporada.toString().padStart(2, '0')}`,
-    ];
-    return padroes.some(p => lower.includes(p));
+    if (!range) return false;
+    if (range.episodeStart > 0 || range.episodeEnd > 0) return false;
+    return range.season === temporada;
   }
 
   private normalizarParaComparacao(titulo: string): string {

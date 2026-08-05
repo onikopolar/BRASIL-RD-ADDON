@@ -98,9 +98,8 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
   // Título da página (fallback do postTitle da busca)
   const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
 
-  // ═══ Extrai Título Original direto do DOM ═══
-  // Estrutura: <b>Título Original:</b> The Matrix<br />
-  let originalTitle: string | undefined;
+  // ═══ Extrai Título Original do post (global, usado como fallback) ═══
+  let globalOriginalTitle: string | undefined;
   const tituloEl = $('b, strong').toArray().find(el => /T[ií]tulo\s+Original/i.test($(el).text()));
   if (tituloEl) {
     const parentHtml = $(tituloEl).parent().html() || '';
@@ -110,13 +109,12 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
       const after = parentHtml.substring(idx + elHtml.length);
       const endIdx = after.indexOf('<');
       const raw = endIdx !== -1 ? after.substring(0, endIdx) : after;
-      originalTitle = raw.replace(/^[:\s]+/, '').trim();
+      globalOriginalTitle = raw.replace(/^[:\s]+/, '').trim();
     }
   }
 
-  // ═══ Extrai Ano de Lançamento direto do DOM ═══
-  // Estrutura: <b>Lançamento</b>: 2020<br />
-  let year: number | undefined;
+  // ═══ Extrai Ano de Lançamento do post (global, usado como fallback) ═══
+  let globalYear: number | undefined;
   const lancamentoEl = $('b, strong').toArray().find(el => /^Lançamento$/i.test($(el).text().trim()));
   if (lancamentoEl) {
     const parentHtml = $(lancamentoEl).parent().html() || '';
@@ -128,12 +126,11 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
       const raw = endIdx !== -1 ? after.substring(0, endIdx) : after;
       const yearStr = raw.replace(/^[:\s]+/, '').trim();
       const m = yearStr.match(/\b(19|20)\d{2}\b/);
-      if (m) year = parseInt(m[0]);
+      if (m) globalYear = parseInt(m[0]);
     }
   }
 
   // ═══ Encontra seções DUAL/LEGENDADO via flags ═══
-  // Estrutura: <h3>::DUBLADO::</h3> <div>...magnets...</div> <h3>::VERSÃO LEGENDADA::</h3>
   const reDual = /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i;
   const reLeg = /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i;
 
@@ -156,7 +153,6 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
     }
   }
 
-  // Post 100% legendado → retorna vazio
   if (!temSecaoDual) {
     if (temSecaoLegendado) {
       logger.debug(`HDR LEGENDADO-only | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
@@ -166,7 +162,7 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
   }
 
   // ═══ Coleta magnets na seção DUAL ═══
-  // Itera todos os magnets e verifica se estão em seção DUAL via h3 precedente
+  // Para cada magnet, extrai o número da temporada do parágrafo pai
   $('a[href^="magnet:"]').each((_i, el) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -181,28 +177,47 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
       if (reLeg.test(prevText)) return; // magnet em seção LEGENDADA → ignorar
     }
 
-    // Tenta extrair informações do texto próximo ao magnet
-    const parentText = $(el).parent().text().trim();
+    // ═══ Extrai temporada individual do parágrafo pai ═══
+    const parentP = $(el).closest('p');
+    const parentText = parentP.text().trim();
+    const seasonMatch = parentText.match(/(\d+)\s*ª\s+TEMPORADA/i);
+    const seasonNumber = seasonMatch ? parseInt(seasonMatch[1]) : null;
+
+    // Informações complementares
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
     const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
     let language = extractLanguage(parentText);
     if (!language) language = extractLanguage(pageTitle);
 
-    // Monta título descritivo
-    const parts = [pageTitle];
-    if (language) parts.push(`[${language}]`);
-    if (qualityMatch) parts.push(qualityMatch[0]);
-    const descriptiveTitle = parts.join(' ');
+    // Constrói títulos individuais baseados na temporada real do magnet
+    let magnetOriginalTitle: string | undefined;
+    let magnetTitle: string;
+
+    if (seasonNumber) {
+      magnetOriginalTitle = globalOriginalTitle
+        ? globalOriginalTitle.replace(/Season\s+\d+/i, `Season ${seasonNumber}`)
+        : `The Walking Dead Season ${seasonNumber}`;
+      magnetTitle = `${pageTitle} - ${seasonNumber}ª Temporada`;
+      if (language) magnetTitle += ` [${language}]`;
+      if (qualityMatch) magnetTitle += ` ${qualityMatch[0]}`;
+    } else {
+      // fallback: usa o título global
+      magnetOriginalTitle = globalOriginalTitle;
+      const parts = [pageTitle];
+      if (language) parts.push(`[${language}]`);
+      if (qualityMatch) parts.push(qualityMatch[0]);
+      magnetTitle = parts.join(' ');
+    }
 
     results.push({
-      title: descriptiveTitle,
+      title: magnetTitle,
       magnet: href,
       infoHash: btihMatch[1].toLowerCase(),
       seeders: 0,
       size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
       language,
-      originalTitle,
-      year,
+      originalTitle: magnetOriginalTitle,
+      year: globalYear,
     });
   });
 
@@ -220,7 +235,6 @@ export async function searchHdr(
   const startTime = Date.now();
 
   try {
-    // PASSO 1: Busca → URLs de posts
     const links = await searchHdrLinks(query);
     if (links.length === 0) {
       logger.info(`HDR: 0 magnets em ${Date.now() - startTime}ms para "${query.substring(0, 50)}" (0 links)`);
@@ -232,7 +246,6 @@ export async function searchHdr(
       total: links.length,
     });
 
-    // PASSO 2: Para cada post, extrai magnets (paralelo, max 8)
     const batchSize = 8;
     const allResults: HdrTorrent[] = [];
 

@@ -13,7 +13,6 @@ import { metricsService } from '../catalogo/MetricsService.js';
 import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.js';
 import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
 
-// Legendado indicators da fonte unica (TechnicalWords)
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
     .filter(w => /^leg/i.test(w))
@@ -23,10 +22,10 @@ const LEGENDADO_REGEX = new RegExp(
 
 interface ScrapedTorrent {
   title: string;
-  canonicalName?: string; // nome do magnet (dn) via parse-torrent — fonte CANÔNICA
-  magnetInfoHash?: string; // infoHash do magnet (cache — evita re-parse)
-  originalTitle?: string; // título original extraído do HTML do post (BLUDV: "Título Original: ...")
-  year?: number; // ano de lançamento extraído do HTML do post
+  canonicalName?: string;
+  magnetInfoHash?: string;
+  originalTitle?: string;
+  year?: number;
   magnet: string;
   seeders: number;
   leechers: number;
@@ -57,10 +56,9 @@ export class CatalogProvider {
 
   private readonly streamCache = new Map<string, { streams: Stream[]; timestamp: number; isEmpty: boolean }>();
   private readonly STREAM_TTL = 24 * 60 * 60 * 1000;
-  private readonly STREAM_EMPTY_TTL = 10 * 1000; // Ajustado para 10s (evita falso vazio)
+  private readonly STREAM_EMPTY_TTL = 10 * 1000;
   private readonly CACHE_KEY_SEPARATOR = '|';
 
-  // Apenas evita scraping simultâneo para o mesmo conteúdo (sem cooldown)
   private readonly inFlightScraping: Set<string> = new Set();
 
   private tmdbDataCache = new Map<string, { data: TmdbSearchData; timestamp: number }>();
@@ -91,7 +89,6 @@ export class CatalogProvider {
     try {
       imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId, season);
       if (imdbTitles?.allTitles.length) {
-        // Prioriza título PT (allTitles[0]=EN, allTitles[1]=PT se disponível)
         searchTitle = imdbTitles.allTitles[imdbTitles.allTitles.length - 1] || imdbTitles.allTitles[0];
         seasonYear = imdbTitles.year || null;
         mediaType = imdbTitles.mediaType || null;
@@ -120,7 +117,6 @@ export class CatalogProvider {
 
     let allStreams: Stream[] = [];
 
-    // DB query já foi feita pelo StreamHandler - vai direto pro JSON
     const jsonStreams = await this.getStreamsFromJson(request, season, episode);
     allStreams.push(...jsonStreams);
 
@@ -137,7 +133,6 @@ export class CatalogProvider {
 
       this.markScrapingStart(request);
       try {
-        this.logger.debug(` Iniciando scraping para ${request.imdbId || request.id}`);
         const scraped = await this.performIntelligentScraping(request, season, episode);
         const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
         scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
@@ -169,7 +164,6 @@ export class CatalogProvider {
     const finalSeason = season ?? (match ? parseInt(match[1]) : undefined);
     const finalEpisode = episode ?? (match ? parseInt(match[2]) : undefined);
 
-    // Cache local: busca TMDB UMA vez e reusa
     const tmdb = imdbId ? await this.getTmdbSearchData(imdbId, finalSeason) : null;
     if (!tmdb || !tmdb.searchTitle) {
       this.logger.warn('Sem título para scraping', { imdbId });
@@ -187,7 +181,6 @@ export class CatalogProvider {
       searchQuery, type, finalSeason, seasonYear ?? undefined, imdbId || undefined
     );
 
-    // ═══ Fase única: todos os scrapers rodam juntos, similarity decide ═══
     let uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
     const { valid, invalid } = await this.filterAndValidateTorrents(
       uniqueTorrents, imdbId, request, finalSeason, finalEpisode,
@@ -202,11 +195,9 @@ export class CatalogProvider {
       return [];
     }
 
-    // Fallback para packs
     const hasExactEpisode = finalEpisode !== undefined && valid.some(t =>
       /s\d+e\d+/i.test(t.title) && this.extractEpisodeNumber(t.title) === finalEpisode
     );
-    // Pack completo: tem "temporada completa" OU extrairRangeEpisodios retorna season-only (episodeStart=0)
     const hasCompletePack = valid.some(t =>
       /\b(?:temporada completa|season pack|complete pack)\b/i.test(t.title) ||
       (() => {
@@ -217,7 +208,7 @@ export class CatalogProvider {
 
     let episodeToSave: number | null | undefined = finalEpisode;
     if (!hasExactEpisode && hasCompletePack && finalSeason) {
-      episodeToSave = null; // pack
+      episodeToSave = null;
     }
 
     await this.saveValidTorrentsToCatalog(valid, request, finalSeason, episodeToSave,
@@ -242,7 +233,6 @@ export class CatalogProvider {
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
-    // ═══ PASSO 1: Parse de TODOS os magnets (via parse-torrent) ═══
     const dadosMagnets = await Promise.all(
       torrents.map(t => analisarMagnet(t.magnet).catch(() => null))
     );
@@ -251,27 +241,21 @@ export class CatalogProvider {
       if (dadosMagnets[i]?.infoHash) t.magnetInfoHash = dadosMagnets[i]!.infoHash;
     });
 
-    // ═══ PASSO 2: Rejeitar Legendado (hard reject) ═══
-    // O resto da validação (PT-BR, similaridade) é delegado ao titleFilter
     const naoLegendado = torrents.filter(t => {
       if (t.language && LEGENDADO_REGEX.test(t.language)) return false;
       return true;
     });
 
-    // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
     const results = await Promise.allSettled(
       naoLegendado.map(async (t) => {
-        // originalTitle (HTML) → comparação com TMDB (título limpo)
-        // canonicalName/title (dn magnet) → detecção de idioma (tem "DUAL", "DUBLADO")
         const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
-        const tituloParaIdioma = t.canonicalName || t.title;
+        const tituloParaIdioma = t.title || t.originalTitle || t.canonicalName;
         let result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
 
-        // Fallback: se originalTitle falhou, tenta canonicalName (pode ter título PT)
-        // Ex: originalTitle="Inazuma irebun S01" falha, mas canonicalName="Super Onze" passa
+        // Fallback canonicalName — agora o título usado na validação de temporada é o próprio canonicalName
         if (!result.matches && t.originalTitle && t.canonicalName && t.canonicalName !== t.originalTitle) {
           const fallbackResult = await this.titleFilter.titulosCombinam(
-            t.canonicalName, imdbId, season, episode, tituloParaIdioma, t.year
+            t.canonicalName, imdbId, season, episode, t.canonicalName, t.year
           );
           if (fallbackResult.matches) {
             this.logger.info('🔄 Fallback canonicalName salvou', {
@@ -303,21 +287,10 @@ export class CatalogProvider {
         });
         valid.push(torrent);
       } else {
-        const motivo = result.status === 'fulfilled' ? (result.value.reason || '?') : 'erro';
-        this.logger.debug('❌ REJEITADO', {
-          imdbId,
-          alvo: `S${season || '?'}E${episode || '?'}`,
-          titulo: (torrent.canonicalName || torrent.title).substring(0, 80),
-          originalTitle: torrent.originalTitle?.substring(0, 60) || 'N/A',
-          provider: torrent.provider,
-          year: torrent.year ?? 'N/A',
-          motivo: motivo.substring(0, 120),
-        });
         invalid.push(torrent);
       }
     });
 
-    // Log consolidado: motivos de rejeição agrupados (INFO, sem flood)
     if (invalid.length > 0) {
       const razoes: Record<string, number> = {};
       for (const r of results) {
@@ -352,16 +325,11 @@ export class CatalogProvider {
     imdbTitles: ImdbTitles | null = null,
     isPackFallback = false
   ): Promise<void> {
-    // Flag temporária: pular banco durante testes
-    if (process.env.SKIP_DB_WRITE === 'true') {
-      this.logger.info('⏭️  DB write SKIPPED (SKIP_DB_WRITE=true)', { count: torrents.length });
-      return;
-    }
+    if (process.env.SKIP_DB_WRITE === 'true') return;
 
     const imdbId = this.extractBaseImdbId(request.imdbId || request.id);
     if (!imdbId || torrents.length === 0) return;
 
-    // Batch de 5 para evitar SQLITE_BUSY com muitas escritas simultâneas
     const batchSize = 5;
     for (let i = 0; i < torrents.length; i += batchSize) {
       const batch = torrents.slice(i, i + batchSize);
@@ -394,9 +362,7 @@ export class CatalogProvider {
             request.type === 'series' ? 'series' : 'movie',
             season, episode, false
           );
-        } catch {
-          return [];
-        }
+        } catch { return []; }
       });
       const results = await Promise.allSettled(batchPromises);
       for (const r of results) {
@@ -436,26 +402,16 @@ export class CatalogProvider {
     }
   }
 
-  /**
-   * Permite scraping SEMPRE, a menos que já exista um scraping em andamento
-   * para o mesmo conteúdo (evita requisições simultâneas duplicadas).
-   */
   private async shouldAttemptScraping(request: any): Promise<boolean> {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
-    if (this.inFlightScraping.has(key)) {
-      this.logger.debug(' Scraping já em andamento, aguardando...', { key });
-      return false;
-    }
-    return true;
+    return !this.inFlightScraping.has(key);
   }
 
-  /** Marca início do scraping para evitar duplicação simultânea */
   private markScrapingStart(request: any): void {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
     this.inFlightScraping.add(key);
   }
 
-  /** Marca fim do scraping (sucesso ou falha) */
   private markScrapingEnd(request: any): void {
     const key = `${this.extractBaseImdbId(request.imdbId || request.id) || request.id}:${request.type}`;
     this.inFlightScraping.delete(key);
@@ -494,7 +450,6 @@ export class CatalogProvider {
     const seen = new Set<string>();
     const unique: Stream[] = [];
     for (const s of streams) {
-      // Extrai infoHash do stream ou da URL lazy (/resolve/torbox/.../INFOHASH/...)
       let hash = s.infoHash;
       if (!hash && s.url) {
         const m = s.url.match(/\/resolve\/torbox\/[^/]+\/([a-f0-9]{40})\//i);
@@ -552,7 +507,6 @@ export class CatalogProvider {
     const unique: ScrapedTorrent[] = [];
     const packRe = /\b(?:temporada completa|season pack|complete pack)\b/i;
 
-    // Passo 1: resolve infoHashes faltantes em paralelo
     const missing = torrents.filter(t => !t.magnetInfoHash);
     if (missing.length > 0) {
       const results = await Promise.all(missing.map(t => analisarMagnet(t.magnet).catch(() => null)));
@@ -561,13 +515,10 @@ export class CatalogProvider {
       });
     }
 
-    // Passo 2: dedup síncrono (sem awaits)
     for (const t of torrents) {
       const hash = t.magnetInfoHash;
       if (hash && seen.has(hash.toLowerCase())) continue;
       if (hash) seen.add(hash.toLowerCase());
-      // Para packs, dedup por título normalizado APENAS se não temos infoHash
-      // (se temos infoHash, já é suficiente pra identificar unicidade)
       if (packRe.test(t.title)) {
         const tituloNormalizado = t.title.replace(/\s*\(?\s*S\d{1,2}\s*[Ee]\d{1,2}\s*\)?\s*$/g, '').trim().toLowerCase();
         if (!hash && seenTitles.has(tituloNormalizado)) continue;

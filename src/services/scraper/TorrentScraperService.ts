@@ -16,7 +16,7 @@ export class TorrentScraperService {
     private readonly wpScraper: WordPressScraper;
     private readonly bludvScraper: BludvScraper;
     private readonly episodeMatcher = EpisodeMatcher.getInstance();
-    private readonly version = '6.2.0'; // WP API scraper integrado
+    private readonly version = '6.3.0'; // Fallback title para magnet quando título bruto ausente
 
     constructor(tmdbScraper?: ImdbScraperService) {
         this.qualityDetector = QualityDetector.getInstance();
@@ -52,7 +52,7 @@ export class TorrentScraperService {
             const ptDiferente = qPt !== qEn;
 
             const [wpResults, starckResults, hdrResults] = await Promise.all([
-                // WordPress + Bludv (Comando e Starck via WP API não funciona — Starck retorna vazio)
+                // WordPress + Bludv
                 Promise.all([
                     this.bludvScraper.search(qEn, type).catch(() => []),
                     this.bludvScraper.search(qPt, type).catch(() => []),
@@ -67,7 +67,7 @@ export class TorrentScraperService {
                     });
                 }).catch(() => []),
 
-                // Starck (scraper dedicado — WP API não funciona pra Starck)
+                // Starck
                 Promise.all([
                     searchStarck(qEn, type),
                     ptDiferente ? searchStarck(qPt, type) : Promise.resolve([])
@@ -83,8 +83,6 @@ export class TorrentScraperService {
                 Promise.all([
                     searchHdr(qEn, type),
                     ptDiferente ? searchHdr(qPt, type) : Promise.resolve([]),
-                    // HDR usa "1ª Temporada" em vez de "Temporada 1" — tenta formato ordinal
-                    // HDR search é case-sensitive, capitaliza primeira letra
                     targetSeason ? searchHdr(`${query.replace(/\s+Temporada\s+\d+$/i, '').replace(/\b\w/g, (c: string) => c.toUpperCase())} ${targetSeason}ª Temporada`, type) : Promise.resolve([]),
                 ]).then(([en, pt, ord]) => {
                     const seen = new Set<string>();
@@ -134,11 +132,9 @@ export class TorrentScraperService {
         const queries: string[] = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            // PT primeiro (último do array), depois EN — prioriza busca em português
-            // Filtra títulos não-latinos (coreano, japonês etc) — inúteis em scrapers BR
             const titlesReverse = [...tmdbData.allTitles]
-              .filter((t: string) => /^[a-z0-9\s\-\.]+$/i.test(t))
-              .reverse();
+                .filter((t: string) => /^[a-z0-9\s\-\.]+$/i.test(t))
+                .reverse();
             for (const title of titlesReverse) {
                 queries.push(title);
                 if (yearToUse) queries.push(`${title} ${yearToUse}`);
@@ -159,19 +155,25 @@ export class TorrentScraperService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  MAPEAMENTOS (simplificados — qualidade/idioma delegados ao pipeline)
+    //  MAPEAMENTOS
     // ═══════════════════════════════════════════════════════════
 
     private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string; year?: number }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
-        // Usa o nome real do magnet (dn=) como título — tem season, idioma e qualidade
         const dnMatch = r.magnet.match(/dn=([^&]+)/i);
         const magnetName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.title;
         const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
         const season = this.episodeMatcher.extractSeasonFromTitle(magnetName);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
+
+        // Garante que o título bruto nunca fique vazio: se o scraper não extraiu título do HTML, usa o nome do magnet
+        const finalTitle = r.title || magnetName;
+        if (!r.title) {
+            logger.debug('Título bruto ausente, usando magnet como título', { magnetName: magnetName.substring(0, 60) });
+        }
+
         return {
-            title: magnetName,
+            title: finalTitle,
             magnet: r.magnet,
             seeders: r.seeders,
             leechers: 0,
@@ -187,6 +189,7 @@ export class TorrentScraperService {
             confidence: 0.70,
             originalTitle: r.originalTitle,
             year: r.year,
+            canonicalName: magnetName,
         };
     }
 

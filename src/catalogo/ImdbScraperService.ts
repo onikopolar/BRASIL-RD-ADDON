@@ -32,7 +32,7 @@ const lookupImdb = (hostname: string, _opts: any, cb: any) => {
 export interface ImdbTitles {
   originalTitle: string;
   portugueseTitle: string | null;
-  portugueseTitleRaw: string | null;  // COM acentos, para busca em sites como TPB
+  portugueseTitleRaw: string | null;
   allTitles: string[];
   foundInPortuguese: boolean;
   year?: number;
@@ -82,8 +82,6 @@ export class ImdbScraperService {
         return cached.data;
       }
 
-      logger.debug('Cache TMDB miss', { imdbId, season });
-
       const tmdbInfo = await this.findInTMDB(imdbId);
       
       if (!tmdbInfo) {
@@ -98,7 +96,7 @@ export class ImdbScraperService {
           return htmlResult;
         }
         // Fallback 2: IMDb HTML (só título original)
-        logger.warn('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
+        logger.debug('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
         return await this.scrapeImdbTitle(imdbId);
       }
 
@@ -117,13 +115,6 @@ export class ImdbScraperService {
           if (details.release_date) {
             year = parseInt(details.release_date.substring(0, 4));
           }
-          
-          logger.debug('TMDB dados filme', {
-            imdbId,
-            original: originalTitle.substring(0, 40),
-            portugues: portugueseTitle.substring(0, 40),
-            year
-          });
         }
       } else if (mediaType === 'tv') {
         if (season !== undefined && season > 0) {
@@ -138,20 +129,10 @@ export class ImdbScraperService {
               
               if (seasonData.air_date) {
                 year = parseInt(seasonData.air_date.substring(0, 4));
-                logger.debug('TMDB ano temporada específica', {
-                  imdbId,
-                  season,
-                  year,
-                  airDate: seasonData.air_date
-                });
               }
             }
           } catch (seasonError) {
-            logger.warn('TMDB erro temporada, usando dados série', {
-              imdbId,
-              season,
-              error: seasonError instanceof Error ? seasonError.message : 'Erro desconhecido'
-            });
+            logger.warn('TMDB erro temporada, usando dados da série', { imdbId, season, error: seasonError instanceof Error ? seasonError.message : 'Erro' });
             
             const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
             if (seriesDetails) {
@@ -172,14 +153,6 @@ export class ImdbScraperService {
             }
           }
         }
-        
-        logger.debug('TMDB dados série', {
-          imdbId,
-          season,
-          original: originalTitle.substring(0, 40),
-          portugues: portugueseTitle.substring(0, 40),
-          year
-        });
       }
 
       // Se título original é não-latino, busca em inglês (animes, etc)
@@ -187,12 +160,11 @@ export class ImdbScraperService {
         const enDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, mediaType === 'tv' ? 'tv' : 'movie', 'en-US');
         const enTitle = mediaType === 'tv' ? enDetails?.name : enDetails?.title;
         if (enTitle) {
-          logger.debug('TMDB título original trocado para EN', { imdbId, original: enTitle.substring(0, 40) });
           originalTitle = enTitle;
         }
       }
 
-      // OMDB → título em inglês para complementar (ex: "Cidade de Deus" → "City of God")
+      // OMDB → título em inglês para complementar
       let englishTitle = '';
       try {
         const omdbUrl = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
@@ -202,10 +174,19 @@ export class ImdbScraperService {
         }
       } catch { /* OMDB offline, sem problema */ }
 
-      if (!originalTitle) {
-        logger.warn('TMDB: sem título', { imdbId });
-        return this.createEmptyResult(imdbId);
+      // ---- ESTRATÉGIA ROBUSTA: Se a API devolveu título vazio, acionar fallback HTML ----
+      if (!originalTitle || originalTitle.trim() === '') {
+        logger.debug('Título vazio da API, acionando fallback HTML', { imdbId, season });
+        const htmlResult = await getTmdbTitlesViaHtml(imdbId);
+        if (htmlResult) {
+          ImdbScraperService.globalCache.set(cacheKey, { data: htmlResult, timestamp: Date.now() });
+          logger.info('Fallback HTML bem-sucedido', { imdbId, title: htmlResult.originalTitle.substring(0, 50) });
+          return htmlResult;
+        }
+        logger.debug('Fallback HTML falhou, tentando IMDb HTML', { imdbId });
+        return await this.scrapeImdbTitle(imdbId);
       }
+      // ---------------------------------------------------------------------------------
 
       const normalizedOriginal = this.normalizeTitle(originalTitle);
       const normalizedPortuguese = portugueseTitle ? this.normalizeTitle(portugueseTitle) : '';
@@ -222,7 +203,6 @@ export class ImdbScraperService {
         allTitles.push(normalizedOriginal);
       }
       
-      // Adiciona título em inglês se diferente (ex: "City of God" para "Cidade de Deus")
       if (englishTitle) {
         const normalizedEn = this.normalizeTitle(englishTitle);
         if (normalizedEn && normalizedEn !== normalizedOriginal && normalizedEn !== normalizedPortuguese) {
@@ -250,14 +230,9 @@ export class ImdbScraperService {
         mediaType
       });
 
-      logger.info('TMDB títulos obtidos', {
-        imdbId,
-        tmdbId: tmdbIdNum,
-        year,
-        mediaType,
-        season,
+      logger.debug('Títulos TMDB obtidos', {
+        imdbId, tmdbId: tmdbIdNum, year, mediaType, season,
         portugues: hasPortuguese ? 'SIM' : 'NÃO',
-        tituloPortugues: hasPortuguese ? normalizedPortuguese.substring(0, 50) : 'N/A',
         tituloOriginal: normalizedOriginal.substring(0, 50)
       });
 
@@ -265,8 +240,7 @@ export class ImdbScraperService {
 
     } catch (error) {
       logger.error('TMDB erro geral', {
-        imdbId,
-        season,
+        imdbId, season,
         error: error instanceof Error ? error.message : 'Erro desconhecido'
       });
 
@@ -286,26 +260,16 @@ export class ImdbScraperService {
       });
 
       if (response.data.movie_results && response.data.movie_results.length > 0) {
-        return {
-          tmdbId: response.data.movie_results[0].id,
-          mediaType: 'movie'
-        };
+        return { tmdbId: response.data.movie_results[0].id, mediaType: 'movie' };
       }
       
       if (response.data.tv_results && response.data.tv_results.length > 0) {
-        return {
-          tmdbId: response.data.tv_results[0].id,
-          mediaType: 'tv'
-        };
+        return { tmdbId: response.data.tv_results[0].id, mediaType: 'tv' };
       }
 
       return null;
-      
     } catch (error) {
-      logger.debug('TMDB erro converter IMDB (esperado, fallback HTML funciona)', {
-        imdbId,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
-      });
+      logger.debug('TMDB find falhou, fallback HTML será usado', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
       return null;
     }
   }
@@ -313,23 +277,13 @@ export class ImdbScraperService {
   private async fetchDetailsFromTMDB(tmdbId: number, mediaType: 'movie' | 'tv', langOverride?: string): Promise<any> {
     try {
       const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
-      
       const response = await axios.get(`${this.tmdbBaseUrl}/${endpoint}/${tmdbId}`, {
-        params: {
-          api_key: this.tmdbApiKey,
-          language: langOverride || this.language
-        },
+        params: { api_key: this.tmdbApiKey, language: langOverride || this.language },
         timeout: 10000
       });
-
       return response.data;
-      
     } catch (error) {
-      logger.error('TMDB erro detalhes', {
-        tmdbId,
-        mediaType,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
-      });
+      logger.debug('TMDB detalhes falhou', { tmdbId, mediaType, error: error instanceof Error ? error.message : 'Erro' });
       return null;
     }
   }
@@ -337,26 +291,17 @@ export class ImdbScraperService {
   private async fetchSeasonFromTMDB(tmdbId: number, season: number): Promise<any> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/tv/${tmdbId}/season/${season}`, {
-        params: {
-          api_key: this.tmdbApiKey,
-          language: this.language
-        },
+        params: { api_key: this.tmdbApiKey, language: this.language },
         timeout: 10000
       });
-
       return response.data;
-      
     } catch (error) {
-      logger.error('TMDB erro temporada', {
-        tmdbId,
-        season,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
-      });
+      logger.debug('TMDB temporada falhou', { tmdbId, season, error: error instanceof Error ? error.message : 'Erro' });
       throw error;
     }
   }
 
-  /** Fallback: scrape IMDb HTML quando TMDB nao conhece o ID */
+  /** Fallback: scrape IMDb HTML quando TMDB não conhece o ID */
   private async scrapeImdbTitle(imdbId: string): Promise<ImdbTitles> {
     try {
       const url = `https://www.imdb.com/title/${imdbId}/`;
@@ -371,13 +316,9 @@ export class ImdbScraperService {
       });
 
       const $ = cheerio.load(res.data);
-      // Título do <title> (ex: "Project Hail Mary (2026) - IMDb")
       const rawTitle = $('title').text().replace(/\s*-\s*IMDb\s*$/i, '').trim();
-      // Extrai ano
       const yearMatch = rawTitle.match(/\((\d{4})\)/);
       const year = yearMatch ? parseInt(yearMatch[1]) : undefined;
-
-      // Título limpo sem o ano
       const cleanTitle = rawTitle.replace(/\s*\(\d{4}\)\s*/, '').trim();
       const normalized = this.normalizeTitle(cleanTitle);
 
@@ -385,7 +326,7 @@ export class ImdbScraperService {
         return this.createEmptyResult(imdbId);
       }
 
-      logger.info('IMDb HTML fallback', { imdbId, title: cleanTitle.substring(0, 50), year });
+      logger.debug('IMDb HTML fallback OK', { imdbId, title: cleanTitle.substring(0, 50), year });
 
       return {
         originalTitle: normalized,
@@ -404,8 +345,7 @@ export class ImdbScraperService {
   }
 
   private createEmptyResult(imdbId: string): ImdbTitles {
-    logger.debug('TMDB resultado vazio', { imdbId });
-    
+    logger.debug('Resultado vazio gerado', { imdbId });
     return {
       originalTitle: `Unknown Title (${imdbId})`,
       portugueseTitle: null,
@@ -421,7 +361,7 @@ export class ImdbScraperService {
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')  // \p{L}=Unicode letters, preserva coreano/japonês/árabe etc
+      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
@@ -431,10 +371,7 @@ export class ImdbScraperService {
       const titles = await this.getTitlesFromImdbId(imdbId);
       return titles.portugueseTitle || titles.originalTitle || null;
     } catch (error) {
-      logger.error('TMDB erro compatibilidade', {
-        imdbId,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
-      });
+      logger.error('TMDB erro compatibilidade', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
       return null;
     }
   }
@@ -459,8 +396,8 @@ export class ImdbScraperService {
     return {
       cacheSize: ImdbScraperService.globalCache.size,
       cacheTTL: this.cacheTTL,
-      version: '2.0.0',
-      feature: 'Português primeiro + cache otimizado'
+      version: '2.1.0',
+      feature: 'Fallback HTML automático em caso de título vazio'
     };
   }
 }
