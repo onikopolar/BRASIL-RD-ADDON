@@ -3,6 +3,7 @@ import { SimilarityCalculator } from './SimilarityCalculator.js';
 import { MetadataExtractor } from './MetadataExtractor.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
+import { extrairRangeEpisodios } from './TechnicalWords.js';
 import { TitleMatchResult, SeriesMetadata } from './interfaces.js';
 
 /**
@@ -70,41 +71,47 @@ export class TitleFilter {
       // Metadados do originalTitle (similaridade de título)
       const metadados = this.extrairMetadados(tituloTorrent);
       // Prefere o ano extraído do HTML do post (scraper), fallback pra regex no título
-      const anoTorrent = anoDoScraper || this.extrairAno(tituloTorrent);
+      // Depois fallback pro canonicalName (dn magnet) — tem ano que o originalTitle não tem
+      const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
       // Metadados do magnet dn (validação de temporada/episódio)
       // originalTitle ("House of the Dragon") não tem S/E — magnet dn tem
       const tituloParaEpisodio = tituloParaIdioma || tituloTorrent;
       const metadadosEpisodio = this.extrairMetadados(tituloParaEpisodio);
 
-      // 1. Valida temporada (se aplicável)
+      // 1. Valida temporada/episódio usando extrairRangeEpisodios (TechnicalWords)
+      let temporadaConfirmada = false;
       if (temporadaAlvo !== undefined) {
-        if (metadadosEpisodio.season && metadadosEpisodio.season !== temporadaAlvo) {
-          return {
-            matches: false, similarity: 0, torrentMetadata: metadados,
-            reason: `Temporada diferente: S${metadadosEpisodio.season} vs S${temporadaAlvo}`
-          };
+        // Tenta no magnet dn primeiro, fallback pro originalTitle
+        let range = extrairRangeEpisodios(tituloParaEpisodio);
+        if (!range && tituloTorrent !== tituloParaEpisodio) {
+          range = extrairRangeEpisodios(tituloTorrent);
         }
-
-        // 2. Valida episódio (se aplicável)
-        if (episodioAlvo !== undefined) {
-          // Se tem temporada detectada mas não tem episódio → provável pack de temporada
-          if (metadadosEpisodio.season && metadadosEpisodio.episode === undefined && !metadadosEpisodio.isCompleteSeason) {
-            // Deixa passar — SimilarityCalculator decide se é compatível
-          } else {
-            const compat = this.episodeMatcher.episodioEhCompativel(
-              tituloParaEpisodio, metadadosEpisodio.episode, episodioAlvo, temporadaAlvo
-            );
-            if (!compat.compativel) {
-              return { matches: false, similarity: 0, torrentMetadata: metadados, reason: compat.motivo };
+        if (range) {
+          if (range.season !== temporadaAlvo) {
+            return {
+              matches: false, similarity: 0, torrentMetadata: metadados,
+              reason: `Temporada diferente: S${range.season} vs S${temporadaAlvo}`
+            };
+          }
+          temporadaConfirmada = true; // season bateu → relaxa validação de ano
+          if (episodioAlvo !== undefined && range.episodeStart > 0 && range.episodeEnd > 0) {
+            if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
+              return {
+                matches: false, similarity: 0, torrentMetadata: metadados,
+                reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
+              };
             }
           }
         }
       }
 
       // 3. Valida similaridade de título (SimilarityCalculator puro)
+      // Se temporada foi confirmada via extrairRangeEpisodios, relaxa ano
+      // (scrapers podem extrair ano de upload em vez do ano da temporada)
+      const anoParaSimilaridade = temporadaConfirmada ? undefined : anoTorrent;
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
-        tituloTorrent, imdbId, { year: anoTorrent, season: temporadaAlvo }, tituloParaIdioma
+        tituloTorrent, imdbId, { year: anoParaSimilaridade, season: temporadaAlvo }, tituloParaIdioma
       );
 
       // 4. Se TMDB diz que é FILME mas torrent tem indicadores de SÉRIE → rejeitar

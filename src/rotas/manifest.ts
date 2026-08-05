@@ -31,10 +31,11 @@ export const manifest = {
     // Comportamento do addon
     // IMPORTANTE: configurationRequired: false para funcionar no Stremio Web
     behaviorHints: {
-        configurable: true,           // Usuário pode configurar
-        configurationRequired: false, // NÃO requer configuração para usar (FIX WEB)
-        adult: false,                 // Conteúdo não adulto
-        p2p: false                    // Não usa P2P
+        configurable: true,
+        configurationRequired: false,
+        adult: false,
+        p2p: false,
+        preferredAudioLanguage: 'por'   // Força áudio PT-BR no Stremio Web
     },
     
     // Configuração opcional (API Key do Torbox)

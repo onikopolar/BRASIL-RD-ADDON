@@ -158,6 +158,7 @@ const COLLECTION_WORDS = new Set([
   'coletanea', 'franquia', 'duologia', 'saga',
   'all seasons', 'todas as temporadas', 'temporada completa', 'complete season',
   'season pack', 'complete series', 'serie completa',
+  'todos os episódios', 'todos os episodios', 'temporadas',
 ]);
 
 /** Verifica se o título do torrent é uma coletânea (trilogia, quadrilogia, etc.) */
@@ -469,6 +470,14 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   if (seasonOnly) return { season: parseInt(seasonOnly[1]), episodeStart: 0, episodeEnd: 0 };
   const xOnly = t.match(/^(\d{1,2})x$/i);
   if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
+
+  // ═══ Padrão 5: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
+  const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
+  if (tempPack) return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
+
+  // ═══ Padrão 6: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
+  const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
+  if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
 
   return null;
 }

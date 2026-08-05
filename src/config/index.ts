@@ -18,7 +18,7 @@ export const config: AppConfig = {
   torbox: {
     apiKey: process.env.TORBOX_API_KEY || '',
     baseUrl: 'https://api.torbox.app/v1/api',
-    timeout: 10000
+    timeout: 15000 // 15s — suficiente p/ add magnet, retry cobre o resto
   },
   stremio: {
     cacheMaxAge: 24 * 60 * 60, // 24 horas

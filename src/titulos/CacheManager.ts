@@ -268,6 +268,7 @@ getImdbTitlesFromCache(imdbId: string): ImdbTitleCacheEntry | null {
     // Versão simplificada similar ao original
     return torrentTitle
       .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();

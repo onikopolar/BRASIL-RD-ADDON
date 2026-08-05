@@ -183,6 +183,7 @@ class TorrentScraperService {
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
+            year: r.year,
         };
     }
     mapHdrLanguage(label) {

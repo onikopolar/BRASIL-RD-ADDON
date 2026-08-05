@@ -5,7 +5,7 @@ exports.config = {
     torbox: {
         apiKey: process.env.TORBOX_API_KEY || '',
         baseUrl: 'https://api.torbox.app/v1/api',
-        timeout: 10000
+        timeout: 15000
     },
     stremio: {
         cacheMaxAge: 24 * 60 * 60,

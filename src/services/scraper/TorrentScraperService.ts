@@ -190,7 +190,7 @@ export class TorrentScraperService {
         };
     }
 
-    private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string; year?: number }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
         const dnMatch = r.magnet.match(/dn=([^&]+)/i);
         const displayName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
@@ -212,6 +212,7 @@ export class TorrentScraperService {
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
+            year: r.year,
         };
     }
 

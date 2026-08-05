@@ -1,0 +1,1756 @@
+
+[INFO] [Server] Brasil RD Addon iniciado { port: 7001, protocol: 'http', httpsEnabled: false }
+[DEBUG] [ULTRA-DEBUG] ▶ REQUEST #0e4a4b83 GET /torbox=***/stream/series/tt0121955%3A5%3A4.json {
+  requestId: '0e4a4b83',
+  timestamp: '2026-08-05T03:53:41.564Z',
+  method: 'GET',
+  fullUrl: 'https://devbrasilrd.oniko.org/torbox=***/stream/series/tt0121955%3A5%3A4.json',
+  path: '/torbox=***/stream/series/tt0121955%3A5%3A4.json',
+  query: {},
+  params: {},
+  headers: {
+    host: 'devbrasilrd.oniko.org',
+    origin: 'https://web.stremio.com',
+    referer: 'https://web.stremio.com/',
+    'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0',
+    accept: '*/*',
+    'x-forwarded-for': '2804:d4b:ba41:9d00:edc9:87e5:99b6:67d4',
+    'cf-connecting-ip': '2804:d4b:ba41:9d00:edc9:87e5:99b6:67d4',
+    'cf-ray': 'a262db3aaa8b4b3a-GRU',
+    'x-forwarded-proto': 'https'
+  },
+  ip: '2804:d4b:ba41:9d00:edc9:87e5:99b6:67d4',
+  clientInfo: null,
+  body: undefined
+}
+[ClientInfo] 2804:d4b:ba41:9d00:edc9:87e5:99b6:67d4 - Edge 151.0.0.0 em Windows (desktop)
+[INFO] [STREAM-TORBOX] ═══════════════════════════════════════ {}
+[INFO] [STREAM-TORBOX]  STREAM SOLICITADO (Torbox route) {
+  requestId: '0e4a4b83',
+  type: 'series',
+  id: 'tt0121955:5:4',
+  apiKeyPresent: true,
+  apiKeyLength: 36,
+  apiKeyPreview: 'bd01...e0da',
+  host: 'devbrasilrd.oniko.org',
+  origin: 'https://web.stremio.com',
+  userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Sa',
+  clientInfo: undefined
+}
+[DEBUG] [CuratedMagnetService] CuratedMagnetService ready 
+[DEBUG] [StreamFormatter] StreamFormatter ready 
+[DEBUG] [CuratedMagnetService] Aguardando inicialização do CuratedMagnetService... 
+[DEBUG] [CuratedMagnetService] Iniciando carregamento de magnets do JSON... { totalMagnets: 17 }
+[INFO] [CuratedMagnetService] Default magnets initialized { loadedCount: 17, errorCount: 0, totalMagnets: 17, uniqueImdbIds: 13 }
+[DEBUG] [CuratedMagnetService] IMDb IDs carregados do JSON: {
+  imdbIds: [
+    'tt0317219',  'tt1942683',
+    'tt12593682', 'tt0903747',
+    'tt11247158', 'tt1844624',
+    'tt8146754',  'tt0325537',
+    'tt15248880', 'tt13428402',
+    'tt0264079',  'tt0383001',
+    'tt1650062'
+  ]
+}
+[DEBUG] [CuratedMagnetService] CuratedMagnetService pronto para uso { totalMagnets: 17 }
+[DEBUG] [CuratedMagnetService] === SEARCH MAGNETS START === {
+  requestId: 'tt0121955:5:4',
+  imdbId: undefined,
+  type: 'series',
+  totalImdbIdsInCatalog: 13,
+  totalMagnets: 17
+}
+[DEBUG] [CuratedMagnetService] Procurando por IMDb ID: {
+  originalId: 'tt0121955:5:4',
+  baseImdbId: 'tt0121955',
+  hasInCatalog: false
+}
+[DEBUG] [CuratedMagnetService] IMDb ID não encontrado no catálogo { baseImdbId: 'tt0121955' }
+[DEBUG] [CuratedMagnetService] Magnet search completed {
+  requestId: 'tt0121955:5:4',
+  searchId: 'tt0121955:5:4',
+  title: undefined,
+  resultsCount: 0,
+  totalImdbIdsInCatalog: 13,
+  hasSeasonEpisode: false
+}
+[DEBUG] [CatalogProvider]  Iniciando scraping para tt0121955:5:4 
+[DEBUG] [TMDBScraper] Cache TMDB miss { imdbId: 'tt0121955', season: 5 }
+[DEBUG] [TMDBScraper] TMDB ano temporada específica { imdbId: 'tt0121955', season: 5, year: 2001, airDate: '2001-06-20' }
+[DEBUG] [TMDBScraper] TMDB dados série {
+  imdbId: 'tt0121955',
+  season: 5,
+  original: 'South Park',
+  portugues: 'South Park',
+  year: 2001
+}
+[INFO] [TMDBScraper] TMDB títulos obtidos {
+  imdbId: 'tt0121955',
+  tmdbId: 2190,
+  year: 2001,
+  mediaType: 'tv',
+  season: 5,
+  portugues: 'NÃO',
+  tituloPortugues: 'N/A',
+  tituloOriginal: 'south park'
+}
+[DEBUG] [HdrScraper] HDR busca: 32 links para "south park" {
+  links: [
+    'HDR Torrent',
+    'South Park - O Fim da Obesidade Dublado e Dual Áudio Torrent',
+    'South Park (Não Recomendado Para Menores) Dublado e Dual Áud',
+    'South Park - Entrando no Panderverso Dublado e Dual Áudio To',
+    'South Park - Joining the Panderverse - Legendado  Torrent (2'
+  ],
+  total: 32
+}
+[DEBUG] [HdrScraper] HDR busca: 2 links para "south park Temporada 5" { links: [ 'HDR Torrent', 'HDR Torrent' ], total: 2 }
+[DEBUG] [HdrScraper] HDR busca: 3 links para "South Park 5ª Temporada" {
+  links: [
+    'HDR Torrent',
+    'South Park - 5ª Temporada Dublado Torrent (1997)',
+    'HDR Torrent'
+  ],
+  total: 3
+}
+[DEBUG] [StarckScraper] Starck: 11 links → 0 após filtro de query "south park Temporada 5" 
+[DEBUG] [StarckScraper] Starck: 11 links → 6 após filtro de query "south park" 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/ | H3s: [] 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/sitemap.xml | H3s: [] 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/ | H3s: [] 
+[INFO] [HdrScraper] HDR: 0 magnets em 1780ms para "south park Temporada 5" 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/sitemap.xml | H3s: [] 
+[DEBUG] [HdrScraper] HDR LEGENDADO-only | South Park - 25ª Temporada - Legendado  Torrent (2022) | https://hdrtorrent.com/south-park-25-temporada-legendado-torrent-download/ | H3s: [::VERSÃO LEGENDADA::] 
+[INFO] [WordPressScraper] WP Comando Torrents: 135 magnets em N/A para "south park" 
+[DEBUG] [WordPressScraper] WP: limite LEGENDADO encontrado — ignorando magnets após posição HTML 6535 
+[INFO] [WordPressScraper] WP Comando Torrents: 135 magnets em N/A para "south park" 
+[DEBUG] [WordPressScraper] WP: limite LEGENDADO encontrado — ignorando magnets após posição HTML 6535 
+[INFO] [StarckScraper] Starck: 8 magnets em 2512ms para "south park" 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/ | H3s: [] 
+[INFO] [HdrScraper] HDR: 3 magnets em 2629ms para "South Park 5ª Temporada" 
+[INFO] [BludvScraper] BLUDV HTML: 8 posts encontrados para "south park" 
+[INFO] [BludvScraper] BLUDV HTML: 8 posts encontrados para "south park Temporada 5" 
+[DEBUG] [HdrScraper] HDR LEGENDADO-only | South Park Pós-Covid - O Retorno da Covid Legendado  Torrent | https://hdrtorrent.com/south-park-pos-covid-o-retorno-da-covid-legendado-torrent-download/ | H3s: [::VERSÃO LEGENDADA::] 
+[DEBUG] [HdrScraper] HDR LEGENDADO-only | South Park - 24ª Temporada - Legendado  Torrent (2020) | https://hdrtorrent.com/south-park-24-temporada-legendado-torrent-download/ | H3s: [::VERSÃO LEGENDADA::] 
+[DEBUG] [HdrScraper] HDR LEGENDADO-only | South Park - Post COVID - Legendado  Torrent (2021) | https://hdrtorrent.com/south-park-post-covid-legendado-torrent-download/ | H3s: [::VERSÃO LEGENDADA::] 
+[DEBUG] [HdrScraper] HDR LEGENDADO-only | South Park - 22ª Temporada Legendada  Torrent (2018) | https://hdrtorrent.com/south-park-22-temporada-legendada-torrent-download/ | H3s: [::VERSÃO LEGENDADA::] 
+[DEBUG] [HdrScraper] HDR sem DUAL/LEG | HDR Torrent | https://hdrtorrent.com/sitemap.xml | H3s: [] 
+[INFO] [HdrScraper] HDR: 154 magnets em 6105ms para "south park" 
+[WARN] [TorrentScraperService] Coleta de torrents lenta { tempo: '6118ms', resultados: 161, queries: 5 }
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park the end of obesity',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: The End of Obesity" | Título curto (2pal) + ano 2024≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2024 vs 2001 (dif=23>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park not suitable for children',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: Not Suitable for Children" | Título curto (2pal) + ano 2023≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park joining the panderverse',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: Joining the Panderverse" | Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park the streaming wars part 2',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 5,
+  proporcao: '44%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: The Streaming Wars Part 2" | Título curto (2pal) + ano 2022≠2001 + 5 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park the streaming wars',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: The Streaming Wars" | Título curto (2pal) + ano 2022≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park post covid the return of covid',
+  tmdbWords: 2,
+  torrentWords: 8,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 6,
+  proporcao: '40%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: Post Covid – The Return of Covid" | Título curto (2pal) + ano 2021≠2001 + 6 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'passenger',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Passenger" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsession',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsession" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsession',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsession" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsession',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsession" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'ready or not here i come 2',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 7,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Ready or Not 2: Here I Come" | Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'ready or not here i come 2',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 7,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Ready or Not 2: Here I Come" | Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'ready or not here i come 2',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 7,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Ready or Not 2: Here I Come" | Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park post covid',
+  tmdbWords: 2,
+  torrentWords: 4,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 2,
+  proporcao: '67%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: Post Covid" | Título curto (2pal) + ano 2021≠2001 + 2 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park joining the panderverse',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: Joining the Panderverse" | Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park not suitable for children',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park (Not Suitable for Children)" | Título curto (2pal) + ano 2023≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park the streaming wars part 2',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 5,
+  proporcao: '44%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park: The Streaming Wars Part 2" | Título curto (2pal) + ano 2022≠2001 + 5 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park s02',
+  tmdbWords: 2,
+  torrentWords: 3,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 0,
+  proporcao: '100%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:X] "South Park S02" | Título curto (2pal) + ano divergente: 1998≠2001 → conteúdo diferente | Temporada divergente: S2 vs S5 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'viatorrents com southpark dublado mkv 1080p',
+  tmdbWords: 2,
+  torrentWords: 2,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 2,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "VIATORRENTS.COM - SOUTHPARK.DUBLADO.1997.MKV.1080P" | Título curto (2pal) + ano 1997≠2001 + 2 extra(s) → provável outro filme 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park todos os episodios completos',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[INFO] [SimilarityCalculator] ✅ [A:OK C:OK E:OK] "South Park - Todos os Episódios Completos" 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park dublado em portugues completo a ord 15',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 5,
+  proporcao: '44%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "South Park Dublado em Português Completo (1ª a 15&ord" | Título curto (2pal) + ano 1997≠2001 + 5 extra(s) → provável outro filme 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park temporada completa dublado hdtv mkv by lip 16',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 5,
+  proporcao: '44%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "South Park 16ª Temporada Completa Dublado HDTV MKV - By Lip" | Coletânea: match baixo 2/2 palavras. Faltando: [] 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'temporada south park 5',
+  tmdbWords: 2,
+  torrentWords: 4,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 2,
+  proporcao: '67%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "5ª Temporada - South Park" | Sem ano para validar + 2 palavra(s) extra(s) no torrent → título diferente 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park o fim da obesidade web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - O Fim da Obesidade 2024 WEB-DL 1080p x264 DUAL 2.0" | Título curto (2pal) + ano 2024≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2024 vs 2001 (dif=23>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park nao recomendado para menores web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - Não Recomendado Para Menores 2023 WEB-DL 1080p x264 DUAL " | Título curto (2pal) + ano 2023≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park entrando no panderverso web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - Entrando no Panderverso 2023 WEB-DL 1080p x264 DUAL 2.0" | Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park guerras do streaming parte web dl 1080p dual',
+  tmdbWords: 2,
+  torrentWords: 6,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 4,
+  proporcao: '50%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - Guerras do Streaming Parte 2 2022 WEB-DL 1080p DUAL 2.0" | Título curto (2pal) + ano 2022≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park guerras do streaming 1080p web dl dual',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park Guerras do Streaming 2022 1080p WEB-DL DUAL" | Título curto (2pal) + ano 2022≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park pos covid a volta da covid web dl 1080p dual',
+  tmdbWords: 2,
+  torrentWords: 8,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 6,
+  proporcao: '40%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - Pós-Covid - A Volta da Covid 2021 WEB-DL 1080p DUAL 2.0" | Título curto (2pal) + ano 2021≠2001 + 6 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'passageiro do mal web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 3,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 3,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Passageiro do Mal 2026 WEB-DL 1080p x264 DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsessao web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsessão 2026 WEB-DL 1080p x264 DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsessao web dl 1080p x264 fullhd dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsessão 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'obsessao web dl 2160p x265 dv hdr10 dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Obsessão 2026 WEB-DL 2160p x265 DV HDR10 DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael 2026 WEB-DL 1080p x264 DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael web dl 1080p x264 fullhd dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'michael web dl 2160p x265 dv hdr10 dual',
+  tmdbWords: 2,
+  torrentWords: 1,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 1,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Michael 2026 WEB-DL 2160p x265 DV HDR10  DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'casamento sangrento a viuva web dl 1080p x264 dual',
+  tmdbWords: 2,
+  torrentWords: 4,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 4,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Casamento Sangrento - A Viúva 2026 WEB-DL 1080p x264 DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'casamento sangrento a viuva web dl 1080p x264 fullhd dual',
+  tmdbWords: 2,
+  torrentWords: 4,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 4,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Casamento Sangrento - A Viúva 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1" | Título curto (2pal) + ano 2026≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'casamento sangrento a viuva web dl 2160p x265 dv hdr10 dual',
+  tmdbWords: 2,
+  torrentWords: 4,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 4,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "Casamento Sangrento - A Viúva 2026 WEB-DL 2160p x265 DV HDR10  DUAL 5." | Título curto (2pal) + ano 2026≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park pa s covid web dl 1080p dual',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South Park - PÃ³s-Covid 2021 WEB-DL 1080p DUAL 2.0" | Título curto (2pal) + ano 2021≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park entrando no panderverso 1080p web dl dual',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "South.Park.Entrando.no.Panderverso.2023.1080p.WEB-DL.DUAL.5.1" | Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'hdrtorrent com mkv south park nao recomendado para menores 1080p web dl dual',
+  tmdbWords: 2,
+  torrentWords: 7,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 5,
+  proporcao: '44%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "HDRTORRENT.COM..MKV.South.Park.Nao.Recomendado.Para.Menores.2023.1080p" | Título curto (2pal) + ano 2023≠2001 + 5 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'vacatorrent com parte mkv south park guerras do streaming parte 1080p web dl dual 2',
+  tmdbWords: 2,
+  torrentWords: 9,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 7,
+  proporcao: '36%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:X E:OK] "VACATORRENT.COM.PARTE.MKV.South Park Guerras do Streaming Parte 2 2022" | Título curto (2pal) + ano 2022≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5) 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'ondebaixa com southpark dublado mkv',
+  tmdbWords: 2,
+  torrentWords: 2,
+  scoreTMDBtoTorrent: '0.0',
+  faltando: 'south,park',
+  extrasTorrent: 2,
+  proporcao: '0%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "ONDEBAIXA.COM - SOUTHPARK.1998.DUBLADO.MKV.1080" | Título curto (2pal) + ano 1998≠2001 + 2 extra(s) → provável outro filme 
+[DEBUG] [SimilarityCalculator] Match "south park" → torrent {
+  tmdb: 'south park',
+  torrent: 'south park temporada 720p dublado filmes beta 5',
+  tmdbWords: 2,
+  torrentWords: 5,
+  scoreTMDBtoTorrent: '2.0',
+  faltando: '',
+  extrasTorrent: 3,
+  proporcao: '57%'
+}
+[DEBUG] [SimilarityCalculator] ❌ [A:X C:OK E:OK] "South Park 5 Temporada 720p Dublado - Filmes Beta" | Sem ano para validar + 3 palavra(s) extra(s) no torrent → título diferente 
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - O Fim da Obesidade 2024 WEB-DL 1080p x264 DUAL 2.0',
+  originalTitle: 'South Park: The End of Obesity',
+  provider: 'BLUDV Filmes',
+  year: 2024,
+  motivo: 'Título curto (2pal) + ano 2024≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2024 vs 2001 (dif=23>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - Não Recomendado Para Menores 2023 WEB-DL 1080p x264 DUAL 2.0',
+  originalTitle: 'South Park: Not Suitable for Children',
+  provider: 'BLUDV Filmes',
+  year: 2023,
+  motivo: 'Título curto (2pal) + ano 2023≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - Entrando no Panderverso 2023 WEB-DL 1080p x264 DUAL 2.0',
+  originalTitle: 'South Park: Joining the Panderverse',
+  provider: 'BLUDV Filmes',
+  year: 2023,
+  motivo: 'Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - Guerras do Streaming Parte 2 2022 WEB-DL 1080p DUAL 2.0',
+  originalTitle: 'South Park: The Streaming Wars Part 2',
+  provider: 'BLUDV Filmes',
+  year: 2022,
+  motivo: 'Título curto (2pal) + ano 2022≠2001 + 5 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park Guerras do Streaming 2022 1080p WEB-DL DUAL',
+  originalTitle: 'South Park: The Streaming Wars',
+  provider: 'BLUDV Filmes',
+  year: 2022,
+  motivo: 'Título curto (2pal) + ano 2022≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - Pós-Covid - A Volta da Covid 2021 WEB-DL 1080p DUAL 2.0',
+  originalTitle: 'South Park: Post Covid – The Return of Covid',
+  provider: 'BLUDV Filmes',
+  year: 2021,
+  motivo: 'Título curto (2pal) + ano 2021≠2001 + 6 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Passageiro do Mal 2026 WEB-DL 1080p x264 DUAL 5.1',
+  originalTitle: 'Passenger',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '[COMANDOTORRENTS.COM] South Park S23E01 [1080p] [WEB-DL] [DUAL]',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '[COMANDOTORRENTS.COM] South Park S23E02 [1080p] [WEB-DL] [DUAL]',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '[COMANDOTORRENTS.COM] South Park S23E03 [1080p] [WEB-DL] [DUAL]',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '[COMANDOTORRENTS.COM] South Park S23E04 [1080p] [WEB-DL] [DUAL]',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2019 - S23E05 (1080p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2019 - S23E06 (1080p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'LAPUMiA.Org - South Park 2019 - S23E07-08 (1080p)',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'LAPUMiA.Org - South Park 2019 - S23E09 (1080p)',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'LAPUMiA.Org - South Park 2019 - S23E10 (1080p)',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E01 (720p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E02 (720p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E03 (720p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E04 (720p) LAPUMiA',
+  originalTitle: 'South Park',
+  provider: 'BLUDV Filmes',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Obsessão 2026 WEB-DL 1080p x264 DUAL 5.1',
+  originalTitle: 'Obsession',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Obsessão 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1',
+  originalTitle: 'Obsession',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Obsessão 2026 WEB-DL 2160p x265 DV HDR10 DUAL 5.1',
+  originalTitle: 'Obsession',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Michael 2026 WEB-DL 1080p x264 DUAL 5.1',
+  originalTitle: 'Michael',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Michael 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1',
+  originalTitle: 'Michael',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Michael 2026 WEB-DL 2160p x265 DV HDR10  DUAL 5.1',
+  originalTitle: 'Michael',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Casamento Sangrento - A Viúva 2026 WEB-DL 1080p x264 DUAL 5.1',
+  originalTitle: 'Ready or Not 2: Here I Come',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Casamento Sangrento - A Viúva 2026 WEB-DL 1080p x264 FULLHD DUAL 5.1',
+  originalTitle: 'Ready or Not 2: Here I Come',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'Casamento Sangrento - A Viúva 2026 WEB-DL 2160p x265 DV HDR10  DUAL 5.1',
+  originalTitle: 'Ready or Not 2: Here I Come',
+  provider: 'BLUDV Filmes',
+  year: 2026,
+  motivo: 'Título curto (2pal) + ano 2026≠2001 + 7 extra(s) → provável outro filme | Ano divergente: 2026 vs 2001 (dif=25>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E01.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E01.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E02.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E02.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E03.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E03.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E04.REPACK.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E04.REPACK.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E05.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E05.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E06.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E06.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E07.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E07.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E08.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E08.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E09.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E09.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E10.HDTV.x264-SVA[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E10.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S21E01.1080p.WEB-DL.DUAL.comando1.com',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 21ª Temporada 2017 [Ep. 02 e 03] [WEB-DL] [1080p] [DUAL] comando1.com',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E01.HDTV.x264-KILLERS[ettv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E01.720p.HDTV.x264-AVS[PRiME]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E02.HDTV.x264-FUM[ettv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S20E02 720p HDTV x265 HEVC 100MB - ShAaNiG',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E03.PROPER.HDTV.x264-KILLERS[ettv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E03.720p.HDTV.x264-AVS[rarbg]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S20E04 HDTV x264-FUM[ettv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S20E04 720p HDTV x264-AVS[PRiME]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E05.HDTV.x264-KILLERS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E05.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E06.HDTV.x264-FUM[ettv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E06.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S20E07 HDTV x264-FLEET[PRiME]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S20E07 720p HDTV x264-AVS[PRiME]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E08.HDTV.x264-FLEET[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E08.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E09.HDTV.x264-FLEET[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E09.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E10.HDTV.x264-FLEET[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.S20E10.720p.HDTV.x264-AVS[rartv]',
+  originalTitle: 'N/A',
+  provider: 'Comando Torrents',
+  year: 'N/A',
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park - PÃ³s-Covid 2021 WEB-DL 1080p DUAL 2.0',
+  originalTitle: 'South Park: Post Covid',
+  provider: 'Starck',
+  year: 2021,
+  motivo: 'Título curto (2pal) + ano 2021≠2001 + 2 extra(s) → provável outro filme | Ano divergente: 2021 vs 2001 (dif=20>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.Entrando.no.Panderverso.2023.1080p.WEB-DL.DUAL.5.1',
+  originalTitle: 'South Park: Joining the Panderverse',
+  provider: 'Starck',
+  year: 2023,
+  motivo: 'Título curto (2pal) + ano 2023≠2001 + 3 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.Not.Suitable.For.Children.2023.1080p.WEB.H264-DiMEPiECE [TGx]',
+  originalTitle: 'South Park (Not Suitable for Children)',
+  provider: 'Starck',
+  year: 2023,
+  motivo: 'Idioma internacional: EN detectado: tgx'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South.Park.Not.Suitable.For.Children.2023.2160p.WEB.H265-HEATHEN [TGx]',
+  originalTitle: 'South Park (Not Suitable for Children)',
+  provider: 'Starck',
+  year: 2023,
+  motivo: 'Idioma internacional: EN detectado: tgx'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'HDRTORRENT.COM..MKV.South.Park.Nao.Recomendado.Para.Menores.2023.1080p.WEB-DL.DU',
+  originalTitle: 'South Park (Not Suitable for Children)',
+  provider: 'HDR Torrent',
+  year: 2023,
+  motivo: 'Título curto (2pal) + ano 2023≠2001 + 4 extra(s) → provável outro filme | Ano divergente: 2023 vs 2001 (dif=22>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'VACATORRENT.COM.PARTE.MKV.South Park Guerras do Streaming Parte 2 2022 1080p WEB',
+  originalTitle: 'South Park: The Streaming Wars Part 2',
+  provider: 'HDR Torrent',
+  year: 2022,
+  motivo: 'Título curto (2pal) + ano 2022≠2001 + 5 extra(s) → provável outro filme | Ano divergente: 2022 vs 2001 (dif=21>5)'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'ONDEBAIXA.COM - SOUTHPARK.1998.DUBLADO.MKV.1080',
+  originalTitle: 'South Park S02',
+  provider: 'HDR Torrent',
+  year: 1998,
+  motivo: 'Título curto (2pal) + ano divergente: 1998≠2001 → conteúdo diferente | Temporada divergente: S2 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'VIATORRENTS.COM - SOUTHPARK.DUBLADO.1997.MKV.1080P',
+  originalTitle: 'South Park Season 01 1080p',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Temporada diferente: S1 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '1° Temporada',
+  originalTitle: 'South Park Season 01 1080p',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Temporada diferente: S1 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '17° Temporada',
+  originalTitle: 'South Park S17',
+  provider: 'HDR Torrent',
+  year: 2013,
+  motivo: 'Temporada diferente: S17 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S23E01 (1080p) LAPUMiA',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2019 - S23E02 (1080p) LAPUMiA.NeT',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2019 - S23E03-04 (1080p) LAPUMiA.Net',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'hidratorrent.com - South.Park_.S23E01',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'hidratrorrent.com - South.Park_.S23E02',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'hidratorrent.com - south-park-s23e03',
+  originalTitle: 'South Park S23',
+  provider: 'HDR Torrent',
+  year: 2019,
+  motivo: 'Temporada diferente: S23 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '2° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S2 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '3° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S3 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '4° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S4 vs S5'
+}
+[INFO] [CatalogProvider] 🎯 EPISÓDIO ACEITO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  torrent: '5° Temporada',
+  canonical: true,
+  provider: 'HDR Torrent',
+  infoHash: 'aa20a4e3e095'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '6° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S6 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '7° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S7 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '8° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S8 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '9° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S9 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '10° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S10 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '11° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S11 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '12° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S12 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '13° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S13 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '14° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S14 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '15° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S15 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '16° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S16 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '18° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S18 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '19° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S19 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: '20° Temporada',
+  originalTitle: 'South Park - Todos os Episódios Completos',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S20 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E05 (720p) LAPUMiA',
+  originalTitle: 'South Park S22',
+  provider: 'HDR Torrent',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E06 (720p) LAPUMiA',
+  originalTitle: 'South Park S22',
+  provider: 'HDR Torrent',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E07 (720p) LAPUMiA',
+  originalTitle: 'South Park S22',
+  provider: 'HDR Torrent',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E08-09 (720p) LAPUMiA',
+  originalTitle: 'South Park S22',
+  provider: 'HDR Torrent',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S22E10 (720p) LAPUMiA',
+  originalTitle: 'South Park S22',
+  provider: 'HDR Torrent',
+  year: 2018,
+  motivo: 'Temporada diferente: S22 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park S21E04 [1080p] [WEB-DL] DUAL - WWW.LAPUMiAFiLMES.COM',
+  originalTitle: '21ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 2018 - S21E05-10 (1080p) ',
+  originalTitle: '21ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 2017,
+  motivo: 'Temporada diferente: S21 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park Dublado em Português Completo (1ª a 15&ord',
+  originalTitle: '16ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Temporada diferente: S16 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 16ª Temporada Completa Dublado HDTV MKV - By Lip',
+  originalTitle: '16ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Temporada diferente: S16 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South park 13ª Temporada - Filmes Beta',
+  originalTitle: '13ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Temporada diferente: S13 vs S5'
+}
+[DEBUG] [CatalogProvider] ❌ REJEITADO {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  titulo: 'South Park 5 Temporada 720p Dublado - Filmes Beta',
+  originalTitle: '5ª Temporada - South Park',
+  provider: 'HDR Torrent',
+  year: 1997,
+  motivo: 'Sem ano para validar + 2 palavra(s) extra(s) no torrent → título diferente'
+}
+[INFO] [CatalogProvider] 📋 Rejeitados {
+  imdbId: 'tt0121955',
+  alvo: 'S5E4',
+  total: 115,
+  motivos: '24x Temporada diferente: S21 vs S5 | 21x Temporada diferente: S20 vs S5 | 15x Temporada diferente: S23 vs S5 | 9x Temporada diferente: S22 vs S5 | 7x Título curto (2pal) + ano 2026≠2001 + 1 extra(s) → provável outro filme',
+  aceitos: 1,
+  scraped: 145,
+  lendario: 29
+}
+[INFO] [CatalogProvider] ⏭️  DB write SKIPPED (SKIP_DB_WRITE=true) { count: 1 }
+[INFO] [CatalogProvider] 📋 Catálogo (scraped) {
+  imdbId: 'tt0121955:5:4',
+  season: 5,
+  episode: 4,
+  total: 1,
+  qualidades: [ 'HD' ]
+}
+[INFO] [STREAM-TORBOX]  STREAM RESULT retornado {
+  requestId: '0e4a4b83',
+  totalStreams: 1,
+  resumo: [ 'HDR Torrent HD | 5° Temporada' ]
+}
+[DEBUG] [ULTRA-DEBUG] ◀ RESPONSE #0e4a4b83 200 (7707ms) JSON {
+  requestId: '0e4a4b83',
+  statusCode: 200,
+  responseTimeMs: 7707,
+  path: '/torbox=***/stream/series/tt0121955%3A5%3A4.json',
+  bodySize: 488,
+  bodyPreview: '{"streams":[{"name":"Brasil RD\\nHD","title":"5° Temporada\\n🔗 0 ⚙️ HDR Torrent\\n🌐 PT-BR","fileIdx":0,"url":"https://devbrasilrd.oniko.org/resolve/torbox/bd0123e7-7ea9-4d40-926f-ea940d1ae0da/aa20a4e3e095a21e19a33f04b5ba66c0bc56a6cf/null/0/5%C2%B0%20Temporada.mkv?type=series&season=5&episode=4&quality=HD","behaviorHints":{"notWebReady":false,"bingeGroup":"br-tt0121955:5:4-HD","filename":"5° Temporada S05E04","streamQuality":"HD","preferredAudioLanguage":"por","packageContent":true}}]}',
+  headers: {
+    'content-type': undefined,
+    'content-length': undefined,
+    'cache-control': 'max-age=300, public, must-revalidate',
+    'access-control-allow-origin': '*'
+  }
+}
+[DEBUG] [ULTRA-DEBUG] ◀ RESPONSE #0e4a4b83 200 (7710ms) SEND {
+  requestId: '0e4a4b83',
+  statusCode: 200,
+  responseTimeMs: 7710,
+  path: '/torbox=***/stream/series/tt0121955%3A5%3A4.json',
+  contentType: 'application/json; charset=utf-8',
+  bodyPreview: '{"streams":[{"name":"Brasil RD\\nHD","title":"5° Temporada\\n🔗 0 ⚙️ HDR Torrent\\n🌐 PT-BR","fileIdx":0,"url":"https://devbrasilrd.oniko.org/resolve/torbox/bd0123e7-7ea9-4d40-926f-ea940d1ae0da/aa20a4e3e095a21e19a33f04b5ba66c0bc56a6cf/null/0/5%C2%B0%20Temporada.mkv?type=series&season=5&episode=4&qualit... [488 chars]'
+}
+[DEBUG] [ETag] 200 /torbox=bd0123e7-7ea9-4d40-926f-ea940d1ae0da/stream/series/tt0121955%3A5%3A4.json { etag: '"da1a8da7d', size: 498 }

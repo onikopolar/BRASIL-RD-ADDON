@@ -204,6 +204,7 @@ export class StreamFormatter {
         bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
         filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
         streamQuality: qualidade,
+        preferredAudioLanguage: 'por',
         ...behaviorHints
       };
     }
@@ -317,6 +318,7 @@ export class StreamFormatter {
         bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
         filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
         streamQuality: qualidade,
+        preferredAudioLanguage: 'por',
         ...behaviorHints
       };
     }
@@ -638,49 +640,66 @@ export class StreamFormatter {
     );
   }
 
-  // Ordena streams por qualidade
+  // Ordena streams por qualidade → seeders (dentro da mesma qualidade)
+  // 4K com 10 seeds > 4K com 5 seeds > 4K com 0 seeds > 1080p com 10 seeds > ...
   ordenarStreamsPorQualidade(streams: Stream[]): Stream[] {
-    const prioridadeQualidade: Record<string, number> = {
-      '2160p': 100,
-      '4K': 100,
-      '1080p': 80,
-      '720p': 60,
-      'HD': 40,
-      'SD': 20
+    // Tier de qualidade: quanto maior, melhor (espaçamento de 1000 permite sub-ordenação)
+    const tierQualidade = (q: string): number => {
+      const ql = q.toLowerCase();
+      if (ql.includes('2160p') || ql.includes('4k') || ql.includes('uhd')) return 5000;
+      if (ql.includes('1080p') || ql.includes('fullhd') || ql.includes('full hd')) return 4000;
+      if (ql.includes('720p')) return 3000;
+      if (ql.includes('hd')) return 2000;
+      if (ql.includes('480p') || ql.includes('sd')) return 1000;
+      return 0;
+    };
+
+    // Detecta qualidade REAL do stream (título + behaviorHints)
+    const detectarQualidade = (s: Stream): string => {
+      // behaviorHints é a fonte mais confiável
+      const bh = s.behaviorHints?.streamQuality;
+      if (bh && tierQualidade(bh) > 0) return bh;
+      // Fallback: extrai do título
+      const doTitulo = this.qualityDetector.extractBestQuality(s.title || '');
+      if (doTitulo && tierQualidade(doTitulo) > 0) return doTitulo;
+      // Último fallback: procura padrão NNNNp no título
+      const match = (s.title || '').match(/(\d{3,4})p/i);
+      return match ? match[0] : '';
+    };
+
+    // Extrai seeders — tenta 🔗 pattern, fallback pra regex genérico
+    const extrairSeeds = (s: Stream): number => {
+      const t = s.title || '';
+      // Formato novo: "🔗 42 seeds"
+      const m1 = t.match(/🔗\s*(\d+)/);
+      if (m1) return parseInt(m1[1]);
+      // Formato antigo: "42 seeds" solto
+      const m2 = t.match(/(\d+)\s*seeds?/i);
+      if (m2) return parseInt(m2[1]);
+      return 0;
     };
 
     return streams.sort((a, b) => {
-      // Usa streamQuality do behaviorHints (qualidade correta de cada stream individual)
-      const scoreA = this.calcularScoreQualidade(a);
-      const scoreB = this.calcularScoreQualidade(b);
-      
-      if (scoreB !== scoreA) {
-        return scoreB - scoreA;  // Maior score primeiro
-      }
-      
-      // Mesma qualidade: ordena por seeds (extrai da 2a linha do titulo)
-      const seedsA = this.extrairSeedsDoTitulo(a.title);
-      const seedsB = this.extrairSeedsDoTitulo(b.title);
-      if (seedsB !== seedsA) return seedsB - seedsA;
+      const qualA = detectarQualidade(a);
+      const qualB = detectarQualidade(b);
+      const tierA = tierQualidade(qualA);
+      const tierB = tierQualidade(qualB);
 
-      // Mesmos seeds: ordena por tamanho em GB (maior primeiro)
+      // 1. Qualidade primeiro (tiers distantes)
+      if (tierA !== tierB) return tierB - tierA;
+
+      // 2. Mesma qualidade: seeders (mais seeds primeiro)
+      const seedsA = extrairSeeds(a);
+      const seedsB = extrairSeeds(b);
+      if (seedsA !== seedsB) return seedsB - seedsA;
+
+      // 3. Mesmos seeders: tamanho (maior primeiro)
       const sizeA = this.extrairTamanhoDoTitulo(a.title);
       const sizeB = this.extrairTamanhoDoTitulo(b.title);
-      if (sizeB !== sizeA) return sizeB - sizeA;
-      
+      if (sizeA !== sizeB) return sizeB - sizeA;
+
       return (a.title || '').localeCompare(b.title || '');
     });
-  }
-
-  // Extrai seeds da linha 2 do titulo (formato: "🔗 42 ...")
-  private extrairSeedsDoTitulo(title?: string): number {
-    if (!title) return 0;
-    const lines = title.split('\n');
-    if (lines.length >= 2) {
-      const match = lines[1].match(/🔗\s*(\d+)/);
-      if (match) return parseInt(match[1]);
-    }
-    return 0;
   }
 
   // Extrai tamanho em GB da linha 2 do titulo (formato: "💾 4.31 GB ...")
@@ -695,28 +714,6 @@ export class StreamFormatter {
       }
     }
     return 0;
-  }
-
-  // Calcula score de qualidade usando behaviorHints.streamQuality (mais preciso)
-  private calcularScoreQualidade(stream: Stream): number {
-    const prioridadeQualidade: Record<string, number> = {
-      '2160p': 100,
-      '4K': 100,
-      '1080p': 80,
-      '720p': 60,
-      'HD': 40,
-      'SD': 20
-    };
-    
-    // Priority 1: behaviorHints.streamQuality (setado corretamente por stream)
-    const bhQuality = stream.behaviorHints?.streamQuality;
-    if (bhQuality && prioridadeQualidade[bhQuality] !== undefined) {
-      return prioridadeQualidade[bhQuality];
-    }
-    
-    // Fallback: extrai do titulo
-    const qualidade = this.qualityDetector.extractBestQuality(stream.title || '');
-    return prioridadeQualidade[qualidade] || 0;
   }
 
   // Sanitiza nome de arquivo

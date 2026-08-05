@@ -11,7 +11,7 @@ import { TitleFilter } from '../titulos/titleFilter.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
 import { TorrentioService, TorrentioResult } from '../catalogo/TorrentioService.js';
-import { INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
 
 // Legendado indicators da fonte unica (TechnicalWords)
 const LEGENDADO_REGEX = new RegExp(
@@ -206,7 +206,14 @@ export class CatalogProvider {
     const hasExactEpisode = finalEpisode !== undefined && valid.some(t =>
       /s\d+e\d+/i.test(t.title) && this.extractEpisodeNumber(t.title) === finalEpisode
     );
-    const hasCompletePack = valid.some(t => /\b(?:temporada completa|season pack|complete pack)\b/i.test(t.title));
+    // Pack completo: tem "temporada completa" OU extrairRangeEpisodios retorna season-only (episodeStart=0)
+    const hasCompletePack = valid.some(t =>
+      /\b(?:temporada completa|season pack|complete pack)\b/i.test(t.title) ||
+      (() => {
+        const r = extrairRangeEpisodios(t.canonicalName || t.title);
+        return r && r.season === finalSeason && r.episodeStart === 0 && r.episodeEnd === 0;
+      })()
+    );
 
     let episodeToSave: number | null | undefined = finalEpisode;
     if (!hasExactEpisode && hasCompletePack && finalSeason) {
@@ -253,12 +260,30 @@ export class CatalogProvider {
 
     // ═══ PASSO 3: Validação de título (similaridade com TMDB) ═══
     const results = await Promise.allSettled(
-      naoLegendado.map((t) => {
+      naoLegendado.map(async (t) => {
         // originalTitle (HTML) → comparação com TMDB (título limpo)
         // canonicalName/title (dn magnet) → detecção de idioma (tem "DUAL", "DUBLADO")
         const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
         const tituloParaIdioma = t.canonicalName || t.title;
-        return this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
+        let result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
+
+        // Fallback: se originalTitle falhou, tenta canonicalName (pode ter título PT)
+        // Ex: originalTitle="Inazuma irebun S01" falha, mas canonicalName="Super Onze" passa
+        if (!result.matches && t.originalTitle && t.canonicalName && t.canonicalName !== t.originalTitle) {
+          const fallbackResult = await this.titleFilter.titulosCombinam(
+            t.canonicalName, imdbId, season, episode, tituloParaIdioma, t.year
+          );
+          if (fallbackResult.matches) {
+            this.logger.info('🔄 Fallback canonicalName salvou', {
+              originalTitle: t.originalTitle?.substring(0, 40),
+              canonicalName: t.canonicalName?.substring(0, 40),
+              motivoOriginal: result.reason,
+              motivoFallback: fallbackResult.reason,
+            });
+            result = fallbackResult;
+          }
+        }
+        return result;
       })
     );
 
@@ -303,8 +328,8 @@ export class CatalogProvider {
           razoes['erro interno'] = (razoes['erro interno'] || 0) + 1;
         }
       }
-      const topRazoes = Object.entries(razoes).sort((a,b) => b[1]-a[1]).slice(0, 5)
-        .map(([k,v]) => `${v}x ${k}`).join(' | ');
+      const topRazoes = Object.entries(razoes).sort((a, b) => b[1] - a[1]).slice(0, 5)
+        .map(([k, v]) => `${v}x ${k}`).join(' | ');
       this.logger.info('📋 Rejeitados', {
         imdbId,
         alvo: `S${season || '?'}E${episode || '?'}`,

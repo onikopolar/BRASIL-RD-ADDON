@@ -124,6 +124,8 @@ export class EpisodeMatcher {
    */
   private limparRuido(texto: string): string {
     const normalizado = texto
+      .toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
       .replace(/[^\w\s.]/g, ' ')
       .replace(/\s+/g, ' ')
       .trim();
@@ -197,12 +199,12 @@ export class EpisodeMatcher {
   extractSeasonFromTitle(title: string): number | null {
     const patterns = [
       /(\d+)x\d+/i,                    // "8x262" → season 8
-      /temporada\s*(\d+)/i,
-      /(\d+)\s*ª?\s*temporada/i,     // "2ª temporada", "2 temporada"
+      /(\d+)\s*[ªº°]?\s*temporada/i,  // "2ª temporada", "2° Temporada"
+      /(\d+)\s*[ªº°]?\s*temp/i,       // "2ª temp"
+      /temporada\s*(\d+)/i,          // "temporada 2"
       /season\s*(\d+)/i,
-      /s(\d+)/i,
-      /(\d+)\s*ª?\s*temp/i,
-      /[a-z]{2,}\.(\d{1,2})(?:\s|-|$)/i, // "who.4", "Who.8 -" (não "5.1", "2005")
+      /s(\d+)/i,                     // "s02", "s21e01"
+      /[a-z]{2,}\.(\d{1,2})(?:\s|-|$)/i, // "who.4", "Who.8 -"
     ];
 
     for (const pattern of patterns) {

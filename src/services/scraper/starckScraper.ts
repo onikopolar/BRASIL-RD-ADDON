@@ -18,6 +18,8 @@ export interface StarckTorrent {
   infoHash: string;
   /** Título original extraído do HTML do post ("Nome Original: ...") */
   originalTitle?: string;
+  /** Ano de lançamento extraído do HTML do post ("Lançamento: 2026") */
+  year?: number;
 }
 
 // ── Config do axios (igual TPB/WordPress) ─────────────────────────────
@@ -122,7 +124,7 @@ function decodeBase64Magnets(html: string): { magnets: StarckTorrent[]; original
       const infoHash = btihMatch[1].toLowerCase();
       if (seen.has(infoHash)) return;
       seen.add(infoHash);
-      results.push({ magnet, infoHash, originalTitle });
+      results.push({ magnet, infoHash, originalTitle, year });
     } catch {}
   });
 
@@ -139,7 +141,7 @@ function decodeBase64Magnets(html: string): { magnets: StarckTorrent[]; original
       const infoHash = btihMatch2[1].toLowerCase();
       if (seen.has(infoHash)) continue;
       seen.add(infoHash);
-      results.push({ magnet: decoded, infoHash, originalTitle });
+      results.push({ magnet: decoded, infoHash, originalTitle, year });
     } catch {}
   }
 

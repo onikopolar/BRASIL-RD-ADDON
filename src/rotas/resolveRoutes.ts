@@ -73,7 +73,6 @@ async function processMagnetWithTorbox(
     try {
         const cached = await rdTorrentCacheService.getTorrentId(infoHash, apiKey, torboxService);
         if (cached.torrentId) {
-            // 1 chamada à API: busca info e reusa no getStreamLink (evita 2ª chamada)
             const details = await torboxService.getTorrentInfo(cached.torrentId, apiKey);
             const linkResult = await rdTorrentCacheService.getStreamLink(
                 cached.torrentId, apiKey, season, episode, torboxService, quality, details
@@ -87,7 +86,32 @@ async function processMagnetWithTorbox(
             };
         }
     } catch (err) {
-        // Fallback: tenta adicionar o magnet
+        // Fallback: tenta achar no Torbox
+    }
+
+    // Cache local miss — verifica se já existe no Torbox ANTES de adicionar
+    try {
+        const existing = await torboxService.findExistingTorrent(infoHash, apiKey);
+        if (existing?.id) {
+            const tid = String(existing.id);
+            const details = await torboxService.getTorrentInfo(tid, apiKey);
+            let streamLink: string | undefined;
+            if (details.download_state === 'completed' || details.download_state === 'cached') {
+                const linkResult = await rdTorrentCacheService.getStreamLink(
+                    tid, apiKey, season, episode, torboxService, quality, details
+                );
+                streamLink = linkResult.streamLink || undefined;
+            }
+            return {
+                success: true,
+                status: details.download_state,
+                streamLink,
+                message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
+                torrentId: tid,
+            };
+        }
+    } catch (err) {
+        // findExistingTorrent falhou — tenta addMagnet
     }
 
     // Magnet não existe no Torbox → adiciona diretamente
@@ -123,30 +147,10 @@ async function processMagnetWithTorbox(
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
         if (/already queued|already exists|already added/i.test(errorMessage)) {
-            // Tenta achar o torrent existente via cache (já populei com getTorrentId acima? não — ele retornou null)
-            // Tenta findExistingTorrent agora (pode ter sido adicionado entre a 1ª tentativa e agora)
-            try {
-                const existing = await torboxService.findExistingTorrent(infoHash, apiKey);
-                if (existing?.id) {
-                    const tid = String(existing.id);
-                    const details = await torboxService.getTorrentInfo(tid, apiKey);
-                    let streamLink: string | undefined;
-                    if (details.download_state === 'completed' || details.download_state === 'cached') {
-                        const linkResult = await rdTorrentCacheService.getStreamLink(
-                            tid, apiKey, season, episode, torboxService, quality, details
-                        );
-                        streamLink = linkResult.streamLink || undefined;
-                    }
-                    return {
-                        success: true,
-                        status: details.download_state,
-                        streamLink,
-                        message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
-                        torrentId: tid,
-                    };
-                }
-            } catch {}
-            return { success: true, status: 'queued', message: 'Torrent já está na fila do Torbox' };
+            // Torrent já existe no Torbox (em fila/baixando).
+            // findExistingTorrent (mylist completo) é lento com 150+ torrents → timeout.
+            // Retorna downloading direto — o usuário vê o vídeo de progresso.
+            return { success: true, status: 'downloading', message: 'Torrent já está na fila do Torbox' };
         }
         return { success: false, status: 'error', message: errorMessage };
     }
