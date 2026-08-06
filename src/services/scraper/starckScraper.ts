@@ -1,11 +1,12 @@
 // starck-oficial.com HTML Scraper — 2-passos: busca → página de post → magnet base64
-// Usa o mesmo DNS bypass do WordPress/TPB scraper
-// Apenas entrega dados brutos do HTML (igual TPB/RARGB scraper)
+// Agora filtra por seção de idioma (DUAL ÁUDIO) e extrai language + canonicalName via magnetHelper
+// Adiciona qualityHint para detecção precisa de qualidade
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
+import { analisarMagnet } from '../../magnet/magnetHelper.js';
 
 const logger = new Logger('StarckScraper');
 
@@ -20,6 +21,12 @@ export interface StarckTorrent {
   originalTitle?: string;
   /** Ano de lançamento extraído do HTML do post ("Lançamento: 2026") */
   year?: number;
+  /** Idioma da seção onde o magnet foi encontrado (DUAL ÁUDIO, LEGENDADO, etc.) */
+  language?: string;
+  /** Nome canônico extraído do magnet via parse-torrent (campo "dn") */
+  canonicalName?: string;
+  /** Texto ao redor do link (ex.: "EPISÓDIO 02: 1080p") para detecção de qualidade */
+  qualityHint?: string;
 }
 
 // ── Config do axios (igual TPB/WordPress) ─────────────────────────────
@@ -67,7 +74,6 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
     });
 
     // ── Pós-filtro: título do post deve conter TODAS as palavras da query ──
-    // Evita que "last twilight" retorne "The Last of Us" (só tem "last", não "twilight")
     const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
     const filtered = queryWords.length > 1
       ? results.filter(r => {
@@ -85,64 +91,135 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Extrai magnets base64 + Nome Original da página de post
+//  PASSO 2: Extrai magnets base64 + metadados + filtro de idioma
 // ═══════════════════════════════════════════════════════════════════════
 
-function decodeBase64Magnets(html: string): { magnets: StarckTorrent[]; originalTitle?: string } {
-  const $$ = cheerio.load(html);
+async function decodeBase64Magnets(html: string): Promise<{ magnets: StarckTorrent[]; originalTitle?: string }> {
+  const $ = cheerio.load(html);
 
   // ═══ Extrai Nome Original do DOM ═══
-  const nomeOrigSpan = $$('span').toArray().find(el => /Nome\s+Original/i.test($$(el).text()));
+  const nomeOrigSpan = $('span').toArray().find(el => /Nome\s+Original/i.test($(el).text()));
   const originalTitle = nomeOrigSpan
-    ? $$(nomeOrigSpan).next('span').text().trim() || undefined
+    ? $(nomeOrigSpan).next('span').text().trim() || undefined
     : undefined;
 
   // ═══ Extrai Lançamento do DOM ═══
-  // Starck: <p><span>Lançamento:</span><span>2022</span></p>
   let year: number | undefined;
-  const lancSpan = $$('span').toArray().find((el: any) => /^Lan[cç]amento:?$/i.test($$(el).text().trim()));
+  const lancSpan = $('span').toArray().find((el: any) => /^Lan[cç]amento:?$/i.test($(el).text().trim()));
   if (lancSpan) {
-    const yearText = $$(lancSpan).next('span').text().trim();
+    const yearText = $(lancSpan).next('span').text().trim();
     const yearMatch = yearText.match(/\b(19|20)\d{2}\b/);
     if (yearMatch) year = parseInt(yearMatch[0]);
   }
 
-  const results: StarckTorrent[] = [];
+  // ═══ Coleta bruta de magnets das seções (urls base64 + qualityHint) ═══
+  const rawMagnets: { magnet: string; language: string; qualityHint: string }[] = [];
+
+  // Encontra os containers das seções DUAL/LEGENDADO
+  const dualContainer = $('.epsodios').filter((_i, el) => {
+    const h3Text = $(el).find('h3').text().trim().toLowerCase();
+    return h3Text.includes('dual') && h3Text.includes('áudio');
+  }).first();
+
+  const legendadoContainer = $('.epsodios').filter((_i, el) => {
+    const h3Text = $(el).find('h3').text().trim().toLowerCase();
+    return h3Text.includes('legendado');
+  }).first();
+
+  // Extrai URLs da seção DUAL (com qualityHint)
+  if (dualContainer.length > 0) {
+    dualContainer.find('a[href*="filmedl.com"]').each((_i, el) => {
+      const href = $(el).attr('href') || '';
+      const idMatch = href.match(/[?&]id=([^&]+)/i);
+      if (!idMatch) return;
+      try {
+        const decoded = decodeURIComponent(idMatch[1]);
+        const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+        if (!magnet.startsWith('magnet:?')) return;
+        const parentP = $(el).closest('p');
+        const parentText = parentP.text().trim() || '';
+        rawMagnets.push({ magnet, language: 'Dual Áudio', qualityHint: parentText });
+      } catch {}
+    });
+
+    // Também procura base64 cru dentro do HTML da seção DUAL (sem qualityHint definido, pois não há elemento pai)
+    const dualHtml = dualContainer.html() || '';
+    const b64Regex = /[A-Za-z0-9+/]{60,}={0,2}/g;
+    let match;
+    while ((match = b64Regex.exec(dualHtml)) !== null) {
+      const b64 = match[0];
+      try {
+        const decoded = Buffer.from(b64, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+        if (!decoded.startsWith('magnet:?')) continue;
+        // Evita duplicar com os filmedl.com já extraídos
+        if (rawMagnets.some(r => r.magnet === decoded)) continue;
+        rawMagnets.push({ magnet: decoded, language: 'Dual Áudio', qualityHint: '' });
+      } catch {}
+    }
+  } else if (legendadoContainer.length === 0) {
+    // Fallback: se não há seções, pega todos os filmedl.com
+    $('a[href*="filmedl.com"]').each((_i, el) => {
+      const href = $(el).attr('href') || '';
+      const idMatch = href.match(/[?&]id=([^&]+)/i);
+      if (!idMatch) return;
+      try {
+        const decoded = decodeURIComponent(idMatch[1]);
+        const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+        if (!magnet.startsWith('magnet:?')) return;
+        const parentP = $(el).closest('p');
+        const parentText = parentP.text().trim() || '';
+        rawMagnets.push({ magnet, language: '', qualityHint: parentText });
+      } catch {}
+    });
+
+    // Fallback base64 cru global
+    const b64Regex = /[A-Za-z0-9+/]{60,}={0,2}/g;
+    let match;
+    while ((match = b64Regex.exec(html)) !== null) {
+      const b64 = match[0];
+      try {
+        const decoded = Buffer.from(b64, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+        if (!decoded.startsWith('magnet:?')) continue;
+        if (rawMagnets.some(r => r.magnet === decoded)) continue;
+        rawMagnets.push({ magnet: decoded, language: '', qualityHint: '' });
+      } catch {}
+    }
+  }
+
+  // ═══ Analisa cada magnet via magnetHelper (parse-torrent) ═══
+  const analyzed = await Promise.all(
+    rawMagnets.map(async (item) => {
+      try {
+        const dados = await analisarMagnet(item.magnet);
+        if (!dados || !dados.infoHash) return null;
+        return {
+          magnet: item.magnet,
+          infoHash: dados.infoHash.toLowerCase(),
+          canonicalName: dados.nome || undefined,
+          language: item.language || undefined,
+          qualityHint: item.qualityHint,
+        };
+      } catch {
+        return null;
+      }
+    })
+  );
+
+  // Remove nulos e duplicados por infoHash
   const seen = new Set<string>();
-
-  // ═══ Fonte 1: href="filmedl.com/?id=BASE64" (magnets, base64 padrão) ═══
-  $$('a[href*="filmedl.com"]').each((_i, el) => {
-    const href = $$(el).attr('href') || '';
-    const idMatch = href.match(/[?&]id=([^&]+)/i);
-    if (!idMatch) return;
-    try {
-      const decoded = decodeURIComponent(idMatch[1]);
-      const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
-      if (!magnet.startsWith('magnet:?')) return;
-      const btihMatch = magnet.match(/btih:([a-zA-Z0-9]{32,40})/i);
-      if (!btihMatch) return;
-      const infoHash = btihMatch[1].toLowerCase();
-      if (seen.has(infoHash)) return;
-      seen.add(infoHash);
-      results.push({ magnet, infoHash, originalTitle, year });
-    } catch {}
-  });
-
-  // ═══ Fonte 2: base64 cru no HTML (fallback, pega o que a fonte 1 não cobriu) ═══
-  const b64Regex = /[A-Za-z0-9+/]{60,}={0,2}/g;
-  let match;
-  while ((match = b64Regex.exec(html)) !== null) {
-    const b64 = match[0];
-    try {
-      const decoded = Buffer.from(b64, 'base64').toString('latin1').replace(/&amp;/gi, '&');
-      if (!decoded.startsWith('magnet:?')) continue;
-      const btihMatch2 = decoded.match(/btih:([a-zA-Z0-9]{32,40})/i);
-      if (!btihMatch2) continue;
-      const infoHash = btihMatch2[1].toLowerCase();
-      if (seen.has(infoHash)) continue;
-      seen.add(infoHash);
-      results.push({ magnet: decoded, infoHash, originalTitle, year });
-    } catch {}
+  const results: StarckTorrent[] = [];
+  for (const item of analyzed) {
+    if (!item || seen.has(item.infoHash)) continue;
+    seen.add(item.infoHash);
+    results.push({
+      magnet: item.magnet,
+      infoHash: item.infoHash,
+      canonicalName: item.canonicalName,
+      originalTitle,
+      year,
+      language: item.language,
+      qualityHint: item.qualityHint,
+    });
   }
 
   return { magnets: results, originalTitle };
@@ -159,11 +236,9 @@ export async function searchStarck(
   const startTime = Date.now();
 
   try {
-    // PASSO 1: Busca → URLs de posts
     const links = await searchStarckLinks(query);
     if (links.length === 0) return [];
 
-    // PASSO 2: Para cada post, extrai magnets (paralelo, max 8)
     const batchSize = 8;
     const allResults: StarckTorrent[] = [];
 
@@ -173,7 +248,7 @@ export async function searchStarck(
         batch.map(async (item) => {
           try {
             const res = await axios.get(item.postUrl, axiosConfig);
-            const result = decodeBase64Magnets(res.data);
+            const result = await decodeBase64Magnets(res.data);
             return result.magnets;
           } catch {
             return [];

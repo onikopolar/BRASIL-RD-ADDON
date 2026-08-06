@@ -38,6 +38,10 @@ export const TECHNICAL_ACRONYMS = [
   'torrents', 'filmes', 'hd', 'full', 'sf', 'dl', 'rip', 'xvid', 'divx',
   'mp3', 'aac', 'ac3', 'dts', 'eac3', 'ddp', 'dd', 'dolby',
   'h264', 'h265', 'x264', 'x265', 'avc', 'hevc', 'vp9', 'av1',
+  // Resoluções numéricas "cruas"
+  '480', '720', '1080', '2160',
+  // Palavras de ação comuns em posts que não são títulos
+  'download', 'baixar', 'assistir', 'online',
 ];
 
 // Lista específica de grupos de release internacionais conhecidos
@@ -203,7 +207,7 @@ export function getTechnicalWordsStats() {
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
-    version: '1.4.0', // Correção de extração de packs completos
+    version: '1.4.0',
     description: 'Detecção de temporada em packs completos corrigida'
   };
 }
@@ -285,6 +289,8 @@ export interface EpisodeRange {
  *   Season 2 Episode 4  → season=2, start=4, end=4
  *   2ª Temporada Ep 4   → season=2, start=4, end=4
  *   "4ª Temporada Completa" → season=4, start=0, end=0 (pack completo)
+ *   "Episódio 02: 1080p" → season=0, start=2, end=2
+ *   "Episódio 03: 720p | 1080p" → season=0, start=3, end=3
  * 
  * Retorna null apenas para títulos sem qualquer informação de temporada/episódio.
  */
@@ -351,7 +357,14 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4: S6, S06, season6, 6x (temporada avulsa, sem episódio) ═══
+  // ═══ Padrão 4: "Episódio 02" (sem temporada) ═══
+  const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
+  if (episodioOnly) {
+    const ep = parseInt(episodioOnly[1]);
+    return { season: 0, episodeStart: ep, episodeEnd: ep };
+  }
+
+  // ═══ Padrão 5: S6, S06, season6, 6x (temporada avulsa, sem episódio) ═══
   const sOnly = t.match(/^s(\d{1,2})$/i);
   if (sOnly) return { season: parseInt(sOnly[1]), episodeStart: 0, episodeEnd: 0 };
   const seasonOnly = t.match(/^season(\d{1,2})$/i);
@@ -359,17 +372,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const xOnly = t.match(/^(\d{1,2})x$/i);
   if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 5: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
+  // ═══ Padrão 6: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
   const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
   if (tempPack) {
     return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 6: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
+  // ═══ Padrão 7: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
   const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
   if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 7: Packs completos com "Temporada Completa" etc. — tenta extrair o número antes de "temporada" ═══
+  // ═══ Padrão 8: Packs completos com "Temporada Completa" etc. ═══
   const fullSeasonPattern = /\b(\d{1,2})\s*[ªº°]?\s*temporada\s*completa\b/i;
   const fullSeasonMatch = t.match(fullSeasonPattern);
   if (fullSeasonMatch) {

@@ -254,8 +254,7 @@ export class TorboxService {
 
   /**
    * Obtém o link de stream para um arquivo dentro do torrent.
-   * Agora aceita `targetTitles` (opcional) e também consulta o cache interno de títulos
-   * para escolher o arquivo mais adequado com base no título do conteúdo.
+   * Agora prioriza a qualidade (targetQuality) na seleção do arquivo.
    */
   async getStreamLinkForTorrent(
     torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string,
@@ -303,24 +302,55 @@ export class TorboxService {
         let episodeScore = 0;
         let qualityScore = 0;
 
-        // 1. Correspondência de título (maior peso)
+        // 1. Correspondência de título (peso médio)
         if (targetTitles && targetTitles.length > 0) {
           titleScore = this.calculateTitleMatchScore(f.name, targetTitles);
-          score += titleScore * 100_000_000_000;
+          score += titleScore * 50_000_000_000; // reduzido para dar mais peso à qualidade
         }
 
-        // 2. Correspondência de episódio (séries)
+        // 2. Correspondência de episódio (séries) - peso alto, mas menor que qualidade
         if (targetSeason !== undefined && targetEpisode !== undefined) {
           const match = this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode);
           if (match) {
-            episodeScore = 50_000_000_000;
+            episodeScore = 30_000_000_000;
             score += episodeScore;
           }
         }
 
-        // 3. Qualidade
-        if (targetQuality && f.name.toLowerCase().includes(targetQuality.toLowerCase())) {
-          qualityScore = 10_000_000_000;
+        // 3. QUALIDADE (prioridade máxima) ═══ CORREÇÃO PRINCIPAL ═══
+        if (targetQuality) {
+          const fileQuality = this.extractQualityFromFilename(f.name);
+          if (fileQuality) {
+            // Normaliza a qualidade alvo para comparação
+            const normalizedTarget = this.normalizeQuality(targetQuality);
+            const normalizedFile = this.normalizeQuality(fileQuality);
+
+            if (normalizedFile === normalizedTarget) {
+              // Qualidade exata: peso máximo
+              qualityScore = 100_000_000_000;
+            } else {
+              // Qualidade diferente: tenta a melhor disponível
+              const qualityRank = ['2160p', '1080p', '720p', '480p'];
+              const targetRank = qualityRank.indexOf(normalizedTarget);
+              const fileRank = qualityRank.indexOf(normalizedFile);
+              if (targetRank !== -1 && fileRank !== -1) {
+                // Quanto menor a diferença, maior o bônus
+                const diff = Math.abs(targetRank - fileRank);
+                // Se a qualidade do arquivo for superior à alvo (ex: 2160p vs 1080p), dá um bônus menor
+                // Se for inferior, dá um bônus ainda menor
+                if (fileRank < targetRank) {
+                  // Qualidade superior (ex: 2160p quando pediu 1080p) – ainda é bom
+                  qualityScore = 80_000_000_000 - diff * 10_000_000_000;
+                } else {
+                  // Qualidade inferior (ex: 720p quando pediu 1080p) – penaliza
+                  qualityScore = Math.max(0, 30_000_000_000 - diff * 15_000_000_000);
+                }
+              }
+            }
+          } else {
+            // Se não detectar qualidade no nome, dá um bônus mínimo (mas ainda prefere arquivos com qualidade)
+            qualityScore = 5_000_000_000;
+          }
           score += qualityScore;
         }
 
@@ -361,7 +391,6 @@ export class TorboxService {
       const sr = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
       if (sr) return { url: null, status: info.download_state, staticResponse: sr, progress: Math.round(info.progress * 100) };
       if (this.isReadyStatus(info.download_state)) {
-        // Tenta recuperar títulos do cache interno para passar adiante
         const hash = info.hash?.toLowerCase();
         const targetTitles = hash ? this.titleCache.get(hash) : undefined;
         const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode, undefined, undefined, targetTitles);
@@ -455,6 +484,33 @@ export class TorboxService {
     }
     console.log(`[DEBUG-TORBOX]   maxScore final: ${maxScore}`);
     return maxScore;
+  }
+
+  /**
+   * Extrai a qualidade do nome do arquivo.
+   * Retorna a qualidade normalizada (ex: "2160p", "1080p", "720p", "480p") ou null.
+   */
+  private extractQualityFromFilename(filename: string): string | null {
+    const match = filename.match(/\b(2160p|4k|uhd|1080p|720p|480p)\b/i);
+    if (match) {
+      const q = match[1].toLowerCase();
+      // Normaliza 4k/uhd para 2160p
+      if (q === '4k' || q === 'uhd') return '2160p';
+      return q;
+    }
+    return null;
+  }
+
+  /**
+   * Normaliza a qualidade para comparação (ex: "2160p", "1080p", "720p", "480p")
+   */
+  private normalizeQuality(quality: string): string {
+    const q = quality.toLowerCase().replace(/\s/g, '');
+    if (q === '4k' || q === 'uhd') return '2160p';
+    if (q === 'fullhd' || q === '1080p') return '1080p';
+    if (q === 'hd' || q === '720p') return '720p';
+    if (q === 'sd' || q === '480p') return '480p';
+    return q;
   }
 
   private isReadyStatus(status: string): boolean {

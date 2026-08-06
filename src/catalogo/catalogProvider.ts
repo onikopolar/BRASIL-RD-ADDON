@@ -22,6 +22,7 @@ const LEGENDADO_REGEX = new RegExp(
 
 interface ScrapedTorrent {
   title: string;
+  htmlTitle?: string;
   canonicalName?: string;
   magnetInfoHash?: string;
   originalTitle?: string;
@@ -34,6 +35,7 @@ interface ScrapedTorrent {
   provider: string;
   language: string;
   type: 'movie' | 'series';
+  episode?: number;
 }
 
 export interface TmdbSearchData {
@@ -112,7 +114,6 @@ export class CatalogProvider {
     const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
     const cacheKey = this.generateCacheKey(request, season, episode);
 
-    // Cache hit: retorna ordenado
     const cached = this.getFromCache(cacheKey);
     if (cached !== null) {
       return this.streamFormatter.sortStreamsByQuality(cached);
@@ -137,7 +138,6 @@ export class CatalogProvider {
       try {
         const scraped = await this.performIntelligentScraping(request, season, episode);
         const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
-        // Ordena antes de salvar e retornar
         const sorted = this.streamFormatter.sortStreamsByQuality(scrapedUnique);
         sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
         this.logger.info('📋 Catálogo (scraped)', {
@@ -152,7 +152,6 @@ export class CatalogProvider {
       }
     }
 
-    // JSON streams: ordena e salva
     const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
     sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
     this.logger.info('📋 Catálogo (cached)', {
@@ -222,7 +221,6 @@ export class CatalogProvider {
       tmdb.imdbTitles, !hasExactEpisode && hasCompletePack);
 
     const streams = await this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
-    // Ordenação final antes de retornar
     return this.streamFormatter.sortStreamsByQuality(streams);
   }
 
@@ -258,12 +256,34 @@ export class CatalogProvider {
       naoLegendado.map(async (t) => {
         const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
         const tituloParaIdioma = t.title || t.originalTitle || t.canonicalName;
-        let result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
+
+        // ═══ LOG: parâmetros que estão sendo passados ═══
+        this.logger.debug(`🔍 Validando: "${tituloParaValidar.substring(0, 50)}" | htmlTitle: "${(t.htmlTitle || '').substring(0, 40)}" | epTorrent: ${t.episode ?? 'N/A'} | alvo S${season ?? '?'}E${episode ?? '?'}`);
+
+        let result = await this.titleFilter.titulosCombinam(
+          tituloParaValidar,
+          imdbId,
+          season,
+          episode,
+          tituloParaIdioma,
+          t.year,
+          imdbTitles,
+          t.htmlTitle,
+          t.episode
+        );
 
         // Fallback canonicalName
         if (!result.matches && t.originalTitle && t.canonicalName && t.canonicalName !== t.originalTitle) {
           const fallbackResult = await this.titleFilter.titulosCombinam(
-            t.canonicalName, imdbId, season, episode, t.canonicalName, t.year
+            t.canonicalName,
+            imdbId,
+            season,
+            episode,
+            t.canonicalName,
+            t.year,
+            imdbTitles,
+            t.htmlTitle,
+            t.episode
           );
           if (fallbackResult.matches) {
             this.logger.info('🔄 Fallback canonicalName salvou', {
@@ -275,6 +295,14 @@ export class CatalogProvider {
             result = fallbackResult;
           }
         }
+
+        // ═══ LOG: resultado da validação ═══
+        if (result.matches) {
+          this.logger.debug(`✅ ACEITO: ${tituloParaValidar.substring(0, 40)} | motivo: ${result.reason}`);
+        } else {
+          this.logger.debug(`❌ REJEITADO: ${tituloParaValidar.substring(0, 40)} | motivo: ${result.reason}`);
+        }
+
         return result;
       })
     );

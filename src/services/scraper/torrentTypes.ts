@@ -11,13 +11,17 @@ export interface TorrentResult {
     relevanceScore: number;
     sizeInBytes: number;
     season?: number;
-    lastUpdated: Date;
-    confidence: number;
+    episode?: number;
     /** Título original extraído do HTML do post (ex: BLUDV "Título Original: ...") */
     originalTitle?: string;
     /** Ano de lançamento extraído do HTML do post (ex: "Lançamento: 2020") */
     year?: number;
-    canonicalName?: string; 
+    /** Nome canônico extraído do magnet (campo dn via magnetHelper) */
+    canonicalName?: string;
+    /** Contexto HTML com informações de episódio (ex: "EPISÓDIO 01: 1080p") */
+    htmlTitle?: string;
+    lastUpdated: Date;
+    confidence: number;
 }
 
 export interface TorrentIndexerResult {

@@ -1,11 +1,14 @@
 // hdrtorrent.com HTML Scraper — 2-passos: busca → página de post → magnet
 // Magnets estão diretos no HTML (sem ofuscação), diferente do Starck
 // Usa o mesmo DNS bypass do WordPress/TPB/Starck scraper
+// canonicalName extraído via magnetHelper (analisarMagnet)
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
+import { extrairRangeEpisodios } from '../../titulos/TechnicalWords.js';
+import { analisarMagnet } from '../../magnet/magnetHelper.js';
 
 const logger = new Logger('HdrScraper');
 
@@ -20,10 +23,10 @@ export interface HdrTorrent {
   seeders: number;
   size: string;
   language: string;
-  /** Título original extraído do HTML do post */
   originalTitle?: string;
-  /** Ano de lançamento extraído do HTML do post */
   year?: number;
+  /** Nome canônico extraído do magnet via parse-torrent (campo "dn") */
+  canonicalName?: string;
 }
 
 // ── Config do axios ───────────────────────────────────────────────────
@@ -39,7 +42,7 @@ const axiosConfig = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 1: Busca → lista de URLs de posts
+//  PASSO 1: Busca → lista de URLs de posts (com filtro de temporada)
 // ═══════════════════════════════════════════════════════════════════════
 
 interface SearchResultItem {
@@ -47,7 +50,21 @@ interface SearchResultItem {
   postUrl: string;
 }
 
-async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
+/**
+ * Tenta extrair o número da temporada a partir de um texto,
+ * usando extrairRangeEpisodios (reconhece "1ª Temporada", "Season 1", "S01", etc.)
+ */
+function detectSeasonFromText(text: string): number | null {
+  const range = extrairRangeEpisodios(text);
+  if (range && range.season) {
+    return range.season;
+  }
+  // Fallback: regex para "Nª Temporada" ou "Season N"
+  const seasonMatch = text.match(/(\d+)\s*ª\s+TEMPORADA/i) || text.match(/Season\s+(\d+)/i);
+  return seasonMatch ? parseInt(seasonMatch[1]) : null;
+}
+
+async function searchHdrLinks(query: string, targetSeason?: number): Promise<SearchResultItem[]> {
   const searchUrl = `${HDR_BASE}/index.php?s=${encodeURIComponent(query)}`;
 
   try {
@@ -57,15 +74,22 @@ async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
     const results: SearchResultItem[] = [];
     const seen = new Set<string>();
 
-    // Links de posts — tipicamente dentro de h2/h3 com classe de post
     $('a[href]').each((_i, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
       if (!href || !text || text.length < 10) return;
-      // Filtra links que parecem posts (não categorias, tags, etc)
       if (href.includes('/categoria/') || href.includes('/tag/') || href === '/' || href.includes('#')) return;
       if (seen.has(href)) return;
       seen.add(href);
+
+      // ═══ FILTRO POR TEMPORADA NA BUSCA ═══
+      if (targetSeason !== undefined) {
+        const season = detectSeasonFromText(text);
+        // Se detectou uma temporada e ela não coincide com a alvo, pula este link
+        if (season !== null && season !== targetSeason) {
+          return;
+        }
+      }
 
       const fullUrl = href.startsWith('http') ? href : `${HDR_BASE}${href}`;
       results.push({ title: text, postUrl: fullUrl });
@@ -79,7 +103,7 @@ async function searchHdrLinks(query: string): Promise<SearchResultItem[]> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Extrai magnets de uma página de post
+//  PASSO 2: Extrai magnets de uma página de post (agora async)
 // ═══════════════════════════════════════════════════════════════════════
 
 function extractLanguage(parentText: string): string {
@@ -91,14 +115,18 @@ function extractLanguage(parentText: string): string {
   return '';
 }
 
-function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: string): HdrTorrent[] {
+async function extractMagnetsFromPost(
+  html: string,
+  postTitle: string,
+  postUrl?: string,
+  targetSeason?: number
+): Promise<HdrTorrent[]> {
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
 
-  // Título da página (fallback do postTitle da busca)
   const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
 
-  // ═══ Extrai Título Original do post (global, usado como fallback) ═══
+  // Extrai Título Original do post
   let globalOriginalTitle: string | undefined;
   const tituloEl = $('b, strong').toArray().find(el => /T[ií]tulo\s+Original/i.test($(el).text()));
   if (tituloEl) {
@@ -113,7 +141,7 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
     }
   }
 
-  // ═══ Extrai Ano de Lançamento do post (global, usado como fallback) ═══
+  // Extrai Ano de Lançamento do post
   let globalYear: number | undefined;
   const lancamentoEl = $('b, strong').toArray().find(el => /^Lançamento$/i.test($(el).text().trim()));
   if (lancamentoEl) {
@@ -130,13 +158,12 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
     }
   }
 
-  // ═══ Encontra seções DUAL/LEGENDADO via flags ═══
+  // Encontra seções DUAL/LEGENDADO
   const reDual = /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i;
   const reLeg = /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i;
 
   const h3Elements = $('h3').toArray();
   const h3Texts: string[] = [];
-  let emSecaoDual = false;
   let temSecaoDual = false;
   let temSecaoLegendado = false;
 
@@ -144,12 +171,10 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
     const text = $(h3Elements[i]).text().trim();
     h3Texts.push(text);
     if (reDual.test(text)) {
-      emSecaoDual = true;
       temSecaoDual = true;
     } else if (reLeg.test(text)) {
-      emSecaoDual = false;
       temSecaoLegendado = true;
-      break; // tudo depois de LEGENDADO é ignorado
+      break;
     }
   }
 
@@ -161,65 +186,90 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
     logger.debug(`HDR sem DUAL/LEG | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
   }
 
-  // ═══ Coleta magnets na seção DUAL ═══
-  // Para cada magnet, extrai o número da temporada do parágrafo pai
+  // Coleta magnets na seção DUAL (primeiro coleta bruta, depois analisa com magnetHelper)
+  const rawMagnets: { href: string; parentText: string; qualityMatch?: string; sizeMatch?: string }[] = [];
+
   $('a[href^="magnet:"]').each((_i, el) => {
     const href = $(el).attr('href');
     if (!href) return;
-
     const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
     if (!btihMatch) return;
 
-    // Se tem seção LEGENDADA, verifica se o magnet está antes do h3 LEGENDADO
     if (temSecaoLegendado) {
       const $prevH3 = $(el).prevAll('h3').first();
       const prevText = $prevH3.text().trim();
-      if (reLeg.test(prevText)) return; // magnet em seção LEGENDADA → ignorar
+      if (reLeg.test(prevText)) return;
     }
 
-    // ═══ Extrai temporada individual do parágrafo pai ═══
     const parentP = $(el).closest('p');
     const parentText = parentP.text().trim();
-    const seasonMatch = parentText.match(/(\d+)\s*ª\s+TEMPORADA/i);
-    const seasonNumber = seasonMatch ? parseInt(seasonMatch[1]) : null;
 
-    // Informações complementares
-    const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i);
-    const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    let language = extractLanguage(parentText);
-    if (!language) language = extractLanguage(pageTitle);
-
-    // Constrói títulos individuais baseados na temporada real do magnet
-    let magnetOriginalTitle: string | undefined;
-    let magnetTitle: string;
-
-    if (seasonNumber) {
-      magnetOriginalTitle = globalOriginalTitle
-        ? globalOriginalTitle.replace(/Season\s+\d+/i, `Season ${seasonNumber}`)
-        : `The Walking Dead Season ${seasonNumber}`;
-      magnetTitle = `${pageTitle} - ${seasonNumber}ª Temporada`;
-      if (language) magnetTitle += ` [${language}]`;
-      if (qualityMatch) magnetTitle += ` ${qualityMatch[0]}`;
-    } else {
-      // fallback: usa o título global
-      magnetOriginalTitle = globalOriginalTitle;
-      const parts = [pageTitle];
-      if (language) parts.push(`[${language}]`);
-      if (qualityMatch) parts.push(qualityMatch[0]);
-      magnetTitle = parts.join(' ');
+    let seasonNumber: number | null = null;
+    if (parentText) {
+      seasonNumber = detectSeasonFromText(parentText);
+    }
+    if (seasonNumber === null) {
+      seasonNumber = detectSeasonFromText(postTitle) || detectSeasonFromText(pageTitle);
     }
 
-    results.push({
-      title: magnetTitle,
-      magnet: href,
-      infoHash: btihMatch[1].toLowerCase(),
-      seeders: 0,
-      size: sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : '',
-      language,
-      originalTitle: magnetOriginalTitle,
-      year: globalYear,
-    });
+    if (targetSeason !== undefined && seasonNumber !== null && seasonNumber !== targetSeason) {
+      return;
+    }
+
+    const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i)?.[0];
+    const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i)?.[0];
+
+    rawMagnets.push({ href, parentText, qualityMatch, sizeMatch });
   });
+
+  // Processa cada magnet com analisarMagnet
+  for (const raw of rawMagnets) {
+    try {
+      const dados = await analisarMagnet(raw.href);
+      if (!dados || !dados.infoHash) continue;
+
+      const canonicalName = dados.nome ?? undefined;
+      const infoHash = dados.infoHash.toLowerCase();
+      const language = extractLanguage(raw.parentText) || extractLanguage(pageTitle);
+
+      // Temporada (já filtrada, mas mantida para título)
+      let seasonNumber: number | null = null;
+      if (raw.parentText) seasonNumber = detectSeasonFromText(raw.parentText);
+      if (seasonNumber === null) seasonNumber = detectSeasonFromText(postTitle) || detectSeasonFromText(pageTitle);
+
+      let magnetOriginalTitle: string | undefined;
+      let magnetTitle: string;
+
+      if (seasonNumber) {
+        magnetOriginalTitle = globalOriginalTitle
+          ? globalOriginalTitle.replace(/Season\s+\d+/i, `Season ${seasonNumber}`)
+          : undefined;
+        magnetTitle = `${pageTitle} - ${seasonNumber}ª Temporada`;
+        if (language) magnetTitle += ` [${language}]`;
+        if (raw.qualityMatch) magnetTitle += ` ${raw.qualityMatch}`;
+      } else {
+        magnetOriginalTitle = globalOriginalTitle;
+        const parts = [pageTitle];
+        if (language) parts.push(`[${language}]`);
+        if (raw.qualityMatch) parts.push(raw.qualityMatch);
+        magnetTitle = parts.join(' ');
+      }
+
+      results.push({
+        title: magnetTitle,
+        magnet: raw.href,
+        infoHash,
+        seeders: 0,
+        size: raw.sizeMatch || '',
+        language,
+        originalTitle: magnetOriginalTitle,
+        year: globalYear,
+        canonicalName,
+      });
+    } catch {
+      // magnet inválido, ignora
+    }
+  }
 
   return results;
 }
@@ -230,12 +280,13 @@ function extractMagnetsFromPost(html: string, postTitle: string, postUrl?: strin
 
 export async function searchHdr(
   query: string,
-  type: 'movie' | 'series' = 'movie'
+  type: 'movie' | 'series' = 'movie',
+  targetSeason?: number
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
   try {
-    const links = await searchHdrLinks(query);
+    const links = await searchHdrLinks(query, targetSeason);
     if (links.length === 0) {
       logger.info(`HDR: 0 magnets em ${Date.now() - startTime}ms para "${query.substring(0, 50)}" (0 links)`);
       return [];
@@ -255,7 +306,7 @@ export async function searchHdr(
         batch.map(async (item) => {
           try {
             const res = await axios.get(item.postUrl, axiosConfig);
-            return extractMagnetsFromPost(res.data, item.title, item.postUrl);
+            return await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
           } catch {
             return [];
           }

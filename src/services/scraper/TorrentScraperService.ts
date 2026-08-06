@@ -16,7 +16,7 @@ export class TorrentScraperService {
     private readonly wpScraper: WordPressScraper;
     private readonly bludvScraper: BludvScraper;
     private readonly episodeMatcher = EpisodeMatcher.getInstance();
-    private readonly version = '6.3.0'; // Fallback title para magnet quando título bruto ausente
+    private readonly version = '6.5.1';
 
     constructor(tmdbScraper?: ImdbScraperService) {
         this.qualityDetector = QualityDetector.getInstance();
@@ -51,16 +51,32 @@ export class TorrentScraperService {
             const qPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
             const ptDiferente = qPt !== qEn;
 
+            // ═══ LOG: parâmetros de busca ═══
+            logger.debug(`🔍 Buscando torrents para: "${query}" | alvo S${targetSeason ?? '?'}E${'?'} | imdbId: ${imdbId ?? 'N/A'}`);
+
             const [wpResults, starckResults, hdrResults] = await Promise.all([
                 // WordPress + Bludv
                 Promise.all([
-                    this.bludvScraper.search(qEn, type).catch(() => []),
-                    this.bludvScraper.search(qPt, type).catch(() => []),
+                    this.bludvScraper.search(qEn, type, targetSeason).catch(() => []),
+                    this.bludvScraper.search(qPt, type, targetSeason).catch(() => []),
                     this.wpScraper.search(qEn, type).catch(() => []),
                     ptDiferente ? this.wpScraper.search(qPt, type).catch(() => []) : Promise.resolve([])
                 ]).then(([bludvEn, bludvPt, wpEn, wpPt]) => {
                     const seen = new Set<string>();
-                    return [...bludvEn, ...bludvPt, ...wpEn, ...wpPt].filter(t => {
+                    const combined = [...bludvEn, ...bludvPt, ...wpEn, ...wpPt];
+                    
+                    // ═══ LOG: quantidade de resultados por scraper ═══
+                    logger.debug(`📊 BLUDV: ${bludvEn.length + bludvPt.length} | WP: ${wpEn.length + wpPt.length} | total bruto: ${combined.length}`);
+                    
+                    // ═══ LOG: amostra dos primeiros resultados (com htmlTitle e episode) ═══
+                    if (combined.length > 0) {
+                        const sample = combined.slice(0, 3);
+                        for (const t of sample) {
+                            logger.debug(`📄 Amostra: "${t.title?.substring(0, 50)}" | htmlTitle: "${(t.htmlTitle || '').substring(0, 30)}" | episode: ${t.episode ?? 'N/A'} | provider: ${t.provider}`);
+                        }
+                    }
+                    
+                    return combined.filter(t => {
                         if (seen.has(t.magnet)) return false;
                         seen.add(t.magnet);
                         return true;
@@ -73,7 +89,9 @@ export class TorrentScraperService {
                     ptDiferente ? searchStarck(qPt, type) : Promise.resolve([])
                 ]).then(([en, pt]) => {
                     const seen = new Set<string>();
-                    return [...en, ...pt]
+                    const combined = [...en, ...pt];
+                    logger.debug(`📊 Starck: ${combined.length} resultados brutos`);
+                    return combined
                         .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapStarckResult(r, type))
                         .filter((r): r is TorrentResult => r !== null);
@@ -81,12 +99,13 @@ export class TorrentScraperService {
 
                 // HDR
                 Promise.all([
-                    searchHdr(qEn, type),
-                    ptDiferente ? searchHdr(qPt, type) : Promise.resolve([]),
-                    targetSeason ? searchHdr(`${query.replace(/\s+Temporada\s+\d+$/i, '').replace(/\b\w/g, (c: string) => c.toUpperCase())} ${targetSeason}ª Temporada`, type) : Promise.resolve([]),
-                ]).then(([en, pt, ord]) => {
+                    searchHdr(qEn, type, targetSeason),
+                    ptDiferente ? searchHdr(qPt, type, targetSeason) : Promise.resolve([])
+                ]).then(([en, pt]) => {
                     const seen = new Set<string>();
-                    return [...en, ...pt, ...ord]
+                    const combined = [...en, ...pt];
+                    logger.debug(`📊 HDR: ${combined.length} resultados brutos`);
+                    return combined
                         .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapHdrResult(r, type))
                         .filter((r): r is TorrentResult => r !== null);
@@ -94,6 +113,14 @@ export class TorrentScraperService {
             ]);
 
             const allResults = [...wpResults, ...starckResults, ...hdrResults];
+
+            // ═══ LOG: total consolidado ═══
+            logger.debug(`📊 Total consolidado: ${allResults.length} torrents (WP+BLUDV: ${wpResults.length}, Starck: ${starckResults.length}, HDR: ${hdrResults.length})`);
+
+            // ═══ LOG: verificar se há htmlTitle e episode nos resultados finais ═══
+            const comHtmlTitle = allResults.filter(t => t.htmlTitle).length;
+            const comEpisode = allResults.filter(t => t.episode !== undefined).length;
+            logger.debug(`📊 htmlTitle presente em ${comHtmlTitle}/${allResults.length} | episode presente em ${comEpisode}/${allResults.length}`);
 
             const duration = Date.now() - startTime;
             if (duration > 5000) {
@@ -155,22 +182,19 @@ export class TorrentScraperService {
     }
 
     // ═══════════════════════════════════════════════════════════
-    //  MAPEAMENTOS
+    //  MAPEAMENTOS (com canonicalName universal)
     // ═══════════════════════════════════════════════════════════
 
-    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string; year?: number }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapHdrResult(r: { title: string; magnet: string; infoHash: string; seeders: number; size: string; language: string; originalTitle?: string; year?: number; canonicalName?: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
-        const dnMatch = r.magnet.match(/dn=([^&]+)/i);
-        const magnetName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.title;
+        const magnetName = r.canonicalName || (() => {
+            const dnMatch = r.magnet.match(/dn=([^&]+)/i);
+            return dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.title;
+        })();
         const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
         const season = this.episodeMatcher.extractSeasonFromTitle(magnetName);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
-
-        // Garante que o título bruto nunca fique vazio: se o scraper não extraiu título do HTML, usa o nome do magnet
-        const finalTitle = r.title || magnetName;
-        if (!r.title) {
-            logger.debug('Título bruto ausente, usando magnet como título', { magnetName: magnetName.substring(0, 60) });
-        }
+        const finalTitle = r.canonicalName || r.title || magnetName;
 
         return {
             title: finalTitle,
@@ -185,6 +209,7 @@ export class TorrentScraperService {
             relevanceScore: 0,
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
+            episode: undefined, // HDR não fornece episódio individual
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
@@ -193,25 +218,34 @@ export class TorrentScraperService {
         };
     }
 
-    private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string; year?: number }, type: 'movie' | 'series'): TorrentResult | null {
+    private mapStarckResult(r: { magnet: string; infoHash: string; originalTitle?: string; year?: number; canonicalName?: string; language?: string; qualityHint?: string }, type: 'movie' | 'series'): TorrentResult | null {
         if (!r.magnet) return null;
-        const dnMatch = r.magnet.match(/dn=([^&]+)/i);
-        const displayName = dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
-        const quality = this.qualityDetector.extractQualityFromFilename(displayName);
+        const displayName = r.canonicalName || (() => {
+            const dnMatch = r.magnet.match(/dn=([^&]+)/i);
+            return dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.magnet;
+        })();
+
+        let quality = this.qualityDetector.extractQualityFromFilename(displayName);
+        if (quality === 'HD' && r.qualityHint) {
+            const hintQuality = this.qualityDetector.extractQualityFromFilename(r.qualityHint);
+            if (hintQuality !== 'HD') quality = hintQuality;
+        }
+
         const season = this.episodeMatcher.extractSeasonFromTitle(displayName);
         return {
-            title: r.magnet,
+            title: r.canonicalName || r.originalTitle || displayName || 'Starck Torrent',
             magnet: r.magnet,
             seeders: 0,
             leechers: 0,
             size: 'N/A',
             quality: quality || 'HD',
             provider: 'Starck',
-            language: 'desconhecido',
+            language: r.language || 'desconhecido',
             type,
             relevanceScore: 0,
             sizeInBytes: 0,
             season: season ?? undefined,
+            episode: undefined, // Starck não fornece episódio individual
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
@@ -247,7 +281,7 @@ export class TorrentScraperService {
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: 3 // Bludv, WP (Comando + Starck), HDR
+            provedoresAtivos: 3
         };
     }
 }

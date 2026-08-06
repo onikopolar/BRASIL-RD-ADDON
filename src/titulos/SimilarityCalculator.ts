@@ -1,6 +1,6 @@
 import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
-import { ImdbScraperService } from '../catalogo/ImdbScraperService.js';
+import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import {
   getPotentialSequelNumbers,
@@ -17,7 +17,7 @@ export class SimilarityCalculator {
   private readonly tmdbScraper: ImdbScraperService | null;
   private readonly languageDetector: LanguageDetector;
 
-  private readonly tmdbCache = new Map<string, { data: any; timestamp: number }>();
+  private readonly tmdbCache = new Map<string, { data: ImdbTitles; timestamp: number }>();
   private readonly cacheTTL = 5 * 60 * 1000;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
@@ -50,11 +50,21 @@ export class SimilarityCalculator {
     this.cleanupTimer.unref?.();
   }
 
+  /**
+   * Verifica se o título do torrent corresponde ao IMDb ID fornecido.
+   * 
+   * @param torrentTitle   título principal do torrent (ex: canonicalName)
+   * @param imdbId         identificador IMDb
+   * @param torrentMetadata opcionais: year e season
+   * @param rawTitleForLanguage título alternativo para checagem de idioma
+   * @param preFetchedTmdbData dados TMDB pré‑obtidos (evita nova chamada à API)
+   */
   async smartTitleContainsCheck(
     torrentTitle: string,
     imdbId: string,
     torrentMetadata?: { year?: number; season?: number },
-    rawTitleForLanguage?: string
+    rawTitleForLanguage?: string,
+    preFetchedTmdbData?: ImdbTitles | null
   ): Promise<SmartTitleMatch> {
     let movieInfo: {
       portugueseTitle: string | null;
@@ -65,12 +75,30 @@ export class SimilarityCalculator {
       belongsToCollection?: any;
     } | null = null;
 
-    if (this.tmdbScraper) {
+    // ── 1. Usar dados TMDB já prontos (evita chamada redundante) ──
+    if (preFetchedTmdbData) {
+      movieInfo = {
+        portugueseTitle: preFetchedTmdbData.portugueseTitle,
+        originalTitle: preFetchedTmdbData.originalTitle,
+        year: preFetchedTmdbData.year,
+        allTitles: preFetchedTmdbData.allTitles,
+        mediaType: preFetchedTmdbData.mediaType,
+        belongsToCollection: undefined,
+      };
+      this.logger.debug('Usando dados TMDB pré‑carregados', {
+        imdbId,
+        year: movieInfo.year,
+        titles: movieInfo.allTitles.join(', ').substring(0, 80),
+      });
+    }
+
+    // ── 2. Fallback: buscar do TMDB (apenas se não houver dados prontos) ──
+    if (!movieInfo && this.tmdbScraper) {
       try {
         const season = torrentMetadata?.season;
         const cacheKey = season ? `tmdb-${imdbId}:s${season}` : `tmdb-${imdbId}`;
         const cached = this.tmdbCache.get(cacheKey);
-        let tmdbData;
+        let tmdbData: ImdbTitles;
         if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
           tmdbData = cached.data;
         } else {
@@ -83,7 +111,7 @@ export class SimilarityCalculator {
           year: tmdbData.year,
           allTitles: tmdbData.allTitles,
           mediaType: tmdbData.mediaType,
-          belongsToCollection: tmdbData.belongsToCollection,
+          belongsToCollection: undefined,
         };
       } catch (error) {
         this.logger.error('Erro ao buscar TMDB', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
@@ -96,13 +124,13 @@ export class SimilarityCalculator {
 
     const torqueYear = torrentMetadata?.year || this.extrairAnoDoTitulo(torrentTitle);
 
+    // Validação de idioma (apenas PT)
     const tituloParaIdioma = rawTitleForLanguage || torrentTitle;
     const idiomaPre = this.languageDetector.verificarIdioma(tituloParaIdioma);
     if (idiomaPre.palavrasEn.length > 0 && idiomaPre.palavrasPt.length === 0) {
       return { matches: false, similarity: 0, reason: `Idioma internacional: ${idiomaPre.motivo}` };
     }
 
-    // Passa o título bruto adiante para ser usado na validação de temporada/episódio
     const resultado = await this.compararTitulos(
       torrentTitle,
       movieInfo,
@@ -119,13 +147,14 @@ export class SimilarityCalculator {
     movieInfo: { allTitles: string[]; mediaType?: 'movie' | 'tv'; year?: number },
     anoTorrent: number | null,
     temporadaAlvo?: number,
-    tituloBruto?: string  // título completo do post (ex: "The Walking Dead 2017 – 8ª Temporada Completa...")
+    tituloBruto?: string
   ): Promise<SmartTitleMatch> {
     const titulosValidos = movieInfo.allTitles.filter(t => t && t.trim().length > 0);
     if (titulosValidos.length === 0) {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
+    // Tokenização aprimorada: NÚMEROS são mantidos, confiando em isTechnicalWord
     const tokenizar = (txt: string) =>
       txt
         .toLowerCase()
@@ -135,12 +164,9 @@ export class SimilarityCalculator {
         .replace(/\s+/g, ' ')
         .trim()
         .split(' ')
-        .filter(w => w.length > 0 && !/^\d+$/.test(w));
+        .filter(w => w.length > 0 && !isTechnicalWord(w));  // números passam
 
     const sequelTorrent = getPotentialSequelNumbers(tituloTorrent);
-    // rangeTorrent não utilizado diretamente, mantido por clareza
-    // const rangeTorrent = extrairRangeEpisodios(tituloTorrent);
-
     const palavrasTorrent = [...tokenizar(tituloTorrent), ...sequelTorrent.map(String)];
     if (palavrasTorrent.length === 0) {
       return { matches: false, similarity: 0, reason: 'Título vazio' };
@@ -194,7 +220,6 @@ export class SimilarityCalculator {
 
       const tmdbEhCurto = palavrasTitulo.length <= 2;
 
-      // TMDB -> Torrent
       let enc = 0;
       const falt: string[] = [];
       for (const palavraTmdb of palavrasTitulo) {
@@ -205,7 +230,6 @@ export class SimilarityCalculator {
         else falt.push(palavraTmdb);
       }
 
-      // Torrent -> TMDB: extras
       let extras = 0;
       for (const palavraTorrent of palavrasTorrent) {
         if (isTechnicalWord(palavraTorrent)) continue;
@@ -280,23 +304,17 @@ export class SimilarityCalculator {
     titulosValidos: string[],
     anoTorrent: number | null,
     temporadaAlvo?: number,
-    tituloBruto?: string  // título bruto do post para validação de temporada/episódio
+    tituloBruto?: string
   ): SmartTitleMatch {
     const anoTmdb = movieInfo.year;
     const tipoMidia = movieInfo.mediaType || 'movie';
+    const toleranciaAno = 0;
 
-    const isColecao = isCollectionTitle(tituloTorrent);
-    const toleranciaAno = 0; // Confia 100% no ano do scraper
-
-    // Validação de palavras com base no título de similaridade (originalTitle)
     const condicaoA = this.validarPalavrasMinimas(melhor, anoTorrent, anoTmdb, tituloTorrent, temporadaAlvo);
     const condicaoC = this.validarAnoCompativel(anoTorrent, anoTmdb, toleranciaAno, tipoMidia, movieInfo, tituloTorrent);
-    
-    // Validação de temporada usando o título bruto (contém a temporada real)
     const tituloParaTemporada = tituloBruto || tituloTorrent;
     const condicaoE = this.validarTemporada(tituloParaTemporada, temporadaAlvo);
 
-    // Log para depuração
     this.logger.debug('Decidindo match', {
       similaridade: tituloTorrent.substring(0, 60),
       temporadaValidadaCom: tituloParaTemporada.substring(0, 60),
@@ -324,7 +342,6 @@ export class SimilarityCalculator {
     };
 
     const statusCondicoes = `A:${condicaoA.passou ? 'OK' : 'X'} C:${condicaoC.passou ? 'OK' : 'X'} E:${condicaoE.passou ? 'OK' : 'X'}`;
-    // Log de decisão final
     if (!todasPassaram) {
       this.logger.debug(`❌ [${statusCondicoes}] "${tituloTorrent.substring(0, 70)}" | ${partesMotivo.join(' | ')}`);
     } else {
@@ -334,6 +351,9 @@ export class SimilarityCalculator {
     resultado.mediaType = movieInfo.mediaType;
     return resultado;
   }
+
+  // Demais métodos mantidos como estavam...
+  // (validarPalavrasMinimas, validarAnoCompativel, validarTemporada, temTemporadaExplicita, normalizarParaComparacao, extrairAnoDoTitulo)
 
   private validarPalavrasMinimas(
     melhor: {
@@ -355,7 +375,6 @@ export class SimilarityCalculator {
     const extras = melhor.extrasTorrent ?? 0;
     const semAno = anoTorrent === null || anoTorrent === undefined || anoTmdb === undefined;
 
-    // Coletânea
     if (tituloTorrent && isCollectionTitle(tituloTorrent)) {
       if (melhor.encontradas >= 2 && extras <= 4) {
         const motivo = `Coletânea: ${melhor.encontradas}/${melhor.totalTmdb} palavras da franquia${extras > 0 ? ` +${extras} extra(s)` : ''}${semAno ? ' [sem ano]' : ''}`;
@@ -367,7 +386,6 @@ export class SimilarityCalculator {
       return { passou: false, motivo };
     }
 
-    // Exceção para packs de temporada sem ano
     if (semAno && extras > 0 && temporadaAlvo !== undefined && tituloTorrent) {
       if (this.temTemporadaExplicita(tituloTorrent, temporadaAlvo)) {
         if (extras <= 3 && melhor.encontradas >= melhor.totalTmdb) {

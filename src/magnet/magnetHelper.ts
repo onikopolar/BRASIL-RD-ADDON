@@ -54,8 +54,8 @@ export async function gerarUrlResolve(
   episodio?: number,
   qualidade?: string,
   infoHashPreParsed?: string,
-  titles?: string[],         // títulos para seleção de arquivo
-  imdbId?: string            // NOVO: imdbId do conteúdo
+  titles?: string[],
+  imdbId?: string
 ): Promise<string> {
   const infoHash = infoHashPreParsed || (await analisarMagnet(magnet))?.infoHash;
   if (!infoHash) {
@@ -78,7 +78,7 @@ export async function gerarUrlResolve(
     if (episodio !== undefined) parametros.append('episode', episodio.toString());
   }
   if (qualidade) parametros.append('quality', qualidade);
-  if (imdbId) parametros.append('imdbId', imdbId);   // <-- NOVO
+  if (imdbId) parametros.append('imdbId', imdbId);
   if (titles && titles.length > 0) {
     parametros.append('titles', titles.join(','));
   }
