@@ -12,7 +12,6 @@ import { StaticResponseService, StaticResponse } from './StaticResponseService.j
 import { StreamStatusException } from './StreamStatusException.js';
 import { INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
 
-// Legendado indicators da fonte unica (TechnicalWords)
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
     .filter(w => /^leg/i.test(w))
@@ -38,7 +37,6 @@ export class StreamHandler {
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
 
-  // Estatísticas globais
   private stats = {
     totalRequests: 0,
     servedFromDatabase: 0,
@@ -48,7 +46,7 @@ export class StreamHandler {
   };
 
   private constructor(baseUrl?: string) {
-    this.torboxService = new TorboxService(baseUrl);
+    this.torboxService = TorboxService.getInstance(baseUrl);
     this.magnetService = new CuratedMagnetService();
     this.cacheService = new CacheService();
     this.logger = new Logger('StreamHandler');
@@ -58,28 +56,28 @@ export class StreamHandler {
     this.catalogProvider = new CatalogProvider(this.magnetService);
   }
 
-  /**
-   * Retorna a instancia unica do StreamHandler.
-   * Em producao, a URL base deve ser fornecida na primeira chamada.
-   */
   public static getInstance(baseUrl?: string): StreamHandler {
     if (!StreamHandler.instance) {
       StreamHandler.instance = new StreamHandler(baseUrl);
     }
-    // Atualiza URL base se fornecido e necessario
     if (baseUrl && StreamHandler.instance.staticResponseService.getBaseUrl() !== baseUrl) {
       StreamHandler.instance.setStaticResponseBaseUrl(baseUrl);
     }
     return StreamHandler.instance;
   }
 
-  /**
-   * Aguarda a inicializacao dos servicos dependentes (ex: carregar magnets).
-   * Deve ser chamado uma unica vez na inicializacao do servidor.
-   */
+  /** Getter público para o TorboxService compartilhado (cache de títulos, etc.) */
+  public get torbox(): TorboxService {
+    return this.torboxService;
+  }
+
+  /** Getter público para o CatalogProvider (usado pela rota de resolve para obter títulos TMDB) */
+  public get catalog(): CatalogProvider {
+    return this.catalogProvider;
+  }
+
   public async initialize(): Promise<void> {
     await this.magnetService.waitForInitialization();
-    // Outros servicos podem ser inicializados aqui se necessario
   }
 
   public setStaticResponseBaseUrl(baseUrl: string): void {
@@ -103,8 +101,6 @@ export class StreamHandler {
         }
       }
 
-      // Usa infoHash + qualidade como chave. Se nao tem infoHash, usa titulo + qualidade
-      // (evita que streams 1080p e 720p do mesmo torrent sejam tratados como duplicatas)
       const uniqueKey = infoHash
         ? `${infoHash}_${quality}`
         : `${stream.title || 'stream'}_${quality}_${stream.fileIdx ?? 0}`;
@@ -126,22 +122,50 @@ export class StreamHandler {
     if (!request.apiKey) return { streams: [] };
 
     try {
-      // Garantia de que o serviço de magnets está pronto (caso ainda não inicializado)
       await this.magnetService.waitForInitialization();
 
+      // Obtém títulos e ano do TMDB para o IMDb ID da requisição
+      const imdbId = this.extractImdbIdFromRequest(request);
+      let tmdbTitles: string[] | undefined;
+      let tmdbYear: number | undefined;
+
+      if (imdbId) {
+        try {
+          const tmdbData = await this.catalogProvider.getTmdbSearchData(imdbId);
+          if (tmdbData.imdbTitles?.allTitles?.length) {
+            tmdbTitles = tmdbData.imdbTitles.allTitles;
+          }
+          if (tmdbData.imdbTitles?.year) {
+            tmdbYear = tmdbData.imdbTitles.year;
+          }
+        } catch {
+          // Falha ao obter títulos não deve interromper o fluxo
+        }
+      }
+
+      // Tenta banco de dados primeiro
       const dbResult = await this.getStreamsFromDatabase(request);
       if (dbResult.success && dbResult.streams.length > 0) {
         this.stats.servedFromDatabase++;
-        return { streams: this.deduplicateStreamsByInfoHash(dbResult.streams) };
+        const deduped = this.deduplicateStreamsByInfoHash(dbResult.streams);
+        const sorted = this.streamFormatter.sortStreamsByQuality(deduped);
+        // Registra títulos enriquecidos (incluindo ano) para cada stream com infoHash
+        this.registerTitlesForStreams(sorted, tmdbTitles, tmdbYear);
+        return { streams: sorted };
       }
 
+      // Depois tenta catálogo
       const catalogResult = await this.getStreamsFromCatalog(request);
       if (catalogResult.success && catalogResult.streams.length > 0) {
         this.stats.servedFromCatalog++;
-        return { streams: this.deduplicateStreamsByInfoHash(catalogResult.streams) };
+        const deduped = this.deduplicateStreamsByInfoHash(catalogResult.streams);
+        const sorted = this.streamFormatter.sortStreamsByQuality(deduped);
+        // Registra títulos enriquecidos (incluindo ano) para cada stream com infoHash
+        this.registerTitlesForStreams(sorted, tmdbTitles, tmdbYear);
+        return { streams: sorted };
       }
 
-      // Sem streams no DB nem no catálogo → stream informativo
+      // Sem streams — informativo
       const informativeStream = this.createInformativeStreamIfNoContent(request);
       return { streams: informativeStream ? [informativeStream] : [] };
     } catch (error) {
@@ -161,6 +185,26 @@ export class StreamHandler {
         requestId
       );
       return { streams: [this.convertToStreamFormat(errorStream)] };
+    }
+  }
+
+  /** Registra os títulos TMDB (enriquecidos com o ano) no cache do TorboxService para cada stream com infoHash */
+  private registerTitlesForStreams(streams: Stream[], titles?: string[], year?: number): void {
+    if (!titles || titles.length === 0) return;
+    
+    // Enriquece os títulos com o ano, se disponível
+    const enrichedTitles = year 
+      ? titles.map(t => `${t} ${year}`)
+      : titles;
+
+    for (const stream of streams) {
+      if (stream.infoHash) {
+        try {
+          this.torboxService.setTitlesForHash(stream.infoHash, enrichedTitles);
+        } catch {
+          // Silencioso – falha no registro não afeta a entrega do stream
+        }
+      }
     }
   }
 
@@ -205,7 +249,6 @@ export class StreamHandler {
       const imdbId = this.extractImdbIdFromRequest(request);
       if (!imdbId) return { success: false, streams: [], source: 'database', processingTime: Date.now() - startTime };
 
-      // Query direta no Torrent (sem tabela File)
       const where: any = { imdbId };
       if (request.type === 'series') {
         const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
@@ -214,10 +257,8 @@ export class StreamHandler {
           const episode = parseInt(seasonMatch[2]);
           where[Op.or] = [
             { imdbSeason: season },
-            { imdbSeason: null },  // pack multi-temporada
+            { imdbSeason: null },
           ];
-          // Filtra por range de episódios: só inclui torrents que cobrem este episódio
-          // (ou que não têm range = pack completo da temporada)
           where[Op.and] = [
             {
               [Op.or]: [
@@ -240,14 +281,10 @@ export class StreamHandler {
         raw: true
       });
 
-      // Converte direto — validação já foi feita no save (SimilarityCalculator)
-      // Filtra idioma: só retorna torrents PT-BR (exclui Legendado/EN)
       const streams: Stream[] = [];
       for (const t of torrents) {
-        // Pula torrents com idioma explicitamente Legendado ou EN
         const idioma = (t.idioma || '').toLowerCase();
         if (idioma === 'legendado' || idioma === 'en' || idioma === 'es' || idioma === 'fr') continue;
-        // Pula títulos que contenham indicadores de Legendado
         const titleLower = (t.title || '').toLowerCase();
         if (LEGENDADO_REGEX.test(titleLower)) continue;
 
@@ -280,23 +317,21 @@ export class StreamHandler {
         }
       }
 
-      // Prepara objeto torrent com magnet (StreamFormatter precisa)
       const torrentWithMagnet = {
         ...torrent,
         magnet: `magnet:?xt=urn:btih:${torrent.infoHash}`,
         magnet_link: `magnet:?xt=urn:btih:${torrent.infoHash}`,
       };
 
-      // Delega ao StreamFormatter (formato Torrentio com emojis, compatível com Stremio)
       const streams = await this.streamFormatter.createMultipleQualityStreams(
         torrentWithMagnet,
         request,
-        null, // sem directLink (vai gerar URL de resolve)
+        null,
         request.type,
         season,
         episode,
-        false, // isAvailableOnRD
-        0     // fileIdx
+        false,
+        0
       );
 
       return streams[0] || null;

@@ -112,8 +112,11 @@ export class CatalogProvider {
     const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
     const cacheKey = this.generateCacheKey(request, season, episode);
 
+    // Cache hit: retorna ordenado
     const cached = this.getFromCache(cacheKey);
-    if (cached !== null) return cached;
+    if (cached !== null) {
+      return this.streamFormatter.sortStreamsByQuality(cached);
+    }
 
     let allStreams: Stream[] = [];
 
@@ -121,7 +124,6 @@ export class CatalogProvider {
     allStreams.push(...jsonStreams);
 
     const uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
-    uniqueStreams.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
 
     if (uniqueStreams.length === 0) {
       const shouldScrape = await this.shouldAttemptScraping(request);
@@ -135,26 +137,31 @@ export class CatalogProvider {
       try {
         const scraped = await this.performIntelligentScraping(request, season, episode);
         const scrapedUnique = this.removeDuplicatesByInfoHash(scraped);
-        scrapedUnique.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+        // Ordena antes de salvar e retornar
+        const sorted = this.streamFormatter.sortStreamsByQuality(scrapedUnique);
+        sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
         this.logger.info('📋 Catálogo (scraped)', {
           imdbId: request.imdbId || request.id, season, episode,
-          total: scrapedUnique.length,
-          qualidades: [...new Set(scrapedUnique.map(s => this.extractStreamQuality(s)))],
+          total: sorted.length,
+          qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
         });
-        this.saveToCache(cacheKey, scrapedUnique);
-        return scrapedUnique;
+        this.saveToCache(cacheKey, sorted);
+        return sorted;
       } finally {
         this.markScrapingEnd(request);
       }
     }
 
+    // JSON streams: ordena e salva
+    const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
+    sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
     this.logger.info('📋 Catálogo (cached)', {
       imdbId: request.imdbId || request.id, season, episode,
-      total: uniqueStreams.length,
-      qualidades: [...new Set(uniqueStreams.map(s => this.extractStreamQuality(s)))],
+      total: sorted.length,
+      qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
     });
-    this.saveToCache(cacheKey, uniqueStreams);
-    return uniqueStreams;
+    this.saveToCache(cacheKey, sorted);
+    return sorted;
   }
 
   private async performIntelligentScraping(request: any, season?: number, episode?: number): Promise<Stream[]> {
@@ -215,6 +222,7 @@ export class CatalogProvider {
       tmdb.imdbTitles, !hasExactEpisode && hasCompletePack);
 
     const streams = await this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
+    // Ordenação final antes de retornar
     return this.streamFormatter.sortStreamsByQuality(streams);
   }
 
@@ -252,7 +260,7 @@ export class CatalogProvider {
         const tituloParaIdioma = t.title || t.originalTitle || t.canonicalName;
         let result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year);
 
-        // Fallback canonicalName — agora o título usado na validação de temporada é o próprio canonicalName
+        // Fallback canonicalName
         if (!result.matches && t.originalTitle && t.canonicalName && t.canonicalName !== t.originalTitle) {
           const fallbackResult = await this.titleFilter.titulosCombinam(
             t.canonicalName, imdbId, season, episode, t.canonicalName, t.year

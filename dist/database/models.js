@@ -3,7 +3,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.Torrent = exports.sequelize = void 0;
+exports.ImdbTitleCache = exports.Torrent = exports.sequelize = void 0;
 const sequelize_1 = require("sequelize");
 const dotenv_1 = __importDefault(require("dotenv"));
 dotenv_1.default.config();
@@ -78,5 +78,54 @@ Torrent.init({
         { fields: ['provider'] },
         { fields: ['uploadDate'] },
         { fields: ['imdbId', 'type'] }
+    ]
+});
+class ImdbTitleCache extends sequelize_1.Model {
+}
+exports.ImdbTitleCache = ImdbTitleCache;
+ImdbTitleCache.init({
+    id: {
+        type: sequelize_1.DataTypes.INTEGER,
+        primaryKey: true,
+        autoIncrement: true
+    },
+    imdbId: {
+        type: sequelize_1.DataTypes.STRING(32),
+        allowNull: false
+    },
+    season: {
+        type: sequelize_1.DataTypes.INTEGER,
+        allowNull: true
+    },
+    titlesPt: {
+        type: sequelize_1.DataTypes.TEXT,
+        allowNull: false
+    },
+    titlesEn: {
+        type: sequelize_1.DataTypes.TEXT,
+        allowNull: false
+    },
+    year: {
+        type: sequelize_1.DataTypes.INTEGER,
+        allowNull: true
+    },
+    updatedAt: {
+        type: sequelize_1.DataTypes.DATE,
+        allowNull: false,
+        defaultValue: sequelize_1.DataTypes.NOW
+    }
+}, {
+    sequelize,
+    modelName: 'ImdbTitleCache',
+    tableName: 'imdb_title_cache',
+    timestamps: false,
+    indexes: [
+        {
+            unique: true,
+            fields: ['imdbId', 'season']
+        },
+        {
+            fields: ['updatedAt']
+        }
     ]
 });

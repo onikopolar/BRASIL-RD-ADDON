@@ -125,4 +125,78 @@ Torrent.init(
   }
 );
 
-export { sequelize, Torrent };
+// ═══════════════════════════════════════
+// MODELO: ImdbTitleCache (cache de títulos TMDB)
+// ═══════════════════════════════════════
+
+interface ImdbTitleCacheAttributes {
+  id?: number;
+  imdbId: string;
+  season?: number | null;
+  titlesPt: string;      // títulos em português, separados por vírgula
+  titlesEn: string;      // títulos em inglês, separados por vírgula
+  year?: number | null;
+  updatedAt: Date;
+}
+
+class ImdbTitleCache extends Model<ImdbTitleCacheAttributes> implements ImdbTitleCacheAttributes {
+  public id!: number;
+  public imdbId!: string;
+  public season?: number | null;
+  public titlesPt!: string;
+  public titlesEn!: string;
+  public year?: number | null;
+  public updatedAt!: Date;
+}
+
+ImdbTitleCache.init(
+  {
+    id: {
+      type: DataTypes.INTEGER,
+      primaryKey: true,
+      autoIncrement: true
+    },
+    imdbId: {
+      type: DataTypes.STRING(32),
+      allowNull: false
+    },
+    season: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    titlesPt: {
+      type: DataTypes.TEXT,
+      allowNull: false
+    },
+    titlesEn: {
+      type: DataTypes.TEXT,
+      allowNull: false
+    },
+    year: {
+      type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    updatedAt: {
+      type: DataTypes.DATE,
+      allowNull: false,
+      defaultValue: DataTypes.NOW
+    }
+  },
+  {
+    sequelize,
+    modelName: 'ImdbTitleCache',
+    tableName: 'imdb_title_cache',
+    timestamps: false,
+    indexes: [
+      {
+        unique: true,
+        fields: ['imdbId', 'season']
+      },
+      {
+        fields: ['updatedAt']
+      }
+    ]
+  }
+);
+
+export { sequelize, Torrent, ImdbTitleCache };

@@ -30,10 +30,12 @@ interface TorboxListResponse {
 }
 
 export class TorboxService {
+  private static instance: TorboxService | null = null;
+
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
-  /** Cache infoHash → torrentId para torrents em fila (queued) não listados no mylist */
+  /** Cache infoHash -> torrentId for queued torrents not yet in mylist */
   private static queuedTorrentCache = new Map<string, string>();
   private readonly videoExtensions: string[] = [
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -42,6 +44,19 @@ export class TorboxService {
   private staticResponseService: StaticResponseService;
   private readonly episodeMatcher = EpisodeMatcher.getInstance();
 
+  /** Cache of target titles for each infoHash (e.g., ["Kung Fu Hustle", "Kung-Fusao"]) */
+  private titleCache = new Map<string, string[]>();
+
+  // Singleton global – garante que a mesma instância seja usada em todo o addon
+  public static getInstance(baseUrl?: string): TorboxService {
+    if (!TorboxService.instance) {
+      TorboxService.instance = new TorboxService(baseUrl);
+    } else if (baseUrl) {
+      TorboxService.instance.staticResponseService.setBaseUrl(baseUrl);
+    }
+    return TorboxService.instance;
+  }
+
   constructor(baseUrl?: string) {
     this.logger = new Logger('TorboxService');
     this.staticResponseService = new StaticResponseService(baseUrl);
@@ -49,6 +64,14 @@ export class TorboxService {
 
   public setStaticResponseBaseUrl(baseUrl: string): void {
     this.staticResponseService.setBaseUrl(baseUrl);
+  }
+
+  /** Registers titles (PT and EN) that will be used to choose the correct file inside the torrent */
+  public setTitlesForHash(infoHash: string, titles: string[]): void {
+    if (infoHash && titles.length > 0) {
+      this.titleCache.set(infoHash.toLowerCase(), titles);
+      console.log(`[DEBUG-TORBOX] setTitlesForHash: ${infoHash.toLowerCase()} -> ${JSON.stringify(titles)}`);
+    }
   }
 
   private createHttpClient(apiKey: string): AxiosInstance {
@@ -97,7 +120,6 @@ export class TorboxService {
     const client = this.createHttpClient(apiKey);
 
     try {
-      // Torbox espera form-data, não JSON. Usamos URLSearchParams para compatibilidade.
       const body = new URLSearchParams();
       body.append('magnet', magnetLink);
 
@@ -131,7 +153,6 @@ export class TorboxService {
       throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
-      // Se o magnet já está na fila, tenta recuperar o ID do cache
       const msg = error instanceof Error ? error.message : '';
       if (/already queued/i.test(msg)) {
         const hash = await this.extrairMagnetHash(magnetLink);
@@ -165,7 +186,6 @@ export class TorboxService {
         torrentId,
         error: (error as Error).message
       });
-      // Não propaga erro — AirLock é bônus, não obrigatório
     }
   }
 
@@ -181,7 +201,6 @@ export class TorboxService {
 
       const data = response.data?.data;
       if (data) {
-        // ?id=ID retorna objeto único; sem parâmetros retorna array
         if (Array.isArray(data)) {
           if (data.length === 0) throw new Error('Torrent não encontrado no Torbox');
           return data[0];
@@ -197,19 +216,12 @@ export class TorboxService {
   }
 
   async selectFiles(_torrentId: string, _apiKey: string, _fileIds: string = 'all'): Promise<void> {
-    // Torbox não requer seleção de arquivos — todos os arquivos já estão disponíveis
-    // Mantido para compatibilidade com a interface existente
   }
 
   async unrestrictLink(_link: string, _apiKey: string): Promise<string> {
-    // Torbox não usa unrestrict — usa permalink direto
     throw new Error('Torbox não suporta unrestrictLink. Use getStreamLinkForFile/getStreamLinkForTorrent.');
   }
 
-  /**
-   * Constrói o permalink de download do Torbox.
-   * Não requer chamada à API — a URL redireciona automaticamente para o CDN.
-   */
   buildStreamPermalink(torrentId: string | number, fileId: number, apiKey: string): string {
     return `https://api.torbox.app/v1/api/torrents/requestdl?token=${encodeURIComponent(apiKey)}&torrent_id=${torrentId}&file_id=${fileId}&redirect=true`;
   }
@@ -240,9 +252,14 @@ export class TorboxService {
     }
   }
 
+  /**
+   * Obtém o link de stream para um arquivo dentro do torrent.
+   * Agora aceita `targetTitles` (opcional) e também consulta o cache interno de títulos
+   * para escolher o arquivo mais adequado com base no título do conteúdo.
+   */
   async getStreamLinkForTorrent(
     torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string,
-    cachedInfo?: TorboxTorrentInfo  // evita 2ª chamada à API
+    cachedInfo?: TorboxTorrentInfo, targetTitles?: string[]
   ): Promise<string | null> {
     this.validateTorrentId(torrentId);
 
@@ -259,34 +276,72 @@ export class TorboxService {
       }
 
       const files = info.files || [];
-      
-      // DEBUG compacto: total de arquivos → vídeos → escolhido
       const videoFiles = files.filter(f => this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)));
+
+      // Recupera títulos do cache interno se não foram passados
+      if (!targetTitles || targetTitles.length === 0) {
+        const hash = info.hash?.toLowerCase();
+        if (hash && this.titleCache.has(hash)) {
+          targetTitles = this.titleCache.get(hash);
+          console.log(`[DEBUG-TORBOX] getStreamLinkForTorrent: títulos recuperados do cache para ${hash}: ${JSON.stringify(targetTitles)}`);
+        } else {
+          console.log(`[DEBUG-TORBOX] getStreamLinkForTorrent: cache vazio ou hash não encontrado para ${hash}`);
+        }
+      }
 
       let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
+      console.log(`[DEBUG-TORBOX] 📁 Iniciando seleção entre ${videoFiles.length} vídeos...`);
+
       for (const f of videoFiles) {
         const minSize = (targetSeason !== undefined) ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
         if (f.size < minSize) continue;
+
         let score = 0;
+        let titleScore = 0;
+        let episodeScore = 0;
+        let qualityScore = 0;
+
+        // 1. Correspondência de título (maior peso)
+        if (targetTitles && targetTitles.length > 0) {
+          titleScore = this.calculateTitleMatchScore(f.name, targetTitles);
+          score += titleScore * 100_000_000_000;
+        }
+
+        // 2. Correspondência de episódio (séries)
         if (targetSeason !== undefined && targetEpisode !== undefined) {
           const match = this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode);
-          if (match) score += 100_000_000_000;
+          if (match) {
+            episodeScore = 50_000_000_000;
+            score += episodeScore;
+          }
         }
+
+        // 3. Qualidade
         if (targetQuality && f.name.toLowerCase().includes(targetQuality.toLowerCase())) {
-          score += 50_000_000_000;
+          qualityScore = 10_000_000_000;
+          score += qualityScore;
         }
+
+        // 4. Tamanho (desempate)
         score += f.size;
-        if (score > bestScore) { bestScore = score; bestFile = f; }
+
+        console.log(`[DEBUG-TORBOX]   - ${f.name}`);
+        console.log(`[DEBUG-TORBOX]     titleScore=${titleScore}, episodeScore=${episodeScore}, qualityScore=${qualityScore}, size=${f.size}, TOTAL=${score}`);
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestFile = f;
+          console.log(`[DEBUG-TORBOX]     -> NOVO MELHOR (score=${score})`);
+        }
       }
 
-      console.log(`📁 Torbox: ${files.length} arquivos, ${videoFiles.length} vídeos → "${bestFile?.name?.substring(0, 60) || 'N/A'}" (${Math.round((bestFile?.size || 0) / 1048576)}MB)`);
+      console.log(`[DEBUG-TORBOX] 🏆 Escolhido: ${bestFile?.name} (score final: ${bestScore})`);
 
       if (!bestFile) {
         throw new StreamStatusException(StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
       }
-
 
       return this.buildStreamPermalink(torrentId, bestFile.id, apiKey);
     } catch (error) {
@@ -306,7 +361,10 @@ export class TorboxService {
       const sr = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
       if (sr) return { url: null, status: info.download_state, staticResponse: sr, progress: Math.round(info.progress * 100) };
       if (this.isReadyStatus(info.download_state)) {
-        const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode);
+        // Tenta recuperar títulos do cache interno para passar adiante
+        const hash = info.hash?.toLowerCase();
+        const targetTitles = hash ? this.titleCache.get(hash) : undefined;
+        const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode, undefined, undefined, targetTitles);
         return { url: link, status: 'cached', progress: 100 };
       }
       return { url: null, status: info.download_state, progress: Math.round(info.progress * 100) };
@@ -351,14 +409,11 @@ export class TorboxService {
         return { added: true, ready, status: existing.download_state, torrentId: String(existing.id), progress: Math.round(existing.progress * 100) };
       }
       const id = await this.addMagnet(magnetLink, apiKey);
-      // Torbox processa automaticamente, não precisa selectFiles
       try {
         const info = await this.getTorrentInfo(id, apiKey);
         const ready = this.isReadyStatus(info.download_state);
         return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
       } catch (infoErr) {
-        // getTorrentInfo pode falhar se o torrent ainda está em fila (queued)
-        // Retorna status "downloading" em vez de erro
         this.logger.warn('getTorrentInfo falhou, torrent provavelmente em fila', {
           torrentId: id,
           error: infoErr instanceof Error ? infoErr.message : 'Erro',
@@ -373,7 +428,35 @@ export class TorboxService {
 
   // ── Helpers ──────────────────────────────────────────────────────────
 
-  /** Status do Torbox que indicam que o torrent está pronto para stream */
+  /** Calculates a similarity score between the file name and a list of target titles */
+  private calculateTitleMatchScore(fileName: string, targetTitles: string[]): number {
+    const normalize = (s: string) => s.toLowerCase()
+      .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    const fileWords = normalize(fileName).split(' ');
+    let maxScore = 0;
+
+    console.log(`[DEBUG-TORBOX] calculateTitleMatchScore para arquivo "${fileName}"`);
+    for (const title of targetTitles) {
+      const normalizedTitle = normalize(title);
+      const titleWords = normalizedTitle.split(' ').filter(w => w.length > 2);
+      let score = 0;
+      for (const tw of titleWords) {
+        if (fileWords.some(fw => fw.includes(tw))) {
+          score++;
+          console.log(`[DEBUG-TORBOX]   palavra "${tw}" encontrada no arquivo`);
+        }
+      }
+      console.log(`[DEBUG-TORBOX]   score contra título "${title}" -> ${score}`);
+      if (score > maxScore) maxScore = score;
+    }
+    console.log(`[DEBUG-TORBOX]   maxScore final: ${maxScore}`);
+    return maxScore;
+  }
+
   private isReadyStatus(status: string): boolean {
     const ready = ['completed', 'cached', 'uploading', 'seeding'];
     const s = status?.toLowerCase() || '';

@@ -13,8 +13,6 @@ async function carregarAnalisador() {
 // ── Decode HTML entities via cheerio (tag <span> é válida) ────────────
 
 function decodeHtmlEntities(text: string): string {
-  // cheerio.load().text() decodifica &ccedil; → ç, &atilde; → ã, etc.
-  // Usamos <span> que é uma tag HTML válida (diferente de <d> que falhava)
   const cheerio = require('cheerio');
   return cheerio.load(`<span>${text}</span>`)('span').text();
 }
@@ -22,20 +20,13 @@ function decodeHtmlEntities(text: string): string {
 // ── Tipos ─────────────────────────────────────────────────────────────
 
 export interface DadosMagnet {
-  infoHash: string;    // hex 40 caracteres, lowercase
-  nome: string | null; // parametro "dn" do magnet (nome canonico do torrent)
-  anuncios: string[];  // trackers (parametro "tr")
+  infoHash: string;
+  nome: string | null;
+  anuncios: string[];
 }
 
 // ── API UNICA de analise de magnets ───────────────────────────────────
 
-/**
- * Analisa um magnet link usando parse-torrent.
- * UNICA forma de extrair infoHash no sistema — sem regex, sem fallback.
- *
- * Retorna dados estruturados: infoHash, nome canonico (dn), trackers.
- * Retorna null se o magnet for invalido ou o parse falhar.
- */
 export async function analisarMagnet(magnet: string): Promise<DadosMagnet | null> {
   try {
     const analisador = await carregarAnalisador();
@@ -53,10 +44,6 @@ export async function analisarMagnet(magnet: string): Promise<DadosMagnet | null
 
 // ── Geracao de URL de resolucao ───────────────────────────────────────
 
-/**
- * Gera a URL lazy de resolucao para o Stremio.
- * Extrai o infoHash do magnet via parse-torrent.
- */
 export async function gerarUrlResolve(
   magnet: string,
   chaveApi: string,
@@ -66,7 +53,9 @@ export async function gerarUrlResolve(
   temporada?: number,
   episodio?: number,
   qualidade?: string,
-  infoHashPreParsed?: string // evita re-parse do magnet
+  infoHashPreParsed?: string,
+  titles?: string[],         // títulos para seleção de arquivo
+  imdbId?: string            // NOVO: imdbId do conteúdo
 ): Promise<string> {
   const infoHash = infoHashPreParsed || (await analisarMagnet(magnet))?.infoHash;
   if (!infoHash) {
@@ -89,6 +78,10 @@ export async function gerarUrlResolve(
     if (episodio !== undefined) parametros.append('episode', episodio.toString());
   }
   if (qualidade) parametros.append('quality', qualidade);
+  if (imdbId) parametros.append('imdbId', imdbId);   // <-- NOVO
+  if (titles && titles.length > 0) {
+    parametros.append('titles', titles.join(','));
+  }
 
   const consulta = parametros.toString();
   if (consulta) url += `?${consulta}`;
