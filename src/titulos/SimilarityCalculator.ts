@@ -52,7 +52,7 @@ export class SimilarityCalculator {
 
   /**
    * Verifica se o título do torrent corresponde ao IMDb ID fornecido.
-   * 
+   *
    * @param torrentTitle   título principal do torrent (ex: canonicalName)
    * @param imdbId         identificador IMDb
    * @param torrentMetadata opcionais: year e season
@@ -99,7 +99,7 @@ export class SimilarityCalculator {
         const cacheKey = season ? `tmdb-${imdbId}:s${season}` : `tmdb-${imdbId}`;
         const cached = this.tmdbCache.get(cacheKey);
         let tmdbData: ImdbTitles;
-        if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+        if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
           tmdbData = cached.data;
         } else {
           tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId, season);
@@ -352,8 +352,7 @@ export class SimilarityCalculator {
     return resultado;
   }
 
-  // Demais métodos mantidos como estavam...
-  // (validarPalavrasMinimas, validarAnoCompativel, validarTemporada, temTemporadaExplicita, normalizarParaComparacao, extrairAnoDoTitulo)
+  // ─── MÉTODOS DE VALIDAÇÃO ───
 
   private validarPalavrasMinimas(
     melhor: {
@@ -497,25 +496,45 @@ export class SimilarityCalculator {
     };
   }
 
+  /**
+   * Validação de temporada – agora delegando ao TechnicalWords
+   * extrairRangeEpisodios para detectar indicadores como "2ª Temporada".
+   */
   private validarTemporada(
     tituloTorrent: string,
     temporadaAlvo?: number
   ): { passou: boolean; motivo: string } {
     this.logger.debug(`Validando temporada para: "${tituloTorrent.substring(0, 70)}" alvo S${temporadaAlvo}`);
 
-    const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
-    if (temporadaAlvo === undefined && temEpisodio) {
-      return { passou: false, motivo: 'SxxExx em filme — provável episódio de série' };
+    // --- FILME (temporadaAlvo undefined) ---
+    if (temporadaAlvo === undefined) {
+      // Usa extrairRangeEpisodios para capturar "2ª Temporada", "Season 2", etc.
+      const range = extrairRangeEpisodios(tituloTorrent);
+      if (range && range.season > 0) {
+        return {
+          passou: false,
+          motivo: `Indicador de temporada (S${range.season}) em filme`,
+        };
+      }
+      // Mantém a verificação antiga para SxxExx explícito
+      const temEpisodio = /\bs\d{1,2}\s*e\d{1,3}\b/i.test(tituloTorrent);
+      if (temEpisodio) {
+        return { passou: false, motivo: 'SxxExx em filme — provável episódio de série' };
+      }
+      return { passou: true, motivo: '' };
     }
-    if (temporadaAlvo === undefined) return { passou: true, motivo: '' };
 
+    // --- SÉRIE (temporadaAlvo definida) ---
     const epRange = extrairRangeEpisodios(tituloTorrent);
     if (epRange) {
       const passou = epRange.season === temporadaAlvo;
       if (!passou) {
         this.logger.debug(`Temporada detectada: S${epRange.season} vs alvo S${temporadaAlvo}`);
       }
-      return { passou, motivo: passou ? '' : `Temporada divergente: S${epRange.season} vs S${temporadaAlvo}` };
+      return {
+        passou,
+        motivo: passou ? '' : `Temporada divergente: S${epRange.season} vs S${temporadaAlvo}`,
+      };
     }
 
     const sMatch = tituloTorrent.match(/\bs(\d{1,2})\b(?!\s*e\d)/i);

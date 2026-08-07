@@ -20,10 +20,9 @@ const LEGENDADO_REGEX = new RegExp(
 
 const logger = new Logger('WordPressScraper');
 
-// Força DNS público para bypass de bloqueios de operadora
+// ─── Configuração de rede ──────────────────────────────────────────────
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-// Agente HTTPS customizado: resolve IP via Google DNS + conecta com SNI correto
 class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
     const hostname = options.hostname || options.host || '';
@@ -101,6 +100,9 @@ const htmlAxiosConfig = {
 
 export class WordPressScraper {
   private readonly qualityDetector: QualityDetector;
+  private readonly magnetCache = new Map<string, { nome: string | null; infoHash: string }>();
+  private readonly POST_BATCH_SIZE = 3;
+  private readonly PROTECTOR_BATCH_SIZE = 5;
 
   constructor() {
     this.qualityDetector = new QualityDetector();
@@ -125,14 +127,9 @@ export class WordPressScraper {
     query: string,
     type: 'movie' | 'series'
   ): Promise<TorrentResult[]> {
-    const cleanQuery = query
-      .replace(/\b\d+ª\s*(temporada|temp)\b/gi, '')
-      .replace(/\btemporada\s*\d+\b/gi, '')
-      .replace(/\bseason\s*\d+\b/gi, '')
-      .replace(/\bs\d{2}\b/gi, '')
-      .replace(/\s+/g, ' ')
-      .trim();
-    const searchQuery = cleanQuery || query;
+    // A query agora já chega com a temporada (ex.: "rick and morty 4ª temporada")
+    // Não removemos mais a informação de temporada – a responsabilidade é do chamador.
+    const searchQuery = query.trim();
     const searchUrl = `${site.baseUrl}/?s=${encodeURIComponent(searchQuery)}`;
     logger.debug(`WP ${site.name}: buscando HTML "${searchUrl}"`);
 
@@ -163,12 +160,21 @@ export class WordPressScraper {
     logger.info(`WP ${site.name}: ${relevantLinks.length} posts relevantes na busca HTML para "${searchQuery}"`);
 
     const results: TorrentResult[] = [];
-    for (const postLink of relevantLinks) {
-      try {
-        const extracted = await this.scrapePostHtml(postLink.url, postLink.title, site.name, type, queryWords);
-        results.push(...extracted);
-      } catch { /* ignora post que falhou */ }
+
+    // Processar posts em lotes paralelos
+    for (let i = 0; i < relevantLinks.length; i += this.POST_BATCH_SIZE) {
+      const batch = relevantLinks.slice(i, i + this.POST_BATCH_SIZE);
+      const batchPromises = batch.map(link =>
+        this.scrapePostHtml(link.url, link.title, site.name, type, queryWords)
+          .then(r => r)
+          .catch(() => [] as TorrentResult[])
+      );
+      const batchResults = await Promise.all(batchPromises);
+      for (const res of batchResults) {
+        results.push(...res);
+      }
     }
+
     return results;
   }
 
@@ -194,59 +200,92 @@ export class WordPressScraper {
 
     const protectorLinks = $('a[href*="systemads.net"], a[href*="systemads1.com"]').toArray();
 
-    // ═══ PARALELIZAÇÃO: extrair magnets de todos os links de uma vez ═══
-    const magnetPromises = protectorLinks.map(async (el) => {
-      const protectorUrl = $(el).attr('href');
-      if (!protectorUrl) return null;
+    // Extrair magnets dos protetores em lotes paralelos
+    const allMagnets: { magnet: string; parentText: string; individualOriginalTitle?: string }[] = [];
 
-      const hrefPos = content.indexOf(protectorUrl);
-      if (hrefPos !== -1) {
-        if (dualIndex !== null && hrefPos < dualIndex) return null;
-        if (legendadoIndex !== null && hrefPos >= legendadoIndex) return null;
+    for (let i = 0; i < protectorLinks.length; i += this.PROTECTOR_BATCH_SIZE) {
+      const batch = protectorLinks.slice(i, i + this.PROTECTOR_BATCH_SIZE);
+      const batchPromises = batch.map(async (el: any) => {
+        const protectorUrl = $(el).attr('href');
+        if (!protectorUrl) return null;
+
+        const hrefPos = content.indexOf(protectorUrl);
+        if (hrefPos !== -1) {
+          if (dualIndex !== null && hrefPos < dualIndex) return null;
+          if (legendadoIndex !== null && hrefPos >= legendadoIndex) return null;
+        }
+
+        const magnet = await this.extractMagnetFromProtector(protectorUrl);
+        if (!magnet) return null;
+
+        const parentText = $(el).parent().text().trim();
+        const individualOriginalTitle = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle;
+        return { magnet, parentText, individualOriginalTitle };
+      });
+
+      const batchResults = await Promise.all(batchPromises);
+      for (const r of batchResults) {
+        if (r) allMagnets.push(r);
       }
+    }
 
-      const magnet = await this.extractMagnetFromProtector(protectorUrl);
-      if (!magnet) return null;
+    // Processar todos os magnets em paralelo (com cache)
+    const protectorResults: TorrentResult[] = [];
+    if (allMagnets.length > 0) {
+      const analyzed = await Promise.all(
+        allMagnets.map(async ({ magnet, parentText, individualOriginalTitle }) => {
+          const cached = this.magnetCache.get(magnet);
+          let canonicalName: string | null = null;
+          if (cached) {
+            canonicalName = cached.nome;
+          } else {
+            try {
+              const dados = await analisarMagnet(magnet);
+              if (dados) {
+                canonicalName = dados.nome;
+                this.magnetCache.set(magnet, { nome: dados.nome, infoHash: dados.infoHash });
+              }
+            } catch {}
+          }
 
-      const parentText = $(el).parent().text().trim();
-      const individualOriginalTitle = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle;
-      const canonicalName = await this.extractCanonicalName(magnet);
-      const title = canonicalName || postTitle;
-      const quality = this.detectQuality(parentText, postTitle, html, magnet);
-      if (!allowedQualities.has(quality)) return null;
+          const title = canonicalName || postTitle;
+          const quality = this.detectQuality(parentText, postTitle, html, magnet);
+          if (!allowedQualities.has(quality)) return null;
 
-      const size = infoBlock.size || this.extractSize(parentText);
-      const language = this.extractLanguage(postTitle) || 'Desconhecido';
+          const size = infoBlock.size || this.extractSize(parentText);
+          const language = this.extractLanguage(postTitle) || 'Desconhecido';
+          const episode = this.extractEpisodeFromText(parentText);
 
-      // ═══ EXTRAI EPISÓDIO DO CONTEXTO E PREENCHE htmlTitle ═══
-      const episode = this.extractEpisodeFromText(parentText);
+          return {
+            title: this.cleanTitle(title),
+            htmlTitle: parentText || postTitle,
+            magnet,
+            seeders: this.estimateSeeders(provider),
+            leechers: 0,
+            size,
+            quality,
+            provider,
+            language,
+            type,
+            relevanceScore: 0.8,
+            sizeInBytes: this.parseSize(size),
+            season: undefined,
+            episode,
+            lastUpdated: new Date(),
+            confidence: 0.85,
+            originalTitle: individualOriginalTitle || globalOriginalTitle,
+            year,
+            canonicalName: canonicalName ?? undefined,
+          } as TorrentResult;
+        })
+      );
 
-      return {
-        title: this.cleanTitle(title),
-        htmlTitle: parentText || postTitle, // <-- ADICIONADO: contexto HTML
-        magnet,
-        seeders: this.estimateSeeders(provider),
-        leechers: 0,
-        size,
-        quality,
-        provider,
-        language,
-        type,
-        relevanceScore: 0.8,
-        sizeInBytes: this.parseSize(size),
-        season: undefined,
-        episode,
-        lastUpdated: new Date(),
-        confidence: 0.85,
-        originalTitle: individualOriginalTitle,
-        year,
-        canonicalName,
-      } as TorrentResult;
-    });
+      for (const r of analyzed) {
+        if (r) protectorResults.push(r);
+      }
+    }
 
-    const protectorMagnets = (await Promise.all(magnetPromises)).filter(Boolean) as TorrentResult[];
-
-    return [...directMagnets, ...protectorMagnets];
+    return [...directMagnets, ...protectorResults];
   }
 
   private async processDirectMagnets(
@@ -265,68 +304,87 @@ export class WordPressScraper {
     const magnetElements = $('a[href^="magnet:"]').toArray();
     const results: TorrentResult[] = [];
 
-    for (const el of magnetElements) {
-      const magnet = $(el).attr('href');
-      if (!magnet) continue;
+    const batchSize = 5;
+    for (let i = 0; i < magnetElements.length; i += batchSize) {
+      const batch = magnetElements.slice(i, i + batchSize);
+      const batchPromises = batch.map(async (el: any) => {
+        const magnet = $(el).attr('href');
+        if (!magnet) return null;
 
-      const hrefPos = content.indexOf(magnet);
-      if (hrefPos !== -1) {
-        if (dualIndex !== null && hrefPos < dualIndex) continue;
-        if (legendadoIndex !== null && hrefPos >= legendadoIndex) continue;
-      }
-
-      if (queryWords.length > 0) {
-        let contextText = '';
-        let current = $(el).parent();
-        for (let depth = 0; depth < 5; depth++) {
-          const text = current.text().trim().toLowerCase();
-          if (text.length > 20) {
-            contextText = text;
-            break;
-          }
-          current = current.parent();
+        const hrefPos = content.indexOf(magnet);
+        if (hrefPos !== -1) {
+          if (dualIndex !== null && hrefPos < dualIndex) return null;
+          if (legendadoIndex !== null && hrefPos >= legendadoIndex) return null;
         }
-        if (!contextText) contextText = postTitle.toLowerCase();
-        const match = queryWords.some(w => contextText.includes(w));
-        if (!match) continue;
-      }
 
-      const parentText = $(el).parent().text().trim();
-      const individualOriginalTitle = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle;
+        if (queryWords.length > 0) {
+          let contextText = '';
+          let current = $(el).parent();
+          for (let depth = 0; depth < 5; depth++) {
+            const text = current.text().trim().toLowerCase();
+            if (text.length > 20) {
+              contextText = text;
+              break;
+            }
+            current = current.parent();
+          }
+          if (!contextText) contextText = postTitle.toLowerCase();
+          const match = queryWords.some(w => contextText.includes(w));
+          if (!match) return null;
+        }
 
-      const canonicalName = await this.extractCanonicalName(magnet);
-      const title = canonicalName || postTitle;
+        const parentText = $(el).parent().text().trim();
+        const individualOriginalTitle = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle;
 
-      const quality = this.detectQuality(parentText, postTitle, html, magnet);
-      if (!allowedQualities.has(quality)) continue;
+        const cached = this.magnetCache.get(magnet);
+        let canonicalName: string | null = null;
+        if (cached) {
+          canonicalName = cached.nome;
+        } else {
+          try {
+            const dados = await analisarMagnet(magnet);
+            if (dados) {
+              canonicalName = dados.nome;
+              this.magnetCache.set(magnet, { nome: dados.nome, infoHash: dados.infoHash });
+            }
+          } catch {}
+        }
 
-      const size = this.extractSize(parentText);
-      const language = this.extractLanguage(postTitle) || 'Desconhecido';
+        const title = canonicalName || postTitle;
+        const quality = this.detectQuality(parentText, postTitle, html, magnet);
+        if (!allowedQualities.has(quality)) return null;
 
-      // ═══ EXTRAI EPISÓDIO DO CONTEXTO E PREENCHE htmlTitle ═══
-      const episode = this.extractEpisodeFromText(parentText);
+        const size = this.extractSize(parentText);
+        const language = this.extractLanguage(postTitle) || 'Desconhecido';
+        const episode = this.extractEpisodeFromText(parentText);
 
-      results.push({
-        title: this.cleanTitle(title),
-        htmlTitle: parentText || postTitle, // <-- ADICIONADO: contexto HTML
-        magnet,
-        seeders: this.estimateSeeders(provider),
-        leechers: 0,
-        size,
-        quality,
-        provider,
-        language,
-        type,
-        relevanceScore: 0.8,
-        sizeInBytes: this.parseSize(size),
-        season: undefined,
-        episode,
-        lastUpdated: new Date(),
-        confidence: 0.85,
-        originalTitle: individualOriginalTitle,
-        year,
-        canonicalName: canonicalName ?? undefined,
+        return {
+          title: this.cleanTitle(title),
+          htmlTitle: parentText || postTitle,
+          magnet,
+          seeders: this.estimateSeeders(provider),
+          leechers: 0,
+          size,
+          quality,
+          provider,
+          language,
+          type,
+          relevanceScore: 0.8,
+          sizeInBytes: this.parseSize(size),
+          season: undefined,
+          episode,
+          lastUpdated: new Date(),
+          confidence: 0.85,
+          originalTitle: individualOriginalTitle,
+          year,
+          canonicalName: canonicalName ?? undefined,
+        } as TorrentResult;
       });
+
+      const batchResults = await Promise.all(batchPromises);
+      for (const r of batchResults) {
+        if (r) results.push(r);
+      }
     }
 
     return results;
@@ -357,10 +415,6 @@ export class WordPressScraper {
     };
   }
 
-  /**
-   * Extrai magnet do protetor com retry e SEM referer fixo.
-   * O referer fixo (comando1.com) estava bloqueando o acesso em alguns casos.
-   */
   private async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     const maxAttempts = 2;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -369,19 +423,14 @@ export class WordPressScraper {
           ...htmlAxiosConfig,
           timeout: 12000,
           maxRedirects: 5,
-          // SEM referer fixo – confia apenas nos headers padrão
         });
         const html: string = res.data;
         const match = html.match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
         if (match) return match[1];
-
-        // Fallback: tenta encontrar DEST_URL em outras variações
         const altMatch = html.match(/DEST_URL\s*=\s*"([^"]+)"/);
         if (altMatch) return altMatch[1];
-
       } catch (err: any) {
         if (attempt < maxAttempts - 1) {
-          // Aguarda 500ms antes de tentar novamente
           await new Promise(resolve => setTimeout(resolve, 500));
           continue;
         }
@@ -405,25 +454,10 @@ export class WordPressScraper {
     return quality || 'HD';
   }
 
-  /** Método assíncrono que delega ao magnetHelper (parse-torrent) para obter o nome canônico */
-  private async extractCanonicalName(magnet: string): Promise<string | null> {
-    try {
-      const dados = await analisarMagnet(magnet);
-      return dados?.nome || null;
-    } catch {
-      const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
-      if (dnMatch) {
-        try {
-          return decodeURIComponent(dnMatch[1].replace(/\+/g, ' '));
-        } catch {
-          return dnMatch[1];
-        }
-      }
-      return null;
-    }
+  private extractCanonicalName(magnet: string): Promise<string | null> {
+    return Promise.resolve(null);
   }
 
-  /** Método síncrono (fallback) usado apenas para detectQuality, para não exigir async */
   private extractCanonicalNameSync(magnet: string): string | null {
     const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
     if (dnMatch) {
@@ -451,11 +485,6 @@ export class WordPressScraper {
 
   private cleanTitle(title: string): string {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
-  }
-
-  private async extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
-    const dados = await analisarMagnet(magnet);
-    return dados ? dados.infoHash : null;
   }
 
   private estimateSeeders(provider: string): number {
@@ -533,20 +562,12 @@ export class WordPressScraper {
     return { dualIndex, legendadoIndex };
   }
 
-  /**
-   * Extrai número do episódio de um texto (ex: "Episódio 01: 1080p" → 1)
-   */
   private extractEpisodeFromText(text: string): number | undefined {
     if (!text) return undefined;
     const match = text.match(/epis[oó]dio\s*(\d+)/i);
-    if (match) {
-      return parseInt(match[1], 10);
-    }
-    // Fallback: tenta "EP 01" ou "E01"
+    if (match) return parseInt(match[1], 10);
     const altMatch = text.match(/\b(?:ep|e)\s*(\d+)\b/i);
-    if (altMatch) {
-      return parseInt(altMatch[1], 10);
-    }
+    if (altMatch) return parseInt(altMatch[1], 10);
     return undefined;
   }
 }

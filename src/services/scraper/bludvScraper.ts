@@ -4,6 +4,7 @@
 // canonicalName extraído via magnetHelper (analisarMagnet)
 // Qualidade extraída do texto do link (ex: <a>1080p</a>)
 // episodeContext contém o texto do pai com "EPISÓDIO XX" para validação
+// COM OTIMIZAÇÕES DE PARALELISMO (Promise.all com batch)
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
@@ -61,6 +62,7 @@ const AXIOS_OPTS = {
 
 export class BludvScraper {
   private readonly qualityDetector: QualityDetector;
+  private readonly BATCH_SIZE = 5; // Limite de paralelismo para evitar rate limit
 
   constructor() {
     this.qualityDetector = new QualityDetector();
@@ -183,44 +185,61 @@ export class BludvScraper {
     const dualLinks = this.extractDualSectionProtectorLinks($, contentHtml);
     if (!dualLinks.length) return [];
 
-    // Processa cada link individualmente
+    // ═══ OTIMIZAÇÃO: Extrair magnets em lotes paralelos ═══
+    const allMagnets: { magnet: string; link: typeof dualLinks[0] }[] = [];
+    for (let i = 0; i < dualLinks.length; i += this.BATCH_SIZE) {
+      const batch = dualLinks.slice(i, i + this.BATCH_SIZE);
+      const batchPromises = batch.map(async (link) => {
+        const magnet = await this.extractMagnetFromProtector(link.url);
+        return { magnet, link };
+      });
+      const batchResults = await Promise.all(batchPromises);
+      // Filtra os que deram resultado e adiciona ao array
+      for (const result of batchResults) {
+        if (result.magnet) {
+          allMagnets.push({ magnet: result.magnet, link: result.link });
+        }
+      }
+    }
+
+    if (allMagnets.length === 0) return [];
+
+    // ═══ OTIMIZAÇÃO: Analisar todos os magnets em paralelo ═══
+    const analyzedMagnets = await Promise.all(
+      allMagnets.map(async ({ magnet, link }) => {
+        let canonicalName: string | undefined;
+        try {
+          const dados = await analisarMagnet(magnet);
+          canonicalName = dados?.nome || undefined;
+        } catch {}
+        return { magnet, link, canonicalName };
+      })
+    );
+
+    // Agora constrói os resultados (sem mais awaits pesados)
     const results: TorrentResult[] = [];
 
-    for (const link of dualLinks) {
+    for (const { magnet, link, canonicalName } of analyzedMagnets) {
       // 1. Qualidade via texto do link (fonte primária)
       let quality = this.qualityDetector.extractQualityFromFilename(link.linkText);
       if (!quality || !allowedQualities.has(quality)) {
-        // Fallback: tenta extrair do título do post
         quality = this.qualityDetector.extractQualityFromFilename(postTitle);
         if (!quality || !allowedQualities.has(quality)) {
-          quality = 'HD'; // Fallback final
+          quality = 'HD';
         }
       }
 
-      // 2. Extrai número do episódio do contexto (parentText) — MAIS CONFIÁVEL
+      // 2. Extrai número do episódio do contexto
       let episode: number | undefined;
-      // Prioriza o parentText (que tem "EPISÓDIO XX") e depois o linkText
       const contextForEpisode = link.parentText || link.linkText;
       const epMatch = contextForEpisode.match(/EPISÓDIO\s*(\d+)/i);
       if (epMatch) episode = parseInt(epMatch[1], 10);
 
-      // 3. Obtém magnet do protetor
-      const magnet = await this.extractMagnetFromProtector(link.url);
-      if (!magnet) continue;
-
-      // 4. Tenta obter canonicalName via magnetHelper (apenas para título)
-      let canonicalName: string | undefined;
-      try {
-        const dados = await analisarMagnet(magnet);
-        canonicalName = dados?.nome || undefined;
-      } catch {}
-
-      // ─── CONSTRÓI TÍTULO INDIVIDUAL ──────────────────────────────
+      // 3. Constrói título
       let title: string;
       if (canonicalName) {
         title = canonicalName;
       } else {
-        // Remove a lista de qualidades múltiplas do postTitle (ex: "720p | 1080p | 2160p 4K")
         const cleanBase = postTitle
           .replace(/\s*[|]\s*(?:\d{3,4}p|4K|FULLHD|HD)\s*/gi, '')
           .replace(/\s{2,}/g, ' ')
@@ -237,7 +256,7 @@ export class BludvScraper {
 
       results.push({
         title: this.cleanTitle(title),
-        htmlTitle: link.parentText || link.linkText, // contexto com "EPISÓDIO"
+        htmlTitle: link.parentText || link.linkText,
         magnet,
         seeders: this.estimateSeeders(),
         leechers: 0,

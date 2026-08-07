@@ -254,10 +254,10 @@ export class CatalogProvider {
 
     const results = await Promise.allSettled(
       naoLegendado.map(async (t) => {
-        const tituloParaValidar = t.originalTitle || t.canonicalName || t.title;
+        // ═══ CORREÇÃO: canonicalName primeiro (contém indicação de temporada) ═══
+        const tituloParaValidar = t.canonicalName || t.originalTitle || t.title;
         const tituloParaIdioma = t.title || t.originalTitle || t.canonicalName;
 
-        // ═══ LOG: parâmetros que estão sendo passados ═══
         this.logger.debug(`🔍 Validando: "${tituloParaValidar.substring(0, 50)}" | htmlTitle: "${(t.htmlTitle || '').substring(0, 40)}" | epTorrent: ${t.episode ?? 'N/A'} | alvo S${season ?? '?'}E${episode ?? '?'}`);
 
         let result = await this.titleFilter.titulosCombinam(
@@ -296,7 +296,6 @@ export class CatalogProvider {
           }
         }
 
-        // ═══ LOG: resultado da validação ═══
         if (result.matches) {
           this.logger.debug(`✅ ACEITO: ${tituloParaValidar.substring(0, 40)} | motivo: ${result.reason}`);
         } else {

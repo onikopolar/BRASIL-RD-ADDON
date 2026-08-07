@@ -13,7 +13,7 @@ const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
         this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
-        this.version = '6.5.1';
+        this.version = '6.5.2';
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
@@ -36,8 +36,24 @@ class TorrentScraperService {
                 }
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
-            const qEn = tmdbData?.originalTitle || searchQueries[0] || query;
-            const qPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            let qEn;
+            let qPt;
+            if (type === 'series' && targetSeason !== undefined) {
+                const seasonQueryEn = searchQueries.find(q => q.includes(`season ${targetSeason}`) ||
+                    q.includes(`${targetSeason} temporada`) ||
+                    q.includes(`${targetSeason}ª temporada`) ||
+                    q.includes(`temporada ${targetSeason}`));
+                const seasonQueryPt = searchQueries.find(q => q.includes(`${targetSeason} temporada`) ||
+                    q.includes(`${targetSeason}ª temporada`) ||
+                    q.includes(`temporada ${targetSeason}`) ||
+                    q.includes(`season ${targetSeason}`));
+                qEn = seasonQueryEn || searchQueries[0] || query;
+                qPt = seasonQueryPt || qEn;
+            }
+            else {
+                qEn = tmdbData?.originalTitle || searchQueries[0] || query;
+                qPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+            }
             const ptDiferente = qPt !== qEn;
             logger.debug(`🔍 Buscando torrents para: "${query}" | alvo S${targetSeason ?? '?'}E${'?'} | imdbId: ${imdbId ?? 'N/A'}`);
             const [wpResults, starckResults, hdrResults] = await Promise.all([
@@ -128,18 +144,34 @@ class TorrentScraperService {
             const titlesReverse = [...tmdbData.allTitles]
                 .filter((t) => /^[a-z0-9\s\-\.]+$/i.test(t))
                 .reverse();
+            const pularTitulosGenericos = (type === 'series' && targetSeason !== undefined);
             for (const title of titlesReverse) {
-                queries.push(title);
-                if (yearToUse)
-                    queries.push(`${title} ${yearToUse}`);
-                if (type === 'series' && targetSeason !== undefined) {
+                if (pularTitulosGenericos) {
                     queries.push(`${title} ${targetSeason}ª temporada`);
+                    queries.push(`${title} ${targetSeason} temporada`);
                     queries.push(`${title} temporada ${targetSeason}`);
                     queries.push(`${title} season ${targetSeason}`);
+                    if (yearToUse) {
+                        queries.push(`${title} ${targetSeason}ª temporada ${yearToUse}`);
+                        queries.push(`${title} ${targetSeason} temporada ${yearToUse}`);
+                        queries.push(`${title} temporada ${targetSeason} ${yearToUse}`);
+                    }
+                }
+                else {
+                    queries.push(title);
+                    if (yearToUse)
+                        queries.push(`${title} ${yearToUse}`);
+                    if (type === 'series' && targetSeason !== undefined) {
+                        queries.push(`${title} ${targetSeason}ª temporada`);
+                        queries.push(`${title} ${targetSeason} temporada`);
+                        queries.push(`${title} temporada ${targetSeason}`);
+                        queries.push(`${title} season ${targetSeason}`);
+                    }
                 }
                 const trimmed = title.replace(/^\d+\s*/, '');
-                if (trimmed !== title && trimmed.trim().length > 3)
+                if (trimmed !== title && trimmed.trim().length > 3) {
                     queries.push(trimmed);
+                }
             }
         }
         if (queries.length === 0) {
