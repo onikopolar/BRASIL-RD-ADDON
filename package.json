@@ -1,6 +1,6 @@
 {
   "name": "brasil-rd-addon",
-  "version": "1.5.3",
+  "version": "1.5.4",
   "description": "Addon brasileiro para Stremio com suporte completo ao Real-Debrid",
   "type": "commonjs",
   "main": "dist/server.js",
