@@ -17,7 +17,6 @@ const titleFilter = TitleFilter.getInstance();
 const episodeMatcher = EpisodeMatcher.getInstance();
 const qualityDetector = QualityDetector.getInstance();
 
-// Legendado indicators da fonte unica (TechnicalWords)
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
     .filter(w => /^leg/i.test(w))
@@ -65,7 +64,7 @@ export class AutoMagnetService {
   }>();
   private readonly cacheTTL = 30000;
 
-  private readonly VERSION = '1.6.1'; // Melhoria na detecção de packs
+  private readonly VERSION = '1.6.3'; // Corrigido salvamento de packs completos (0-0 vira NULL)
 
   private titleValidationCache = new Map<string, {
     result: TitleMatchResult;
@@ -93,9 +92,10 @@ export class AutoMagnetService {
     size?: string,
     imdbSeason?: number,
     imdbEpisode?: number | null,
-    infoHash?: string, // cacheado do parse-torrent (evita re-parse)
-    provider?: string,  // fonte original do scraper (BLUDV, RARGB, TPB...)
-    originalTitle?: string, // título original do HTML do post (já validado pelo CatalogProvider)
+    infoHash?: string,
+    provider?: string,
+    originalTitle?: string,
+    htmlTitle?: string   // NOVO: título do HTML que pode conter range de episódios (ex.: "Episódio 06 ao 10")
   ): Promise<AutoMagnetResult> {
     const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
     
@@ -119,7 +119,6 @@ export class AutoMagnetService {
         return result;
       }
 
-      // Títulos IMDB (necessário pro DB write)
       const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         const result = { success: false, magnetAdded: false, message: 'Títulos IMDB não encontrados' };
@@ -127,8 +126,6 @@ export class AutoMagnetService {
         return result;
       }
 
-      // Similaridade JÁ foi validada pelo CatalogProvider com originalTitle.
-      // Se originalTitle foi passado, pula a re-validação.
       let titleMatchResult: TitleMatchResult;
       if (originalTitle) {
         titleMatchResult = {
@@ -139,7 +136,6 @@ export class AutoMagnetService {
           reason: 'Pré-validado pelo CatalogProvider',
         } as TitleMatchResult;
       } else {
-        // Fallback: validação tradicional (para chamadas que não passam pelo CatalogProvider)
         titleMatchResult = await this.validateTitleWithCache(
           torrentTitle,
           imdbId,
@@ -188,7 +184,6 @@ export class AutoMagnetService {
         }
       }
 
-      // Processa metadados da série
       let torrentSeason = imdbSeason;
       let torrentEpisode = imdbEpisode;
 
@@ -196,7 +191,6 @@ export class AutoMagnetService {
         const torrentMetadata = titleFilter.extrairMetadados(torrentTitle);
         const multiplos = episodeMatcher.temMultiplosEpisodios(torrentTitle);
         const ehPack = episodeMatcher.ehPackTemporadaCompleta(torrentTitle);
-        
 
         if (torrentSeason === undefined && torrentMetadata.season) {
           torrentSeason = torrentMetadata.season;
@@ -212,8 +206,6 @@ export class AutoMagnetService {
           torrentEpisode = torrentMetadata.episode;
         }
       }
-
-      // Log suprimido: muito verboso em producao
 
       const category = type === 'series' ? 'serie' : 'filme';
       const language = this.detectLanguage(torrentTitle);
@@ -238,7 +230,7 @@ export class AutoMagnetService {
         matchedLanguage: titleMatchResult.matchedLanguage
       };
 
-      const saved = await this.saveToDatabaseOptimized(magnetData, imdbTitles, allQualities, titleMatchResult, infoHash, provider);
+      const saved = await this.saveToDatabaseOptimized(magnetData, imdbTitles, allQualities, titleMatchResult, infoHash, provider, htmlTitle);
 
       if (saved) {
         let validationMessage = 'Título validado';
@@ -445,24 +437,19 @@ export class AutoMagnetService {
   private detectLanguage(title: string): string {
     const lowerTitle = title.toLowerCase();
 
-    // Indicadores fortes de PT-BR
     if (lowerTitle.includes('dublado') || lowerTitle.includes('dublada') || lowerTitle.includes('dublagem')) return 'pt-BR';
     if (lowerTitle.includes('dual audio') || lowerTitle.includes('dual áudio')) return 'pt-BR,en';
-    // Legendado/truncado = NAO eh PT-BR dublado
     if (LEGENDADO_REGEX.test(lowerTitle)) return 'legendado';
     if (lowerTitle.includes('nacional')) return 'pt-BR';
 
-    // Indicadores fortes de EN
     if (/\b(english|eng)\b/i.test(lowerTitle)) return 'en';
     if (/\b(español|spanish|espanol)\b/i.test(lowerTitle)) return 'es';
     if (/\b(french|francês|frances)\b/i.test(lowerTitle)) return 'fr';
 
-    // Nenhum indicador claro → delega ao LanguageDetector
     const langResult = LanguageDetector.getInstance().verificarIdioma(title);
     if (langResult.palavrasPt.length > 0) return 'pt-BR';
     if (langResult.palavrasEn.length > 0) return 'en';
 
-    // Sem indicadores → desconhecido (streamFormatter vai mostrar como PT-BR por default)
     return 'unknown';
   }
 
@@ -471,22 +458,18 @@ export class AutoMagnetService {
     imdbTitles: ImdbTitles, 
     allQualities: string[] = [],
     titleMatchResult: TitleMatchResult,
-    infoHash?: string, // cacheado do parse-torrent
-    provider?: string  // fonte original do scraper
+    infoHash?: string,
+    provider?: string,
+    htmlTitle?: string   // NOVO: utilizado para extrair o range de episódios
   ): Promise<boolean> {
     try {
-      // Usa infoHash cacheado do parse-torrent, evita re-parse
       const magnetHash = infoHash || await this.extrairHashDoMagnet(magnetData.magnet);
       if (!magnetHash) {
         throw new Error('Não foi possível extrair infoHash');
       }
 
-      // Log suprimido: muito verboso em producao
-
-      // Verifica se ja existe no banco
       const existingTorrent = await getTorrent(magnetHash);
       if (existingTorrent) {
-        // Atualiza seeders e lastSeen
         await upsertTorrent(magnetHash, {
           seeders: magnetData.seeds || 0,
           lastSeen: new Date()
@@ -503,31 +486,58 @@ export class AutoMagnetService {
         return false;
       }
 
-      if (!existingTorrent) {
-        // Extrai range de episódios do título (ex: S02E01-03 → start=1, end=3)
-        const episodeRange = extrairRangeEpisodios(magnetData.title);
+      // Determina o range de episódios para o banco de dados
+      const rangeSource = htmlTitle || magnetData.title;
+      let episodeRange = extrairRangeEpisodios(rangeSource);
 
-        // Calcula rescrapeAt baseado no TÍTULO (dn do magnet — fonte canônica)
-        const rescrapeAt = RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality);
+      // Se o range indicar pack completo (0-0) ou se o título for explicitamente um pack,
+      // definimos ambos como null para que a query do StreamHandler retorne o torrent para qualquer episódio
+      let imdbEpisodeStart: number | null = null;
+      let imdbEpisodeEnd: number | null = null;
+
+      if (episodeRange) {
+        // Se for um pack completo (início e fim são 0) OU se o título contém palavras-chave de pack
+        const isFullPack = (episodeRange.episodeStart === 0 && episodeRange.episodeEnd === 0) ||
+                          /\b(?:temporada completa|complete season|season pack|pack completo)\b/i.test(rangeSource);
         
-        await createTorrent({
-          infoHash: magnetHash,
-          provider: provider,
-          title: magnetData.title,
-          size: this.parseSizeToBytes(magnetData.size) || 0,
-          type: magnetData.category === 'serie' ? 'series' : 'movie',
-          imdbId: magnetData.imdbId || null,
-          imdbSeason: magnetData.imdbSeason || null,
-          imdbEpisodeStart: episodeRange?.episodeStart ?? null,
-          imdbEpisodeEnd: episodeRange?.episodeEnd ?? null,
-          seeders: magnetData.seeds || 0,
-          idioma: magnetData.language,
-          qualidade: magnetData.quality,
-          uploadDate: new Date(),
-          lastSeen: new Date(),
-          rescrapeAt: rescrapeAt
-        });
+        if (!isFullPack) {
+          imdbEpisodeStart = episodeRange.episodeStart;
+          imdbEpisodeEnd = episodeRange.episodeEnd;
+        }
       }
+
+      // Se o magnetData já tem imdbEpisode explícito (passado pelo CatalogProvider), usa ele
+      if (magnetData.imdbSeason && magnetData.imdbEpisode !== undefined) {
+        if (magnetData.imdbEpisode === null) {
+          // Pack completo forçado pelo CatalogProvider
+          imdbEpisodeStart = null;
+          imdbEpisodeEnd = null;
+        } else {
+          // Episódio específico
+          imdbEpisodeStart = magnetData.imdbEpisode;
+          imdbEpisodeEnd = magnetData.imdbEpisode;
+        }
+      }
+
+      const rescrapeAt = RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality);
+      
+      await createTorrent({
+        infoHash: magnetHash,
+        provider: provider,
+        title: magnetData.title,
+        size: this.parseSizeToBytes(magnetData.size) || 0,
+        type: magnetData.category === 'serie' ? 'series' : 'movie',
+        imdbId: magnetData.imdbId || null,
+        imdbSeason: magnetData.imdbSeason || null,
+        imdbEpisodeStart: imdbEpisodeStart,
+        imdbEpisodeEnd: imdbEpisodeEnd,
+        seeders: magnetData.seeds || 0,
+        idioma: magnetData.language,
+        qualidade: magnetData.quality,
+        uploadDate: new Date(),
+        lastSeen: new Date(),
+        rescrapeAt: rescrapeAt
+      });
 
       logger.debug('Magnet salvo no DB com sucesso', {
         title: magnetData.title.substring(0, 60),
@@ -536,6 +546,8 @@ export class AutoMagnetService {
         todasQualidades: allQualities,
         season: magnetData.imdbSeason,
         episode: magnetData.imdbEpisode === null ? 'null (pack completo)' : magnetData.imdbEpisode,
+        imdbEpisodeStart: imdbEpisodeStart,
+        imdbEpisodeEnd: imdbEpisodeEnd,
         versao: this.VERSION
       });
 
@@ -652,7 +664,6 @@ export class AutoMagnetService {
           message: `Torrent adicionado: ${torrentInfo.download_state}`
         };
       } catch (infoErr) {
-        // getTorrentInfo 500 → torrent ainda em fila, retorna downloading
         logger.warn('getTorrentInfo falhou, torrent em fila', {
           torrentId,
           error: infoErr instanceof Error ? infoErr.message : 'Erro'
@@ -666,8 +677,6 @@ export class AutoMagnetService {
 
     } catch (error) {
       const msg = error instanceof Error ? error.message : String(error);
-      // "Download already queued" = já foi enviado em requisição anterior
-      // Tenta achar o torrent existente e verificar se já completou
       if (/already queued|already exists|already added/i.test(msg)) {
         logger.info('Magnet já na fila do Torbox, verificando status...', {
           title: magnetData.title.substring(0, 60),
@@ -695,7 +704,6 @@ export class AutoMagnetService {
         };
       }
 
-      // Timeout ou outro erro — tenta verificar se o torrent já existe
       logger.warn('Erro ao processar Torbox, verificando se já existe...', {
         title: magnetData.title.substring(0, 60),
         error: msg.substring(0, 100)
@@ -903,7 +911,8 @@ export class AutoMagnetService {
         'Cache de validações de título reutilizável',
         'Cache de dados do IMDB com TTL de 5 minutos',
         'Elimina revalidação duplicada no salvamento',
-        'Detecção de packs ampliada (temporada sem episódio)'
+        'Detecção de packs ampliada (temporada sem episódio)',
+        'Correção: packs completos são salvos com imdbEpisodeStart/End = NULL'
       ]
     };
   }

@@ -254,7 +254,8 @@ export class TorboxService {
 
   /**
    * Obtém o link de stream para um arquivo dentro do torrent.
-   * Agora prioriza a qualidade (targetQuality) na seleção do arquivo.
+   * Agora exige correspondência exata de episódio quando informado.
+   * Prioriza a qualidade (targetQuality) na seleção do arquivo.
    */
   async getStreamLinkForTorrent(
     torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string,
@@ -275,7 +276,32 @@ export class TorboxService {
       }
 
       const files = info.files || [];
-      const videoFiles = files.filter(f => this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)));
+      const minSize = (targetSeason !== undefined) ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
+
+      // Filtra apenas arquivos de vídeo com tamanho mínimo
+      let candidateFiles = files.filter(f =>
+        this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)) &&
+        f.size >= minSize
+      );
+
+      // Se episódio alvo foi informado, filtra estritamente pelos arquivos que pertencem a ele
+      if (targetSeason !== undefined && targetEpisode !== undefined) {
+        const episodeFiles = candidateFiles.filter(f =>
+          this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode)
+        );
+
+        if (episodeFiles.length === 0) {
+          // Nenhum arquivo corresponde ao episódio solicitado – o torrent não serve
+          throw new StreamStatusException(
+            StaticResponse.FAILED_UNEXPECTED,
+            info.download_state,
+            100,
+            `Nenhum arquivo do episódio ${targetSeason}x${targetEpisode} encontrado no torrent`
+          );
+        }
+
+        candidateFiles = episodeFiles; // Trabalha apenas com os que batem
+      }
 
       // Recupera títulos do cache interno se não foram passados
       if (!targetTitles || targetTitles.length === 0) {
@@ -291,74 +317,54 @@ export class TorboxService {
       let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
-      console.log(`[DEBUG-TORBOX] 📁 Iniciando seleção entre ${videoFiles.length} vídeos...`);
+      console.log(`[DEBUG-TORBOX] 📁 Iniciando seleção entre ${candidateFiles.length} vídeos (episódio ${targetSeason}x${targetEpisode})...`);
 
-      for (const f of videoFiles) {
-        const minSize = (targetSeason !== undefined) ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
-        if (f.size < minSize) continue;
-
+      for (const f of candidateFiles) {
         let score = 0;
         let titleScore = 0;
-        let episodeScore = 0;
         let qualityScore = 0;
 
-        // 1. Correspondência de título (peso médio)
+        // 1. Correspondência de título (peso moderado)
         if (targetTitles && targetTitles.length > 0) {
           titleScore = this.calculateTitleMatchScore(f.name, targetTitles);
-          score += titleScore * 50_000_000_000; // reduzido para dar mais peso à qualidade
+          score += titleScore * 50_000_000_000;
         }
 
-        // 2. Correspondência de episódio (séries) - peso alto, mas menor que qualidade
-        if (targetSeason !== undefined && targetEpisode !== undefined) {
-          const match = this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode);
-          if (match) {
-            episodeScore = 30_000_000_000;
-            score += episodeScore;
-          }
-        }
-
-        // 3. QUALIDADE (prioridade máxima) ═══ CORREÇÃO PRINCIPAL ═══
+        // 2. QUALIDADE (prioridade máxima)
         if (targetQuality) {
           const fileQuality = this.extractQualityFromFilename(f.name);
           if (fileQuality) {
-            // Normaliza a qualidade alvo para comparação
             const normalizedTarget = this.normalizeQuality(targetQuality);
             const normalizedFile = this.normalizeQuality(fileQuality);
 
             if (normalizedFile === normalizedTarget) {
-              // Qualidade exata: peso máximo
               qualityScore = 100_000_000_000;
             } else {
-              // Qualidade diferente: tenta a melhor disponível
               const qualityRank = ['2160p', '1080p', '720p', '480p'];
               const targetRank = qualityRank.indexOf(normalizedTarget);
               const fileRank = qualityRank.indexOf(normalizedFile);
               if (targetRank !== -1 && fileRank !== -1) {
-                // Quanto menor a diferença, maior o bônus
                 const diff = Math.abs(targetRank - fileRank);
-                // Se a qualidade do arquivo for superior à alvo (ex: 2160p vs 1080p), dá um bônus menor
-                // Se for inferior, dá um bônus ainda menor
                 if (fileRank < targetRank) {
-                  // Qualidade superior (ex: 2160p quando pediu 1080p) – ainda é bom
+                  // Qualidade superior (ex: 2160p quando pediu 1080p)
                   qualityScore = 80_000_000_000 - diff * 10_000_000_000;
                 } else {
-                  // Qualidade inferior (ex: 720p quando pediu 1080p) – penaliza
+                  // Qualidade inferior
                   qualityScore = Math.max(0, 30_000_000_000 - diff * 15_000_000_000);
                 }
               }
             }
           } else {
-            // Se não detectar qualidade no nome, dá um bônus mínimo (mas ainda prefere arquivos com qualidade)
             qualityScore = 5_000_000_000;
           }
           score += qualityScore;
         }
 
-        // 4. Tamanho (desempate)
+        // 3. Tamanho (desempate)
         score += f.size;
 
         console.log(`[DEBUG-TORBOX]   - ${f.name}`);
-        console.log(`[DEBUG-TORBOX]     titleScore=${titleScore}, episodeScore=${episodeScore}, qualityScore=${qualityScore}, size=${f.size}, TOTAL=${score}`);
+        console.log(`[DEBUG-TORBOX]     titleScore=${titleScore}, qualityScore=${qualityScore}, size=${f.size}, TOTAL=${score}`);
 
         if (score > bestScore) {
           bestScore = score;

@@ -3,7 +3,6 @@
 // Exporta constantes para uso no SimilarityCalculator
 
 // Palavras técnicas completas para remoção durante normalização
-// Acrônimos técnicos para remoção durante normalização
 export const TECHNICAL_ACRONYMS = [
   'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
   '5.1', '7.1', '2.0', '5.1ch', '7.1ch', '2ch', '1ch', 'hd', 'uhd', 'fhd', 'qhd', 'whd',
@@ -291,6 +290,9 @@ export interface EpisodeRange {
  *   "4ª Temporada Completa" → season=4, start=0, end=0 (pack completo)
  *   "Episódio 02: 1080p" → season=0, start=2, end=2
  *   "Episódio 03: 720p | 1080p" → season=0, start=3, end=3
+ *   "Episódio 06 ao 10" → season=0, start=6, end=10
+ *   "Episódio 01 a 05"  → season=0, start=1, end=5
+ *   "Episódios 1-5"     → season=0, start=1, end=5
  * 
  * Retorna null apenas para títulos sem qualquer informação de temporada/episódio.
  */
@@ -357,14 +359,34 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4: "Episódio 02" (sem temporada) ═══
+  // ═══ Padrão 4a: "Episódio 06 ao 10", "Episódios 01 a 05", "Episódio 1 até 5" ═══
+  const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos)\s*(\d{1,3})\b/i);
+  if (episodioRangeWords) {
+    return {
+      season: 0,
+      episodeStart: parseInt(episodioRangeWords[1]),
+      episodeEnd: parseInt(episodioRangeWords[2]),
+    };
+  }
+
+  // ═══ Padrão 4b: "Episódio 06-10", "Episódios 1-5" ═══
+  const episodioRangeHyphen = t.match(/\bepis[oó]dios?\s*(\d{1,3})\s*-\s*(\d{1,3})\b/i);
+  if (episodioRangeHyphen) {
+    return {
+      season: 0,
+      episodeStart: parseInt(episodioRangeHyphen[1]),
+      episodeEnd: parseInt(episodioRangeHyphen[2]),
+    };
+  }
+
+  // ═══ Padrão 5: "Episódio 02" (episódio único, sem temporada) ═══
   const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
   if (episodioOnly) {
     const ep = parseInt(episodioOnly[1]);
     return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
-  // ═══ Padrão 5: S6, S06, season6, 6x (temporada avulsa, sem episódio) ═══
+  // ═══ Padrão 6: S6, S06, season6, 6x (temporada avulsa, sem episódio) ═══
   const sOnly = t.match(/^s(\d{1,2})$/i);
   if (sOnly) return { season: parseInt(sOnly[1]), episodeStart: 0, episodeEnd: 0 };
   const seasonOnly = t.match(/^season(\d{1,2})$/i);
@@ -372,24 +394,23 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const xOnly = t.match(/^(\d{1,2})x$/i);
   if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 6: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
+  // ═══ Padrão 7: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
   const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
   if (tempPack) {
     return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 7: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
+  // ═══ Padrão 8: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
   const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
   if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 8: Packs completos com "Temporada Completa" etc. ═══
+  // ═══ Padrão 9: "Temporada Completa", "Complete Season" etc. ═══
   const fullSeasonPattern = /\b(\d{1,2})\s*[ªº°]?\s*temporada\s*completa\b/i;
   const fullSeasonMatch = t.match(fullSeasonPattern);
   if (fullSeasonMatch) {
     return { season: parseInt(fullSeasonMatch[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // Padrões em inglês: "Complete Season 8", "Season 8 Complete"
   const completeSeasonEn = /\b(?:complete\s+season|season\s+complete)\s*(\d{1,2})\b/i;
   const completeSeasonEnMatch = t.match(completeSeasonEn);
   if (completeSeasonEnMatch) {
@@ -402,7 +423,6 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     return { season: parseInt(seasonPackEnMatch[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // Se nenhum padrão foi encontrado, retorna null
   return null;
 }
 

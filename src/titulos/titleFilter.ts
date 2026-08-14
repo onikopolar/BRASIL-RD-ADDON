@@ -77,81 +77,69 @@ export class TitleFilter {
       const metadados = this.extrairMetadados(tituloTorrent);
       const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
-      // ═══ 1. VALIDAÇÃO DIRETA DE EPISÓDIO (prioridade máxima) ═══
-      let episodioValidadoDiretamente = false;
-      if (episodioAlvo !== undefined && episodioTorrent !== undefined) {
-        if (episodioTorrent !== episodioAlvo) {
-          return {
-            matches: false,
-            similarity: 0,
-            torrentMetadata: metadados,
-            reason: `Episódio diferente: E${episodioTorrent} vs alvo E${episodioAlvo}`
-          };
-        }
-        episodioValidadoDiretamente = true;
+      // ── 1. EXTRAI RANGE DE EPISÓDIOS (o mais cedo possível) ──
+      const tituloParaRange = htmlTitle || tituloParaIdioma || tituloTorrent;
+      let range = extrairRangeEpisodios(tituloParaRange);
+      if (!range && tituloTorrent !== tituloParaRange) {
+        range = extrairRangeEpisodios(tituloTorrent);
       }
 
-      // ═══ 2. VALIDAÇÃO DE TEMPORADA E EPISÓDIO (via extrairRangeEpisodios) ═══
-      let temporadaConfirmada = false;
-      let range = null;
-      if (!episodioValidadoDiretamente || (episodioValidadoDiretamente && temporadaAlvo !== undefined)) {
-        const tituloParaEpisodio = htmlTitle || tituloParaIdioma || tituloTorrent;
-        range = extrairRangeEpisodios(tituloParaEpisodio);
-        if (!range && tituloTorrent !== tituloParaEpisodio) {
-          range = extrairRangeEpisodios(tituloTorrent);
-        }
-      }
-
-      if (range && temporadaAlvo !== undefined) {
-        if (!episodioValidadoDiretamente) {
-          if (range.season !== temporadaAlvo) {
-            return {
-              matches: false, similarity: 0, torrentMetadata: metadados,
-              reason: `Temporada diferente: S${range.season} vs S${temporadaAlvo}`
-            };
-          }
-          temporadaConfirmada = true;
-        } else {
-          // Episódio já validado → rejeita pack completo se for o caso
-          if (episodioAlvo !== undefined && range.episodeStart === 0 && range.episodeEnd === 0) {
+      // ── 2. VALIDAÇÃO DE EPISÓDIO (agora com suporte a range) ──
+      if (episodioAlvo !== undefined) {
+        if (range && range.episodeStart > 0 && range.episodeEnd > 0) {
+          // Range explícito (ex: "Episódio 06 ao 10")
+          if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
             return {
               matches: false,
               similarity: 0,
               torrentMetadata: metadados,
-              reason: `Pack completo (todos os episódios) não é aceito para E${episodioAlvo} específico`
+              reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
             };
           }
-        }
-
-        // Valida episódio via range (só se episodioTorrent não foi usado)
-        if (episodioAlvo !== undefined && episodioTorrent === undefined &&
-            range.episodeStart > 0 && range.episodeEnd > 0) {
-          if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
+          // Episódio está dentro do range → prosseguir
+        } else if (episodioTorrent !== undefined) {
+          // Sem range: validação exata
+          if (episodioTorrent !== episodioAlvo) {
             return {
-              matches: false, similarity: 0, torrentMetadata: metadados,
-              reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
+              matches: false,
+              similarity: 0,
+              torrentMetadata: metadados,
+              reason: `Episódio diferente: E${episodioTorrent} vs alvo E${episodioAlvo}`
             };
           }
         }
       }
 
-      // ═══ 3. VALIDAÇÃO DE SIMILARIDADE (SimilarityCalculator) ═══
-      // Se episódio já foi validado diretamente, não passamos season para não gerar conflito S0 vs S1
-      const anoParaSimilaridade = temporadaConfirmada ? undefined : anoTorrent;
-      const seasonParaSimilaridade = episodioValidadoDiretamente ? undefined : temporadaAlvo;
+      // ── 3. VALIDAÇÃO DE TEMPORADA (se range contiver season) ──
+      if (range && temporadaAlvo !== undefined && range.season > 0 && range.season !== temporadaAlvo) {
+        return {
+          matches: false,
+          similarity: 0,
+          torrentMetadata: metadados,
+          reason: `Temporada diferente: S${range.season} vs S${temporadaAlvo}`
+        };
+      }
+
+      // ── 4. SIMILARIDADE (SimilarityCalculator) ──
+      // CORREÇÃO: sempre passar a temporada alvo quando definida.
+      // Isso evita que o SimilarityCalculator trate SxxExx como indicador de filme
+      // quando a temporada alvo é conhecida (ex.: séries).
+      const seasonParaSimilaridade = temporadaAlvo;
 
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent,
         imdbId,
-        { year: anoParaSimilaridade, season: seasonParaSimilaridade },
+        { year: anoTorrent, season: seasonParaSimilaridade },
         tituloParaIdioma,
         imdbTitles ?? undefined
       );
 
-      // ═══ 4. FILTRO: TMDB é FILME, mas torrent tem indicadores de SÉRIE ═══
+      // ── 5. FILTRO FINAL: TMDB movie mas torrent com indicador de série ──
       if (resultado.mediaType === 'movie' && this.episodeMatcher.temIndicadorTemporada(tituloTorrent)) {
         return {
-          matches: false, similarity: 0, torrentMetadata: metadados,
+          matches: false,
+          similarity: 0,
+          torrentMetadata: metadados,
           reason: 'Torrent é série, mas TMDB diz que é filme'
         };
       }

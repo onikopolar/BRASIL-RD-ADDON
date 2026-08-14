@@ -1,5 +1,6 @@
 // src/stream/streamFormatter.ts – CORREÇÃO: usa quality do torrent, não reextrai
 // Sem lógica de fileIdx para packs (não é possível extrair lista de arquivos de magnet puro)
+// AGORA: inclui htmlTitle no título do stream para máxima clareza
 
 import { Stream, StreamRequest } from '../types/index.js';
 import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
@@ -304,7 +305,7 @@ export class StreamFormatter {
     return 'PT-BR';
   }
 
-  // Cria streams separados para cada qualidade - MÉTODO PRINCIPAL CORRIGIDO
+  // Cria streams separados para cada qualidade - MÉTODO PRINCIPAL COM HTMLTITLE
   async criarStreamsMultiplasQualidades(
     torrent: any,
     request: StreamRequest,
@@ -317,8 +318,22 @@ export class StreamFormatter {
     titles?: string[],
     imdbId?: string
   ): Promise<Stream[]> {
-    const tituloFonte = torrent.canonicalName || torrent.title;
-    
+    let tituloFonte = torrent.canonicalName || torrent.title;
+
+    // ═══ INCLUI HTMLTITLE PARA CLAREZA (RANGE OU EPISÓDIO) ═══
+    if (torrent.htmlTitle && torrent.htmlTitle.trim().length > 0) {
+      const htmlClean = torrent.htmlTitle.trim();
+      // Se o título principal já contém o htmlTitle, não duplicar
+      if (!tituloFonte.includes(htmlClean)) {
+        // Trunca o htmlTitle se for muito longo (mantém até 80 chars)
+        const maxHtmlLen = 80;
+        const htmlExcerpt = htmlClean.length > maxHtmlLen
+          ? htmlClean.substring(0, maxHtmlLen) + '...'
+          : htmlClean;
+        tituloFonte = `${tituloFonte} (${htmlExcerpt})`;
+      }
+    }
+
     // ═══ CORREÇÃO: usa a qualidade já extraída, não reextrai do título ═══
     let qualidades: string[];
     if (torrent.quality && torrent.quality !== 'HD' && torrent.quality !== 'Desconhecido') {
@@ -693,9 +708,9 @@ export class StreamFormatter {
 
   getStats() {
     return {
-      versao: '2.1.0',
-      feature: 'Qualidade corrigida via magnet dn quando disponível',
-      linha1: 'Titulo completo do torrent',
+      versao: '2.2.0',
+      feature: 'Título do stream inclui htmlTitle para clareza de range/episódio',
+      linha1: 'Titulo completo do torrent + (htmlTitle)',
       linha2: '🔗 seeds 💾 tamanho ⚙️ tracker',
       linha3: '🌐 idioma + metadados',
       name: 'Brasil RD\\n{qualidade}',

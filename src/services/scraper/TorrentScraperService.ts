@@ -16,7 +16,7 @@ export class TorrentScraperService {
     private readonly wpScraper: WordPressScraper;
     private readonly bludvScraper: BludvScraper;
     private readonly episodeMatcher = EpisodeMatcher.getInstance();
-    private readonly version = '6.5.2';
+    private readonly version = '6.5.3';
 
     constructor(tmdbScraper?: ImdbScraperService) {
         this.qualityDetector = QualityDetector.getInstance();
@@ -37,12 +37,7 @@ export class TorrentScraperService {
             let tmdbData = null;
             if (imdbId) {
                 tmdbData = await this.getTmdbData(imdbId, targetSeason);
-                if (tmdbData) {
-                    const isLatin = (t: string) => /^[a-z0-9\s\-\.']+$/i.test(t);
-                    if (tmdbData.originalTitle && !isLatin(tmdbData.originalTitle)) tmdbData.originalTitle = '';
-                    if (tmdbData.portugueseTitleRaw && !isLatin(tmdbData.portugueseTitleRaw)) tmdbData.portugueseTitleRaw = '';
-                    if (tmdbData.portugueseTitle && !isLatin(tmdbData.portugueseTitle)) tmdbData.portugueseTitle = '';
-                }
+                // REMOVIDO: bloco que apagava títulos com acentos
             }
 
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
@@ -70,7 +65,8 @@ export class TorrentScraperService {
                 qPt = seasonQueryPt || qEn; // fallback para a mesma query
             } else {
                 qEn = tmdbData?.originalTitle || searchQueries[0] || query;
-                qPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+                // Usa o título em português do TMDB (que pode conter acentos)
+                qPt = tmdbData?.portugueseTitle || tmdbData?.portugueseTitleRaw || qEn;
             }
 
             const ptDiferente = qPt !== qEn;
@@ -87,16 +83,16 @@ export class TorrentScraperService {
                 ]).then(([bludvEn, bludvPt, wpEn, wpPt]) => {
                     const seen = new Set<string>();
                     const combined = [...bludvEn, ...bludvPt, ...wpEn, ...wpPt];
-                    
+
                     logger.debug(`📊 BLUDV: ${bludvEn.length + bludvPt.length} | WP: ${wpEn.length + wpPt.length} | total bruto: ${combined.length}`);
-                    
+
                     if (combined.length > 0) {
                         const sample = combined.slice(0, 3);
                         for (const t of sample) {
                             logger.debug(`📄 Amostra: "${t.title?.substring(0, 50)}" | htmlTitle: "${(t.htmlTitle || '').substring(0, 30)}" | episode: ${t.episode ?? 'N/A'} | provider: ${t.provider}`);
                         }
                     }
-                    
+
                     return combined.filter(t => {
                         if (seen.has(t.magnet)) return false;
                         seen.add(t.magnet);
@@ -178,18 +174,22 @@ export class TorrentScraperService {
         const queries: string[] = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            const titlesReverse = [...tmdbData.allTitles]
-                .filter((t: string) => /^[a-z0-9\s\-\.]+$/i.test(t))
-                .reverse();
+            // Junta todos os títulos relevantes: os do array + português explícito
+            const allTitles = [...tmdbData.allTitles];
+            if (tmdbData.portugueseTitle && !allTitles.includes(tmdbData.portugueseTitle)) {
+                allTitles.push(tmdbData.portugueseTitle);
+            }
+            if (tmdbData.portugueseTitleRaw && !allTitles.includes(tmdbData.portugueseTitleRaw)) {
+                allTitles.push(tmdbData.portugueseTitleRaw);
+            }
+            const titlesReverse = [...allTitles].reverse();
 
-            // Se for serie com temporada definida, NAO gera titulos genericos (sem temporada)
             const pularTitulosGenericos = (type === 'series' && targetSeason !== undefined);
 
             for (const title of titlesReverse) {
                 if (pularTitulosGenericos) {
-                    // Apenas variacoes com a temporada
                     queries.push(`${title} ${targetSeason}ª temporada`);
-                    queries.push(`${title} ${targetSeason} temporada`);  // sem ordinal
+                    queries.push(`${title} ${targetSeason} temporada`);
                     queries.push(`${title} temporada ${targetSeason}`);
                     queries.push(`${title} season ${targetSeason}`);
                     if (yearToUse) {
@@ -198,18 +198,16 @@ export class TorrentScraperService {
                         queries.push(`${title} temporada ${targetSeason} ${yearToUse}`);
                     }
                 } else {
-                    // Comportamento original para filmes ou series sem temporada
                     queries.push(title);
                     if (yearToUse) queries.push(`${title} ${yearToUse}`);
                     if (type === 'series' && targetSeason !== undefined) {
                         queries.push(`${title} ${targetSeason}ª temporada`);
-                        queries.push(`${title} ${targetSeason} temporada`); // sem ordinal
+                        queries.push(`${title} ${targetSeason} temporada`);
                         queries.push(`${title} temporada ${targetSeason}`);
                         queries.push(`${title} season ${targetSeason}`);
                     }
                 }
 
-                // Remove possivel numero inicial do titulo (ex: "1. Título" -> "Título")
                 const trimmed = title.replace(/^\d+\s*/, '');
                 if (trimmed !== title && trimmed.trim().length > 3) {
                     queries.push(trimmed);

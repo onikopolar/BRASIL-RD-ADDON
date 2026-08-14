@@ -254,8 +254,8 @@ export class CatalogProvider {
 
     const results = await Promise.allSettled(
       naoLegendado.map(async (t) => {
-        // ═══ CORREÇÃO: canonicalName primeiro (contém indicação de temporada) ═══
-        const tituloParaValidar = t.canonicalName || t.originalTitle || t.title;
+        // CORREÇÃO: priorizar title (com temporada) quando não há canonicalName
+        const tituloParaValidar: string = (t.canonicalName || t.title || t.originalTitle) as string;
         const tituloParaIdioma = t.title || t.originalTitle || t.canonicalName;
 
         this.logger.debug(`🔍 Validando: "${tituloParaValidar.substring(0, 50)}" | htmlTitle: "${(t.htmlTitle || '').substring(0, 40)}" | epTorrent: ${t.episode ?? 'N/A'} | alvo S${season ?? '?'}E${episode ?? '?'}`);
@@ -272,7 +272,6 @@ export class CatalogProvider {
           t.episode
         );
 
-        // Fallback canonicalName
         if (!result.matches && t.originalTitle && t.canonicalName && t.canonicalName !== t.originalTitle) {
           const fallbackResult = await this.titleFilter.titulosCombinam(
             t.canonicalName,
@@ -372,9 +371,19 @@ export class CatalogProvider {
         try {
           const episodeValue = isPackFallback ? null : episode;
           await this.autoMagnetService.autoAddMagnet(
-            torrent.magnet, torrent.canonicalName || torrent.title, imdbId, request.type,
-            torrent.seeders, torrent.quality, torrent.size, season, episodeValue,
-            torrent.magnetInfoHash, torrent.provider, torrent.originalTitle
+            torrent.magnet,
+            torrent.canonicalName || torrent.title,
+            imdbId,
+            request.type,
+            torrent.seeders,
+            torrent.quality,
+            torrent.size,
+            season,
+            episodeValue,
+            torrent.magnetInfoHash,
+            torrent.provider,
+            torrent.originalTitle,
+            torrent.htmlTitle  // NOVO: passa o htmlTitle para extrair o range de episódios
           );
         } catch (error) {
           this.logger.error('Erro ao salvar magnet', { title: torrent.title.substring(0, 60), error: error instanceof Error ? error.message : 'Erro' });

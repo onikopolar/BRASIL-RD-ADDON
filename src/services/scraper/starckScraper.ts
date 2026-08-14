@@ -1,12 +1,14 @@
 // starck-oficial.com HTML Scraper — 2-passos: busca → página de post → magnet base64
 // Agora filtra por seção de idioma (DUAL ÁUDIO) e extrai language + canonicalName via magnetHelper
 // Adiciona qualityHint para detecção precisa de qualidade
+// Filtro de temporada corrigido para evitar resultados de temporadas erradas
 
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
+import { extrairRangeEpisodios } from '../../titulos/TechnicalWords.js';
 
 const logger = new Logger('StarckScraper');
 
@@ -73,14 +75,44 @@ async function searchStarckLinks(query: string): Promise<SearchResultItem[]> {
       });
     });
 
-    // ── Pós-filtro: título do post deve conter TODAS as palavras da query ──
-    const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length >= 3);
-    const filtered = queryWords.length > 1
-      ? results.filter(r => {
-          const titleLower = r.title.toLowerCase();
-          return queryWords.every(qw => titleLower.includes(qw));
-        })
-      : results;
+    // ─── Extrai temporada da query ───
+    const queryRange = extrairRangeEpisodios(query);
+    const querySeason = queryRange?.season;
+
+    // ─── Extrai palavras significativas da série (sem temporada/ano) ───
+    const cleanTitleForSeries = query
+      .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+      .replace(/\btemporada\s*\d+\b/gi, '')
+      .replace(/\bseason\s*\d+\b/gi, '')
+      .replace(/\b\d{4}\b/g, '')
+      .replace(/[^\w\s]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .toLowerCase();
+    const seriesWords = cleanTitleForSeries.split(/\s+/).filter(w => w.length > 0);
+
+    // ─── Filtro por temporada e nome da série ───
+    const filtered = results.filter(r => {
+      const lowerTitle = r.title.toLowerCase();
+
+      // Se a query contém temporada, exige que o título contenha essa temporada
+      if (querySeason) {
+        const seasonPatterns = [
+          new RegExp(`\\b${querySeason}\\s*[ªº°]?\\s*temporada\\b`, 'i'),
+          new RegExp(`\\btemporada\\s*${querySeason}\\b`, 'i'),
+          new RegExp(`\\bseason\\s*${querySeason}\\b`, 'i'),
+        ];
+        if (!seasonPatterns.some(p => p.test(lowerTitle))) return false;
+      }
+
+      // Exige ao menos uma palavra do nome da série
+      if (seriesWords.length > 0) {
+        const hasSeriesWord = seriesWords.some(word => lowerTitle.includes(word));
+        if (!hasSeriesWord) return false;
+      }
+
+      return true;
+    });
 
     logger.debug(`Starck: ${results.length} links → ${filtered.length} após filtro de query "${query.substring(0, 40)}"`);
     return filtered.slice(0, 40);

@@ -13,7 +13,7 @@ const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
         this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
-        this.version = '6.5.2';
+        this.version = '6.5.3';
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
@@ -25,15 +25,6 @@ class TorrentScraperService {
             let tmdbData = null;
             if (imdbId) {
                 tmdbData = await this.getTmdbData(imdbId, targetSeason);
-                if (tmdbData) {
-                    const isLatin = (t) => /^[a-z0-9\s\-\.']+$/i.test(t);
-                    if (tmdbData.originalTitle && !isLatin(tmdbData.originalTitle))
-                        tmdbData.originalTitle = '';
-                    if (tmdbData.portugueseTitleRaw && !isLatin(tmdbData.portugueseTitleRaw))
-                        tmdbData.portugueseTitleRaw = '';
-                    if (tmdbData.portugueseTitle && !isLatin(tmdbData.portugueseTitle))
-                        tmdbData.portugueseTitle = '';
-                }
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
             let qEn;
@@ -52,7 +43,7 @@ class TorrentScraperService {
             }
             else {
                 qEn = tmdbData?.originalTitle || searchQueries[0] || query;
-                qPt = tmdbData?.portugueseTitleRaw || tmdbData?.portugueseTitle || query;
+                qPt = tmdbData?.portugueseTitle || tmdbData?.portugueseTitleRaw || qEn;
             }
             const ptDiferente = qPt !== qEn;
             logger.debug(`🔍 Buscando torrents para: "${query}" | alvo S${targetSeason ?? '?'}E${'?'} | imdbId: ${imdbId ?? 'N/A'}`);
@@ -141,9 +132,14 @@ class TorrentScraperService {
         const queries = [];
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
-            const titlesReverse = [...tmdbData.allTitles]
-                .filter((t) => /^[a-z0-9\s\-\.]+$/i.test(t))
-                .reverse();
+            const allTitles = [...tmdbData.allTitles];
+            if (tmdbData.portugueseTitle && !allTitles.includes(tmdbData.portugueseTitle)) {
+                allTitles.push(tmdbData.portugueseTitle);
+            }
+            if (tmdbData.portugueseTitleRaw && !allTitles.includes(tmdbData.portugueseTitleRaw)) {
+                allTitles.push(tmdbData.portugueseTitleRaw);
+            }
+            const titlesReverse = [...allTitles].reverse();
             const pularTitulosGenericos = (type === 'series' && targetSeason !== undefined);
             for (const title of titlesReverse) {
                 if (pularTitulosGenericos) {
