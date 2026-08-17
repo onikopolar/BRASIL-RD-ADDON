@@ -300,7 +300,6 @@ export class WordPressScraper {
       return true;
     });
 
-    // Dados completos dos links: magnet, parentText, linkText, fullContextText
     const allMagnets: { magnet: string; parentText: string; linkText: string; fullContextText: string; individualOriginalTitle?: string }[] = [];
 
     for (let i = 0; i < protectorLinks.length; i += this.PROTECTOR_BATCH_SIZE) {
@@ -361,14 +360,12 @@ export class WordPressScraper {
             }
           }
 
-          // Deduplicacao por infoHash
           if (infoHash && seenInfoHashes.has(infoHash)) {
             logger.debug(`WP ${provider}: magnet duplicado (infoHash ${infoHash}) ignorado`);
             return null;
           }
           if (infoHash) seenInfoHashes.add(infoHash);
 
-          // Qualidade seguindo exatamente o BludvScraper: dn -> linkQuality -> contextQuality
           const dnQuality = canonicalName ? this.extractQualityFromText(canonicalName) : null;
           const linkQuality = this.extractQualityFromText(linkText);
           const contextQuality = this.extractQualityFromText(fullContextText);
@@ -424,7 +421,7 @@ export class WordPressScraper {
 
     // Deduplica magnets diretos (caso haja duplicatas)
     const directDeduplicated = directMagnets.filter(r => {
-      const match = r.magnet.match(/btih:([a-f0-9]{40})/i);
+      const match = r.magnet.match(/btih:([a-z0-9]+)/i);
       if (!match) return true;
       const infoHash = match[1];
       if (seenInfoHashes.has(infoHash)) return false;
@@ -457,10 +454,16 @@ export class WordPressScraper {
       : magnetElements.filter((el: any) => {
           const magnet = $(el).attr('href');
           if (!magnet) return false;
-          const hrefPos = content.indexOf(magnet);
-          if (hrefPos === -1) return false;
+
+          // Usa o HTML serializado do elemento para localizar a posição no conteúdo original.
+          // Isso evita falhas por causa de &amp; etc.
+          const elementHtml = $(el).toString();
+          const hrefPos = content.indexOf(elementHtml);
+          if (hrefPos === -1) return true; // se não conseguir a posição, mantém para não perder o magnet
+
           if (dualIndex !== null && hrefPos < dualIndex) return false;
           if (legendadoIndex !== null && hrefPos >= legendadoIndex) return false;
+
           return true;
         });
 
@@ -494,7 +497,6 @@ export class WordPressScraper {
           }
         }
 
-        // Qualidade igual Bludv: dn -> linkQuality -> contextQuality
         const dnQuality = canonicalName ? this.extractQualityFromText(canonicalName) : null;
         const linkQuality = this.extractQualityFromText(linkText);
         const contextQuality = this.extractQualityFromText(fullContextText);

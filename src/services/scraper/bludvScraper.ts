@@ -1,6 +1,6 @@
 // Scraper dedicado do BLUDV — HTML scraping direto (sem WordPress API)
 // Extrai magnets, Áudio:, Qualidade:, Tamanho: e episódios do conteúdo do post
-// Agora suporta protetor de links systemads1.com/videosad.net
+// Suporta protetor de links systemads1.com/videosad.net E magnets diretos (fallback)
 // canonicalName extraído via magnetHelper (analisarMagnet)
 // Qualidade extraída do texto do link (linkText) com prioridade sobre o contexto amplo,
 // e do dn do magnet como fonte máxima.
@@ -78,8 +78,7 @@ export class BludvScraper {
       if (!postItems.length) return [];
 
       logger.info(
-        `BLUDV HTML: ${postItems.length} posts filtrados para "${query}"${
-          targetSeason !== undefined ? ` (temporada ${targetSeason})` : ''
+        `BLUDV HTML: ${postItems.length} posts filtrados para "${query}"${targetSeason !== undefined ? ` (temporada ${targetSeason})` : ''
         }`
       );
 
@@ -218,22 +217,48 @@ export class BludvScraper {
 
     const metadata = this.extractPostMetadata($, contentHtml);
 
+    // Tenta obter links de protetor primeiro
     const dualLinks = this.extractDualSectionProtectorLinks($, contentHtml);
-    if (!dualLinks.length) return [];
 
-    const allMagnets: { magnet: string; link: typeof dualLinks[0] }[] = [];
-    for (let i = 0; i < dualLinks.length; i += this.BATCH_SIZE) {
-      const batch = dualLinks.slice(i, i + this.BATCH_SIZE);
-      const batchPromises = batch.map(async (link) => {
-        const magnet = await this.extractMagnetFromProtector(link.url);
-        return { magnet, link };
-      });
-      const batchResults = await Promise.all(batchPromises);
-      for (const result of batchResults) {
-        if (result.magnet) {
-          allMagnets.push({ magnet: result.magnet, link: result.link });
+    // Estrutura unificada: { magnet, link: { linkText, parentText, fullContextText } }
+    type LinkContext = {
+      linkText: string;
+      parentText: string;
+      fullContextText: string;
+    };
+    let allMagnets: { magnet: string; link: LinkContext }[] = [];
+
+    if (dualLinks.length > 0) {
+      // Processa protetores normalmente
+      for (let i = 0; i < dualLinks.length; i += this.BATCH_SIZE) {
+        const batch = dualLinks.slice(i, i + this.BATCH_SIZE);
+        const batchPromises = batch.map(async (link) => {
+          const magnet = await this.extractMagnetFromProtector(link.url);
+          return { magnet, link };
+        });
+        const batchResults = await Promise.all(batchPromises);
+        for (const result of batchResults) {
+          if (result.magnet) {
+            allMagnets.push({ magnet: result.magnet, link: result.link });
+          }
         }
       }
+    } else {
+      // Fallback: coleta magnets diretos do HTML
+      const directLinks = this.extractDirectMagnets($, contentHtml);
+      allMagnets = directLinks.map((item: {
+        magnet: string;
+        linkText: string;
+        parentText: string;
+        fullContextText: string;
+      }) => ({
+        magnet: item.magnet,
+        link: {
+          linkText: item.linkText,
+          parentText: item.parentText,
+          fullContextText: item.fullContextText,
+        },
+      }));
     }
 
     if (allMagnets.length === 0) return [];
@@ -244,7 +269,7 @@ export class BludvScraper {
         try {
           const dados = await analisarMagnet(magnet);
           canonicalName = dados?.nome || undefined;
-        } catch {}
+        } catch { }
         return { magnet, link, canonicalName };
       })
     );
@@ -373,6 +398,63 @@ export class BludvScraper {
       const linkPos = contentHtml.indexOf(linkHtml);
       if (linkPos > dualPos && linkPos < legendadoPos) {
         result.push(mapLink(el));
+      }
+    }
+    return result;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  //  MAGNETS DIRETOS (fallback)
+  // ═══════════════════════════════════════════════════════════════
+
+  private extractDirectMagnets(
+    $: any,
+    contentHtml: string
+  ): { magnet: string; linkText: string; parentText: string; fullContextText: string }[] {
+    const allLinks = $('a[href^="magnet:"]').toArray();
+    if (!allLinks.length) return [];
+
+    const strongEls = $('.content strong, .content b').toArray();
+    let dualPos = -1;
+    let legendadoPos = contentHtml.length;
+
+    for (let i = 0; i < strongEls.length; i++) {
+      const text = $(strongEls[i]).text().trim();
+      if (dualPos === -1 && /\b(?:DUAL\s+[ÁA]UDIO|DUBLADO)\b/i.test(text)) {
+        const dualHtml = $(strongEls[i]).toString();
+        dualPos = contentHtml.indexOf(dualHtml);
+      }
+      if (dualPos !== -1 && /\b(?:LEGENDADO|LEGENDADA)\b/i.test(text)) {
+        const legendadoHtml = $(strongEls[i]).toString();
+        const pos = contentHtml.indexOf(legendadoHtml);
+        if (pos > dualPos) legendadoPos = pos;
+        break;
+      }
+    }
+
+    const mapLink = (el: any) => ({
+      magnet: $(el).attr('href')?.trim(),
+      linkText: $(el).text().trim(),
+      parentText: $(el).parent().text().trim(),
+      fullContextText: this.getFullContextText($(el))
+    });
+
+    if (dualPos === -1) {
+      return allLinks.map(mapLink).filter((item: {
+        magnet: string;
+        linkText: string;
+        parentText: string;
+        fullContextText: string;
+      }) => item.magnet);
+    }
+
+    const result: { magnet: string; linkText: string; parentText: string; fullContextText: string }[] = [];
+    for (const el of allLinks) {
+      const linkHtml = $(el).toString();
+      const linkPos = contentHtml.indexOf(linkHtml);
+      if (linkPos > dualPos && linkPos < legendadoPos) {
+        const item = mapLink(el);
+        if (item.magnet) result.push(item);
       }
     }
     return result;

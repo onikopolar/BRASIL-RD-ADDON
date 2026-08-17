@@ -138,6 +138,31 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_js_1.torrentioRateLim
     const { apiKey, type, id } = req.params;
     const decodedId = decodeURIComponent(id);
     const requestId = req._ultraDebugId || 'no-id';
+    let tmdbInfo = null;
+    const imdbMatch = decodedId.match(/^(tt\d+)/);
+    const imdbId = imdbMatch ? imdbMatch[1] : null;
+    if (imdbId) {
+        try {
+            const { StreamHandler } = await import('./stream/StreamHandler.js');
+            const streamHandler = StreamHandler.getInstance();
+            const seasonMatch = decodedId.match(/^tt\d+:(\d+):(\d+)/);
+            const season = seasonMatch ? parseInt(seasonMatch[1]) : undefined;
+            const tmdb = await streamHandler.catalog.getTmdbSearchData(imdbId, season);
+            tmdbInfo = {
+                imdbId,
+                searchTitle: tmdb.searchTitle,
+                originalTitle: tmdb.imdbTitles?.originalTitle,
+                portugueseTitle: tmdb.imdbTitles?.portugueseTitle,
+                year: tmdb.imdbTitles?.year,
+                mediaType: tmdb.imdbTitles?.mediaType,
+                allTitles: tmdb.imdbTitles?.allTitles,
+                seasonYear: tmdb.seasonYear,
+            };
+        }
+        catch (error) {
+            tmdbInfo = { error: 'Falha ao obter dados TMDB' };
+        }
+    }
     ultraLogger.info('═══════════════════════════════════════', {});
     ultraLogger.info(' STREAM SOLICITADO (Torbox route)', {
         requestId,
@@ -150,6 +175,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_js_1.torrentioRateLim
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 100),
         clientInfo: req._clientInfo,
+        tmdb: tmdbInfo,
     });
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, OPTIONS');

@@ -1,7 +1,3 @@
-// src/stream/streamFormatter.ts – CORREÇÃO: usa quality do torrent, não reextrai
-// Sem lógica de fileIdx para packs (não é possível extrair lista de arquivos de magnet puro)
-// AGORA: inclui htmlTitle no título do stream para máxima clareza
-
 import { Stream, StreamRequest } from '../types/index.js';
 import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
@@ -35,9 +31,7 @@ export class StreamFormatter {
     seeds?: number,
     size?: string,
     language?: string,
-    tracker?: string,
-    metadata?: EnhancedSeriesMetadata,
-    isDirect: boolean = false
+    provider?: string
   ): string {
     let result = torrentTitle.trim();
 
@@ -53,21 +47,16 @@ export class StreamFormatter {
       segundaLinha += ` 💾 ${size}`;
     }
 
-    if (tracker) {
-      segundaLinha += ` ⚙️ ${tracker}`;
+    if (provider) {
+      segundaLinha += ` ⚙️ ${provider}`;
     }
 
     if (segundaLinha) {
       result += '\n' + segundaLinha;
     }
 
-    const terceiraParts: string[] = [];
     const idiomaFormatado = this.formatarIdioma(language || 'PT-BR');
-    terceiraParts.push(`🌐 ${idiomaFormatado}`);
-
-    if (terceiraParts.length > 0) {
-      result += '\n' + terceiraParts.join(' ');
-    }
+    result += '\n' + `🌐 ${idiomaFormatado}`;
 
     return result;
   }
@@ -87,7 +76,7 @@ export class StreamFormatter {
       'en': 'EN',
       'english': 'EN',
       'eng': 'EN',
-      'legendado': 'EN',
+      'legendado': 'Leg',
 
       'dual': 'Dual',
       'dual audio': 'Dual',
@@ -123,71 +112,139 @@ export class StreamFormatter {
     return idioma.toUpperCase();
   }
 
-  private extrairTracker(magnet: string): string {
-    if (!magnet) return 'Torrent';
-
-    if (magnet.includes('thepiratebay')) return 'ThePirateBay';
-    if (magnet.includes('1337x')) return '1337x';
-    if (magnet.includes('rarbg')) return 'RARBG';
-    if (magnet.includes('torrentgalaxy')) return 'TorrentGalaxy';
-    if (magnet.includes('magnetdl')) return 'MagnetDL';
-
-    return 'Torrent';
+  private sanitizarNomeArquivo(nomeArquivo: string): string {
+    return nomeArquivo
+      .replace(/[<>:"/\\|?*]/g, '_')
+      .substring(0, 255);
   }
 
-  async criarStreamDireto(
-    torrentTitle: string,
-    descricao: string,
-    linkDireto: string,
-    qualidade: string,
-    tipo?: 'movie' | 'series',
+  private extrairImdbIdDoRequest(request: StreamRequest): string | undefined {
+    if (request.imdbId) return request.imdbId;
+    const match = request.id?.match(/^(tt\d+)/);
+    return match ? match[1] : undefined;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  MÉTODO PRINCIPAL (compatível com chamadas antigas)
+  // ═══════════════════════════════════════════════════════════
+
+  async createMultipleQualityStreams(
+    torrent: any,
+    request: StreamRequest,
+    directLink: string | null,
+    type: 'movie' | 'series',
+    season?: number,
+    episode?: number,
+    isAvailableOnRD: boolean = false,
+    fileIdx?: number,
+    titles?: string[],
+    imdbId?: string
+  ): Promise<Stream[]> {
+    return await this.criarStreamsMultiplasQualidades(
+      torrent,
+      request,
+      directLink,
+      type,
+      season,
+      episode,
+      isAvailableOnRD,
+      fileIdx,
+      titles,
+      imdbId ?? request.imdbId ?? this.extrairImdbIdDoRequest(request)
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  CRIA STREAMS PARA MÚLTIPLAS QUALIDADES
+  // ═══════════════════════════════════════════════════════════
+
+  private async criarStreamsMultiplasQualidades(
+    torrent: any,
+    request: StreamRequest,
+    linkDireto: string | null,
+    tipo: 'movie' | 'series',
     temporada?: number,
     episodio?: number,
-    behaviorHints?: any,
-    metadata?: EnhancedSeriesMetadata,
-    fileIdx?: number
-  ): Promise<Stream> {
-    const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
-    const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
+    disponivelNoRD: boolean = false,
+    fileIdx?: number,
+    titles?: string[],
+    imdbId?: string
+  ): Promise<Stream[]> {
+    let tituloFonte = torrent.canonicalName || torrent.title;
 
-    const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
-    const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
-
-    const tituloFinal = this.formatTitleCorreto(
-      torrentTitle,
-      seeds,
-      tamanho,
-      idiomaDaDescricao,
-      'Torbox',
-      metadata,
-      true
-    );
-
-    const stream: Stream = {
-      name: `Brasil RD\n${qualidade}`,
-      title: tituloFinal,
-      infoHash: (await analisarMagnet(linkDireto))?.infoHash || undefined,
-      fileIdx: fileIdx !== undefined ? fileIdx : 0,
-      url: linkDireto
-    };
-
-    if (behaviorHints) {
-      stream.behaviorHints = {
-        notWebReady: false,
-        bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
-        filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
-        streamQuality: qualidade,
-        preferredAudioLanguage: 'por',
-        ...behaviorHints
-      };
+    // Inclui htmlTitle (episódio/range) no título do stream, se existente
+    if (torrent.htmlTitle && torrent.htmlTitle.trim().length > 0) {
+      const htmlClean = torrent.htmlTitle.trim();
+      if (!tituloFonte.includes(htmlClean)) {
+        const maxHtmlLen = 80;
+        const htmlExcerpt = htmlClean.length > maxHtmlLen
+          ? htmlClean.substring(0, maxHtmlLen) + '...'
+          : htmlClean;
+        tituloFonte = `${tituloFonte} (${htmlExcerpt})`;
+      }
     }
 
-    return stream;
+    // Usa a qualidade do scraper (se válida), senão tenta extrair do título
+    let qualidades: string[];
+    if (torrent.quality && torrent.quality !== 'HD' && torrent.quality !== 'Desconhecido') {
+      qualidades = [torrent.quality];
+    } else {
+      const todas = this.extrairTodasQualidades(tituloFonte);
+      qualidades = todas.length > 0 ? todas : ['HD'];
+    }
+
+    const streams: Stream[] = [];
+    const imdbIdFinal = imdbId || request.imdbId || this.extrairImdbIdDoRequest(request);
+
+    for (const qualidade of qualidades) {
+      const descricaoBase = `${tituloFonte}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+      const fileIdxParaStream = fileIdx ?? 0;
+
+      if (disponivelNoRD && linkDireto) {
+        streams.push(await this.criarStreamDireto(
+          tituloFonte,
+          descricaoBase,
+          linkDireto,
+          qualidade,
+          tipo,
+          temporada,
+          episodio,
+          {
+            bingeGroup: `br-${request.id}-${qualidade}`,
+            filename: this.sanitizarNomeArquivo(tituloFonte)
+          },
+          fileIdxParaStream
+        ));
+      } else {
+        streams.push(await this.criarStreamLazy(
+          tituloFonte,
+          descricaoBase,
+          torrent.magnet,
+          request.apiKey!,
+          torrent.provider || 'Torrent',
+          qualidade,
+          tipo,
+          temporada,
+          episodio,
+          {
+            bingeGroup: `br-${request.id}-${qualidade}`,
+            filename: this.sanitizarNomeArquivo(tituloFonte)
+          },
+          fileIdxParaStream,
+          titles,
+          imdbIdFinal
+        ));
+      }
+    }
+
+    return streams;
   }
 
-  // Stream lazy (magnet) - agora sem lógica de seleção de arquivos
-  async criarStreamLazy(
+  // ═══════════════════════════════════════════════════════════
+  //  STREAM LAZY (RESOLVER TORBOX)
+  // ═══════════════════════════════════════════════════════════
+
+  private async criarStreamLazy(
     torrentTitle: string,
     descricao: string,
     magnet: string,
@@ -198,7 +255,6 @@ export class StreamFormatter {
     temporada?: number,
     episodio?: number,
     behaviorHints?: any,
-    metadata?: EnhancedSeriesMetadata,
     fileIdx?: number,
     titles?: string[],
     imdbId?: string
@@ -206,7 +262,7 @@ export class StreamFormatter {
     const dadosMagnet = await analisarMagnet(magnet);
     const magnetHash = dadosMagnet?.infoHash;
 
-    // ═══ EXTRAI QUALIDADE DO MAGNET (dn) ═══
+    // Qualidade real do magnet (dn) tem prioridade máxima
     let qualidadeReal = qualidade;
     if (dadosMagnet?.nome) {
       const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(dadosMagnet.nome);
@@ -216,7 +272,10 @@ export class StreamFormatter {
       }
     }
 
-    // Usa fileIdx passado ou 0 (não há seleção inteligente)
+    // Ajusta o título para refletir a qualidade real, se necessário
+    // Isso evita divergência entre o nome exibido e behaviorHints.streamQuality
+    const tituloComQualidadeReal = this.atualizarQualidadeNoTitulo(torrentTitle, qualidadeReal);
+
     const fileIdxFinal = fileIdx ?? 0;
 
     const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
@@ -227,13 +286,11 @@ export class StreamFormatter {
     const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
 
     const tituloFinal = this.formatTitleCorreto(
-      torrentTitle,
+      tituloComQualidadeReal,
       seeds,
       tamanho,
       idiomaDaDescricao,
-      provider,
-      metadata,
-      false
+      provider
     );
 
     let resolveUrl = '';
@@ -281,12 +338,64 @@ export class StreamFormatter {
       };
     }
 
-    if (metadata?.isPackage && stream.behaviorHints) {
-      (stream.behaviorHints as any).packageContent = true;
+    return stream;
+  }
+
+  // ═══════════════════════════════════════════════════════════
+  //  STREAM DIRETO
+  // ═══════════════════════════════════════════════════════════
+
+  private async criarStreamDireto(
+    torrentTitle: string,
+    descricao: string,
+    linkDireto: string,
+    qualidade: string,
+    tipo?: 'movie' | 'series',
+    temporada?: number,
+    episodio?: number,
+    behaviorHints?: any,
+    fileIdx?: number
+  ): Promise<Stream> {
+    const seedsMatch = descricao.match(/(\d+)\s*seeds?/i);
+    const sizeMatch = descricao.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
+    const idiomaDaDescricao = this.extrairIdiomaDaDescricao(descricao);
+
+    const seeds = seedsMatch ? parseInt(seedsMatch[1]) : 0;
+    const tamanho = sizeMatch ? `${sizeMatch[1]} ${sizeMatch[2]}` : undefined;
+
+    const tituloFinal = this.formatTitleCorreto(
+      torrentTitle,
+      seeds,
+      tamanho,
+      idiomaDaDescricao,
+      'Torbox'
+    );
+
+    const stream: Stream = {
+      name: `Brasil RD\n${qualidade}`,
+      title: tituloFinal,
+      infoHash: (await analisarMagnet(linkDireto))?.infoHash || undefined,
+      fileIdx: fileIdx !== undefined ? fileIdx : 0,
+      url: linkDireto
+    };
+
+    if (behaviorHints) {
+      stream.behaviorHints = {
+        notWebReady: false,
+        bingeGroup: `br-${tipo || 'movie'}-${qualidade}`,
+        filename: this.sanitizarNomeArquivo(tituloFinal.split('\n')[0]),
+        streamQuality: qualidade,
+        preferredAudioLanguage: 'por',
+        ...behaviorHints
+      };
     }
 
     return stream;
   }
+
+  // ═══════════════════════════════════════════════════════════
+  //  UTILITÁRIOS
+  // ═══════════════════════════════════════════════════════════
 
   private extrairIdiomaDaDescricao(descricao: string): string {
     const padroesIdioma = [
@@ -303,111 +412,6 @@ export class StreamFormatter {
     }
 
     return 'PT-BR';
-  }
-
-  // Cria streams separados para cada qualidade - MÉTODO PRINCIPAL COM HTMLTITLE
-  async criarStreamsMultiplasQualidades(
-    torrent: any,
-    request: StreamRequest,
-    linkDireto: string | null,
-    tipo: 'movie' | 'series',
-    temporada?: number,
-    episodio?: number,
-    disponivelNoRD: boolean = false,
-    fileIdx?: number,
-    titles?: string[],
-    imdbId?: string
-  ): Promise<Stream[]> {
-    let tituloFonte = torrent.canonicalName || torrent.title;
-
-    // ═══ INCLUI HTMLTITLE PARA CLAREZA (RANGE OU EPISÓDIO) ═══
-    if (torrent.htmlTitle && torrent.htmlTitle.trim().length > 0) {
-      const htmlClean = torrent.htmlTitle.trim();
-      // Se o título principal já contém o htmlTitle, não duplicar
-      if (!tituloFonte.includes(htmlClean)) {
-        // Trunca o htmlTitle se for muito longo (mantém até 80 chars)
-        const maxHtmlLen = 80;
-        const htmlExcerpt = htmlClean.length > maxHtmlLen
-          ? htmlClean.substring(0, maxHtmlLen) + '...'
-          : htmlClean;
-        tituloFonte = `${tituloFonte} (${htmlExcerpt})`;
-      }
-    }
-
-    // ═══ CORREÇÃO: usa a qualidade já extraída, não reextrai do título ═══
-    let qualidades: string[];
-    if (torrent.quality && torrent.quality !== 'HD' && torrent.quality !== 'Desconhecido') {
-      qualidades = [torrent.quality];
-    } else {
-      const todas = this.extrairTodasQualidades(tituloFonte);
-      qualidades = todas.length > 0 ? todas : ['HD'];
-    }
-
-    const streams: Stream[] = [];
-    const metadata = this.metadataExtractor.extractEnhancedMetadata(tituloFonte);
-    const tagEpisodio = tipo === 'series' && temporada && episodio
-      ? `S${temporada.toString().padStart(2, '0')}E${episodio.toString().padStart(2, '0')}`
-      : '';
-
-    const imdbIdFinal = imdbId || request.imdbId || this.extrairImdbIdDoRequest(request);
-
-    for (const qualidade of qualidades) {
-      const descricaoBase = `${tituloFonte}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
-      const tituloCompletoTorrent = tituloFonte;
-
-      // Sempre usa fileIdx passado (ou 0)
-      const fileIdxParaStream = fileIdx ?? 0;
-
-      if (disponivelNoRD && linkDireto) {
-        streams.push(await this.criarStreamDireto(
-          tituloCompletoTorrent,
-          descricaoBase,
-          linkDireto,
-          qualidade,
-          tipo,
-          temporada,
-          episodio,
-          {
-            bingeGroup: `br-${request.id}-${qualidade}`,
-            filename: this.sanitizarNomeArquivo(`${tituloFonte} ${tagEpisodio}`)
-          },
-          metadata,
-          fileIdxParaStream
-        ));
-      } else {
-        streams.push(await this.criarStreamLazy(
-          tituloCompletoTorrent,
-          descricaoBase,
-          torrent.magnet,
-          request.apiKey!,
-          torrent.provider || 'Torrent',
-          qualidade,
-          tipo,
-          temporada,
-          episodio,
-          {
-            bingeGroup: `br-${request.id}-${qualidade}`,
-            filename: this.sanitizarNomeArquivo(`${tituloFonte} ${tagEpisodio}`)
-          },
-          metadata,
-          fileIdxParaStream,
-          titles,
-          imdbIdFinal
-        ));
-      }
-    }
-
-    return streams;
-  }
-
-  /**
-   * Extrai imdbId do request caso não esteja definido no campo direto.
-   * Exemplo: request.id = "tt2861424:9:10" -> "tt2861424"
-   */
-  private extrairImdbIdDoRequest(request: StreamRequest): string | undefined {
-    if (request.imdbId) return request.imdbId;
-    const match = request.id?.match(/^(tt\d+)/);
-    return match ? match[1] : undefined;
   }
 
   private extrairTodasQualidades(titulo: string): string[] {
@@ -506,79 +510,28 @@ export class StreamFormatter {
     return '';
   }
 
-  async criarStreamSerie(
-    torrent: any,
-    request: StreamRequest,
-    linkDireto: string | null,
-    temporada: number,
-    episodio: number,
-    disponivelNoRD: boolean = false,
-    fileIdx?: number
-  ): Promise<Stream> {
-    const qualidades = this.extrairTodasQualidades(torrent.title);
-    const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
+  private atualizarQualidadeNoTitulo(titulo: string, qualidade: string): string {
+    // Se o título já contém a qualidade real, não modifica.
+    const regexQualidade = new RegExp(`\\b${qualidade}\\b`, 'i');
+    if (regexQualidade.test(titulo)) {
+      return titulo;
+    }
 
-    const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
+    // Se houver uma qualidade entre parênteses (ex.: "(1080p)"), substitui pela real.
+    const regexEntreParenteses = /\s*\(\s*(\d{3,4}p|4k|uhd|hd)\s*\)/i;
+    if (regexEntreParenteses.test(titulo)) {
+      return titulo.replace(regexEntreParenteses, ` (${qualidade})`);
+    }
 
-    const imdbId = request.imdbId || this.extrairImdbIdDoRequest(request);
-
-    return await this.criarStreamLazy(
-      torrent.title,
-      descricaoBase,
-      torrent.magnet,
-      request.apiKey!,
-      torrent.provider || 'Torrent',
-      qualidade,
-      'series',
-      temporada,
-      episodio,
-      {
-        bingeGroup: `br-${request.id}-${qualidade}`,
-        filename: this.sanitizarNomeArquivo(torrent.title)
-      },
-      undefined,
-      fileIdx,
-      undefined,
-      imdbId
-    );
+    // Se não houver qualidade entre parênteses, adiciona no final.
+    return `${titulo} (${qualidade})`;
   }
 
-  async criarStreamFilme(
-    torrent: any,
-    request: StreamRequest,
-    linkDireto: string | null,
-    disponivelNoRD: boolean = false,
-    fileIdx?: number
-  ): Promise<Stream> {
-    const qualidades = this.extrairTodasQualidades(torrent.title);
-    const qualidade = qualidades.length > 0 ? qualidades[0] : this.qualityDetector.extractBestQuality(torrent.title);
-
-    const descricaoBase = `${torrent.title}\n${torrent.seeders || 0} seeds | ${torrent.size || 'N/A'} | ${this.formatarIdioma(torrent.language || 'PT-BR')}`;
-
-    const imdbId = request.imdbId || this.extrairImdbIdDoRequest(request);
-
-    return await this.criarStreamLazy(
-      torrent.title,
-      descricaoBase,
-      torrent.magnet,
-      request.apiKey!,
-      torrent.provider || 'Torrent',
-      qualidade,
-      'movie',
-      undefined,
-      undefined,
-      {
-        bingeGroup: `br-${request.id}-${qualidade}`,
-        filename: this.sanitizarNomeArquivo(torrent.title)
-      },
-      undefined,
-      fileIdx,
-      undefined,
-      imdbId
-    );
+  sortStreamsByQuality(streams: Stream[]): Stream[] {
+    return this.ordenarStreamsPorQualidade(streams);
   }
 
-  ordenarStreamsPorQualidade(streams: Stream[]): Stream[] {
+  private ordenarStreamsPorQualidade(streams: Stream[]): Stream[] {
     const tierMap: Record<string, number> = {
       '2160p': 5000, '4k': 5000, 'uhd': 5000,
       '1080p': 4000, 'fullhd': 4000,
@@ -631,91 +584,5 @@ export class StreamFormatter {
       }
     }
     return 0;
-  }
-
-  private sanitizarNomeArquivo(nomeArquivo: string): string {
-    return nomeArquivo
-      .replace(/[<>:"/\\|?*]/g, '_')
-      .substring(0, 255);
-  }
-
-  // Método público principal (compatível com chamadas antigas)
-  async createMultipleQualityStreams(
-    torrent: any,
-    request: StreamRequest,
-    directLink: string | null,
-    type: 'movie' | 'series',
-    season?: number,
-    episode?: number,
-    isAvailableOnRD: boolean = false,
-    fileIdx?: number,
-    titles?: string[],
-    imdbId?: string
-  ): Promise<Stream[]> {
-    return await this.criarStreamsMultiplasQualidades(
-      torrent,
-      request,
-      directLink,
-      type,
-      season,
-      episode,
-      isAvailableOnRD,
-      fileIdx,
-      titles,
-      imdbId ?? request.imdbId ?? this.extrairImdbIdDoRequest(request)
-    );
-  }
-
-  async createSeriesStream(
-    torrent: any,
-    request: StreamRequest,
-    directLink: string | null,
-    season: number,
-    episode: number,
-    isAvailableOnRD: boolean = false,
-    fileIdx?: number
-  ): Promise<Stream> {
-    return await this.criarStreamSerie(
-      torrent,
-      request,
-      directLink,
-      season,
-      episode,
-      isAvailableOnRD,
-      fileIdx
-    );
-  }
-
-  async createMovieStream(
-    torrent: any,
-    request: StreamRequest,
-    directLink: string | null,
-    isAvailableOnRD: boolean = false,
-    fileIdx?: number
-  ): Promise<Stream> {
-    return await this.criarStreamFilme(
-      torrent,
-      request,
-      directLink,
-      isAvailableOnRD,
-      fileIdx
-    );
-  }
-
-  sortStreamsByQuality(streams: Stream[]): Stream[] {
-    return this.ordenarStreamsPorQualidade(streams);
-  }
-
-  getStats() {
-    return {
-      versao: '2.2.0',
-      feature: 'Título do stream inclui htmlTitle para clareza de range/episódio',
-      linha1: 'Titulo completo do torrent + (htmlTitle)',
-      linha2: '🔗 seeds 💾 tamanho ⚙️ tracker',
-      linha3: '🌐 idioma + metadados',
-      name: 'Brasil RD\\n{qualidade}',
-      emojis_originais: '🔗 💾 ⚙️ 🌐 ⏳ 🚀',
-      compatibilidade: 'Stremio Web/Desktop/Mobile/TV 100%'
-    };
   }
 }

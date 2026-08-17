@@ -74,9 +74,7 @@ async function initializeDatabase() {
     }
 }
 
-// ── Cache + ETag middleware ──
-// Estratégia: Cache-Control de 5min (reduzido de 10min) + ETag para 304
-// Rotas específicas (manifest, resolve) definem seus próprios headers antes
+// Cache + ETag middleware
 const cacheMaxAge = 300;
 app.use((req: any, res: any, next: any) => {
     if (cacheMaxAge && !res.getHeader('Cache-Control')) {
@@ -92,11 +90,9 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-// ETag: calcula hash do body, retorna 304 se If-None-Match bater
-// Exclui /resolve (já tem no-store, é streaming/redirect)
 app.use(etagMiddleware({
     excludePaths: ['/resolve'],
-    defaultMaxAge: 300, // 5 min default
+    defaultMaxAge: 300,
 }));
 
 // Configure
@@ -159,6 +155,32 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
     const decodedId = decodeURIComponent(id);
     const requestId = req._ultraDebugId || 'no-id';
 
+    // Dados TMDB para log (título original, ano, etc.)
+    let tmdbInfo: any = null;
+    const imdbMatch = decodedId.match(/^(tt\d+)/);
+    const imdbId = imdbMatch ? imdbMatch[1] : null;
+    if (imdbId) {
+        try {
+            const { StreamHandler } = await import('./stream/StreamHandler.js');
+            const streamHandler = StreamHandler.getInstance();
+            const seasonMatch = decodedId.match(/^tt\d+:(\d+):(\d+)/);
+            const season = seasonMatch ? parseInt(seasonMatch[1]) : undefined;
+            const tmdb = await streamHandler.catalog.getTmdbSearchData(imdbId, season);
+            tmdbInfo = {
+                imdbId,
+                searchTitle: tmdb.searchTitle,
+                originalTitle: tmdb.imdbTitles?.originalTitle,
+                portugueseTitle: tmdb.imdbTitles?.portugueseTitle,
+                year: tmdb.imdbTitles?.year,
+                mediaType: tmdb.imdbTitles?.mediaType,
+                allTitles: tmdb.imdbTitles?.allTitles,
+                seasonYear: tmdb.seasonYear,
+            };
+        } catch (error) {
+            tmdbInfo = { error: 'Falha ao obter dados TMDB' };
+        }
+    }
+
     ultraLogger.info('═══════════════════════════════════════', {});
     ultraLogger.info(' STREAM SOLICITADO (Torbox route)', {
         requestId,
@@ -171,6 +193,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 100),
         clientInfo: (req as any)._clientInfo,
+        tmdb: tmdbInfo,
     });
 
     res.setHeader('Access-Control-Allow-Origin', '*');
@@ -190,7 +213,7 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
         const { StreamHandler } = await import('./stream/StreamHandler.js');
         const streamHandler = StreamHandler.getInstance();
 
-        // Define URL base a partir do host da requisicao (para URLs absolutas nos videos)
+        // Define URL base a partir do host da requisicao
         const protocol = req.get('x-forwarded-proto') || 'https';
         const host = req.get('host');
         if (host) {
@@ -324,7 +347,6 @@ async function startServer() {
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
 
-        // Inicia o serviço de re-scraping periódico (CAMRip → releases melhores)
         RescrapeService.getInstance().start();
     } catch (error) {
         logger.error('Falha na inicializacao do servidor', {
