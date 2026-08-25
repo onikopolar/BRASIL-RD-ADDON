@@ -82,6 +82,8 @@ export async function gerarUrlResolve(
   if (titles && titles.length > 0) {
     parametros.append('titles', titles.join(','));
   }
+  // Inclui o magnet completo na URL
+  parametros.append('magnet', magnet);
 
   const consulta = parametros.toString();
   if (consulta) url += `?${consulta}`;

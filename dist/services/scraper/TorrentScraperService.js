@@ -8,12 +8,11 @@ const wordpressScraper_js_1 = require("./wordpressScraper.js");
 const bludvScraper_js_1 = require("./bludvScraper.js");
 const starckScraper_js_1 = require("./starckScraper.js");
 const hdrScraper_js_1 = require("./hdrScraper.js");
-const episodeMatcher_js_1 = require("../../titulos/episodeMatcher.js");
+const TechnicalWords_js_1 = require("../../titulos/TechnicalWords.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
 class TorrentScraperService {
     constructor(tmdbScraper) {
-        this.episodeMatcher = episodeMatcher_js_1.EpisodeMatcher.getInstance();
-        this.version = '6.5.3';
+        this.version = '6.5.4';
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
         this.tmdbScraper = tmdbScraper || ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.wpScraper = new wordpressScraper_js_1.WordPressScraper();
@@ -27,36 +26,19 @@ class TorrentScraperService {
                 tmdbData = await this.getTmdbData(imdbId, targetSeason);
             }
             const searchQueries = this.generateSearchQueries(query, type, targetSeason, targetYear, tmdbData);
-            let qEn;
-            let qPt;
-            if (type === 'series' && targetSeason !== undefined) {
-                const seasonQueryEn = searchQueries.find(q => q.includes(`season ${targetSeason}`) ||
-                    q.includes(`${targetSeason} temporada`) ||
-                    q.includes(`${targetSeason}ª temporada`) ||
-                    q.includes(`temporada ${targetSeason}`));
-                const seasonQueryPt = searchQueries.find(q => q.includes(`${targetSeason} temporada`) ||
-                    q.includes(`${targetSeason}ª temporada`) ||
-                    q.includes(`temporada ${targetSeason}`) ||
-                    q.includes(`season ${targetSeason}`));
-                qEn = seasonQueryEn || searchQueries[0] || query;
-                qPt = seasonQueryPt || qEn;
-            }
-            else {
-                qEn = tmdbData?.originalTitle || searchQueries[0] || query;
-                qPt = tmdbData?.portugueseTitle || tmdbData?.portugueseTitleRaw || qEn;
-            }
-            const ptDiferente = qPt !== qEn;
             logger.debug(`🔍 Buscando torrents para: "${query}" | alvo S${targetSeason ?? '?'}E${'?'} | imdbId: ${imdbId ?? 'N/A'}`);
+            logger.debug(`🔍 Queries geradas: ${searchQueries.length}`, {
+                queries: searchQueries.slice(0, 10),
+                total: searchQueries.length,
+            });
             const [wpResults, starckResults, hdrResults] = await Promise.all([
                 Promise.all([
-                    this.bludvScraper.search(qEn, type, targetSeason).catch(() => []),
-                    this.bludvScraper.search(qPt, type, targetSeason).catch(() => []),
-                    this.wpScraper.search(qEn, type).catch(() => []),
-                    ptDiferente ? this.wpScraper.search(qPt, type).catch(() => []) : Promise.resolve([])
-                ]).then(([bludvEn, bludvPt, wpEn, wpPt]) => {
+                    this.bludvScraper.search(query, type, targetSeason, searchQueries).catch(() => []),
+                    this.wpScraper.search(query, type, targetSeason, searchQueries).catch(() => []),
+                ]).then(([bludvResultados, wpResultados]) => {
                     const seen = new Set();
-                    const combined = [...bludvEn, ...bludvPt, ...wpEn, ...wpPt];
-                    logger.debug(`📊 BLUDV: ${bludvEn.length + bludvPt.length} | WP: ${wpEn.length + wpPt.length} | total bruto: ${combined.length}`);
+                    const combined = [...bludvResultados, ...wpResultados];
+                    logger.debug(`📊 BLUDV: ${bludvResultados.length} | WP: ${wpResultados.length} | total bruto: ${combined.length}`);
                     if (combined.length > 0) {
                         const sample = combined.slice(0, 3);
                         for (const t of sample) {
@@ -70,32 +52,30 @@ class TorrentScraperService {
                         return true;
                     });
                 }).catch(() => []),
-                Promise.all([
-                    (0, starckScraper_js_1.searchStarck)(qEn, type),
-                    ptDiferente ? (0, starckScraper_js_1.searchStarck)(qPt, type) : Promise.resolve([])
-                ]).then(([en, pt]) => {
+                (0, starckScraper_js_1.searchStarck)(query, type, targetSeason, searchQueries)
+                    .then(results => {
                     const seen = new Set();
-                    const combined = [...en, ...pt];
+                    const combined = results;
                     logger.debug(`📊 Starck: ${combined.length} resultados brutos`);
                     return combined
                         .filter(t => { if (seen.has(t.infoHash))
                         return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapStarckResult(r, type))
                         .filter((r) => r !== null);
-                }).catch(() => []),
-                Promise.all([
-                    (0, hdrScraper_js_1.searchHdr)(qEn, type, targetSeason),
-                    ptDiferente ? (0, hdrScraper_js_1.searchHdr)(qPt, type, targetSeason) : Promise.resolve([])
-                ]).then(([en, pt]) => {
+                })
+                    .catch(() => []),
+                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries)
+                    .then(results => {
                     const seen = new Set();
-                    const combined = [...en, ...pt];
+                    const combined = results;
                     logger.debug(`📊 HDR: ${combined.length} resultados brutos`);
                     return combined
                         .filter(t => { if (seen.has(t.infoHash))
                         return false; seen.add(t.infoHash); return true; })
                         .map(r => this.mapHdrResult(r, type))
                         .filter((r) => r !== null);
-                }).catch(() => [])
+                })
+                    .catch(() => []),
             ]);
             const allResults = [...wpResults, ...starckResults, ...hdrResults];
             logger.debug(`📊 Total consolidado: ${allResults.length} torrents (WP+BLUDV: ${wpResults.length}, Starck: ${starckResults.length}, HDR: ${hdrResults.length})`);
@@ -107,7 +87,7 @@ class TorrentScraperService {
                 logger.warn('Coleta de torrents lenta', {
                     tempo: `${duration}ms`,
                     resultados: allResults.length,
-                    queries: searchQueries.length
+                    queries: searchQueries.length,
                 });
             }
             return allResults;
@@ -115,7 +95,7 @@ class TorrentScraperService {
         catch (error) {
             logger.error('Erro na coleta de torrents', {
                 erro: error instanceof Error ? error.message : 'Erro desconhecido',
-                tempo: `${Date.now() - startTime}ms`
+                tempo: `${Date.now() - startTime}ms`,
             });
             return [];
         }
@@ -130,6 +110,34 @@ class TorrentScraperService {
     }
     generateSearchQueries(query, type, targetSeason, targetYear, tmdbData) {
         const queries = [];
+        if (type === 'series' && targetSeason !== undefined && tmdbData?.allTitles?.length > 0) {
+            const titulosUnicos = [];
+            for (const titulo of tmdbData.allTitles) {
+                if (titulo && !titulosUnicos.some(t => t.toLowerCase() === titulo.toLowerCase())) {
+                    titulosUnicos.push(titulo);
+                }
+            }
+            if (titulosUnicos.length < 2) {
+                for (const titulo of [tmdbData.portugueseTitle, tmdbData.portugueseTitleRaw]) {
+                    if (titulo && !titulosUnicos.some(t => t.toLowerCase() === titulo.toLowerCase())) {
+                        titulosUnicos.push(titulo);
+                        if (titulosUnicos.length >= 2)
+                            break;
+                    }
+                }
+            }
+            if (titulosUnicos.length === 0) {
+                titulosUnicos.push(query);
+            }
+            const titulosSelecionados = titulosUnicos.slice(0, 2);
+            for (const titulo of titulosSelecionados) {
+                queries.push(`${titulo} ${targetSeason}ª temporada`);
+            }
+            if (queries.length === 0) {
+                queries.push(`${query} ${targetSeason}ª temporada`);
+            }
+            return queries;
+        }
         if (tmdbData?.allTitles?.length > 0) {
             const yearToUse = targetYear || tmdbData.year;
             const allTitles = [...tmdbData.allTitles];
@@ -139,41 +147,19 @@ class TorrentScraperService {
             if (tmdbData.portugueseTitleRaw && !allTitles.includes(tmdbData.portugueseTitleRaw)) {
                 allTitles.push(tmdbData.portugueseTitleRaw);
             }
-            const titlesReverse = [...allTitles].reverse();
-            const pularTitulosGenericos = (type === 'series' && targetSeason !== undefined);
-            for (const title of titlesReverse) {
-                if (pularTitulosGenericos) {
-                    queries.push(`${title} ${targetSeason}ª temporada`);
-                    queries.push(`${title} ${targetSeason} temporada`);
-                    queries.push(`${title} temporada ${targetSeason}`);
-                    queries.push(`${title} season ${targetSeason}`);
-                    if (yearToUse) {
-                        queries.push(`${title} ${targetSeason}ª temporada ${yearToUse}`);
-                        queries.push(`${title} ${targetSeason} temporada ${yearToUse}`);
-                        queries.push(`${title} temporada ${targetSeason} ${yearToUse}`);
-                    }
-                }
-                else {
-                    queries.push(title);
-                    if (yearToUse)
-                        queries.push(`${title} ${yearToUse}`);
-                    if (type === 'series' && targetSeason !== undefined) {
-                        queries.push(`${title} ${targetSeason}ª temporada`);
-                        queries.push(`${title} ${targetSeason} temporada`);
-                        queries.push(`${title} temporada ${targetSeason}`);
-                        queries.push(`${title} season ${targetSeason}`);
-                    }
-                }
-                const trimmed = title.replace(/^\d+\s*/, '');
-                if (trimmed !== title && trimmed.trim().length > 3) {
-                    queries.push(trimmed);
+            const titulosUnicos = [...new Set(allTitles)];
+            for (const title of titulosUnicos.slice(0, 2)) {
+                queries.push(title);
+                if (yearToUse) {
+                    queries.push(`${title} ${yearToUse}`);
                 }
             }
         }
         if (queries.length === 0) {
             queries.push(query);
-            if (targetYear)
+            if (targetYear) {
                 queries.push(`${query} ${targetYear}`);
+            }
         }
         return [...new Set(queries.filter(q => q && q.trim().length > 3))];
     }
@@ -185,7 +171,9 @@ class TorrentScraperService {
             return dnMatch ? decodeURIComponent(dnMatch[1]).replace(/\+/g, ' ') : r.title;
         })();
         const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
-        const season = this.episodeMatcher.extractSeasonFromTitle(magnetName);
+        const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(magnetName);
+        const season = r.season ?? range?.season ?? undefined;
+        const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
         const finalTitle = r.canonicalName || r.title || magnetName;
         return {
@@ -201,7 +189,7 @@ class TorrentScraperService {
             relevanceScore: 0,
             sizeInBytes: this.calculateSizeInBytes(r.size),
             season: season ?? undefined,
-            episode: undefined,
+            episode: episode ?? undefined,
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
@@ -222,7 +210,9 @@ class TorrentScraperService {
             if (hintQuality !== 'HD')
                 quality = hintQuality;
         }
-        const season = this.episodeMatcher.extractSeasonFromTitle(displayName);
+        const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(displayName);
+        const season = r.season ?? range?.season ?? undefined;
+        const episode = range && range.episodeStart > 0 ? range.episodeStart : undefined;
         return {
             title: r.canonicalName || r.originalTitle || displayName || 'Starck Torrent',
             magnet: r.magnet,
@@ -236,7 +226,7 @@ class TorrentScraperService {
             relevanceScore: 0,
             sizeInBytes: 0,
             season: season ?? undefined,
-            episode: undefined,
+            episode,
             lastUpdated: new Date(),
             confidence: 0.70,
             originalTitle: r.originalTitle,
@@ -269,7 +259,7 @@ class TorrentScraperService {
     getStats() {
         return {
             versao: this.version,
-            provedoresAtivos: 3
+            provedoresAtivos: 3,
         };
     }
 }

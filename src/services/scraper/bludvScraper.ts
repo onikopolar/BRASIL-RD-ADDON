@@ -1,11 +1,3 @@
-// Scraper dedicado do BLUDV — HTML scraping direto (sem WordPress API)
-// Extrai magnets, Áudio:, Qualidade:, Tamanho: e episódios do conteúdo do post
-// Suporta protetor de links systemads1.com/videosad.net E magnets diretos (fallback)
-// canonicalName extraído via magnetHelper (analisarMagnet)
-// Qualidade extraída do texto do link (linkText) com prioridade sobre o contexto amplo,
-// e do dn do magnet como fonte máxima.
-// COM OTIMIZAÇÕES DE PARALELISMO (Promise.all com batch)
-
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import dns from 'dns';
@@ -16,7 +8,7 @@ import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { allowedQualities } from './scraperConfigs.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto } from '../../titulos/TechnicalWords.js';
 
 const logger = new Logger('BludvScraper');
 
@@ -47,7 +39,7 @@ const lookupCustomizado = (hostname: string, _opts: any, cb: any) => {
   });
 };
 
-const BASE_URL = 'https://bludvfilmes.xyz';
+const BASE_URL = 'https://bludvfilmes1.xyz';
 const PROVIDER = 'BLUDV Filmes';
 const AXIOS_OPTS = {
   timeout: 15000,
@@ -71,19 +63,47 @@ export class BludvScraper {
   async search(
     query: string,
     type: 'movie' | 'series',
-    targetSeason?: number
+    targetSeason?: number,
+    searchQueries?: string[]
   ): Promise<TorrentResult[]> {
     try {
-      const postItems = await this.searchPosts(query, targetSeason);
-      if (!postItems.length) return [];
+      // Usa diretamente a lista de queries fornecida pelo serviço principal.
+      // Se não houver, usa a query original.
+      const queriesParaBusca = searchQueries && searchQueries.length > 0
+        ? searchQueries
+        : [query];
+
+      const allPosts: { title: string; url: string }[] = [];
+      const seenUrls = new Set<string>();
+
+      for (const q of queriesParaBusca) {
+        logger.debug(`BLUDV: tentando busca com query "${q}"`);
+        const posts = await this.searchPosts(q, targetSeason, searchQueries);
+
+        // Adiciona apenas posts ainda não coletados
+        for (const post of posts) {
+          if (!seenUrls.has(post.url)) {
+            seenUrls.add(post.url);
+            allPosts.push(post);
+          }
+        }
+
+        // Se já encontrou posts, para de tentar outras queries
+        if (allPosts.length > 0) {
+          logger.debug(`BLUDV: query "${q}" retornou ${posts.length} posts. Encerrando busca.`);
+          break;
+        }
+      }
+
+      if (!allPosts.length) return [];
 
       logger.info(
-        `BLUDV HTML: ${postItems.length} posts filtrados para "${query}"${targetSeason !== undefined ? ` (temporada ${targetSeason})` : ''
-        }`
+        `BLUDV HTML: ${allPosts.length} posts filtrados (usando ${queriesParaBusca.length} queries)` +
+        (targetSeason !== undefined ? ` (temporada ${targetSeason})` : '')
       );
 
       const postResults = await Promise.all(
-        postItems.map(item =>
+        allPosts.map(item =>
           this.scrapePost(item.url, type, targetSeason).catch(() => [] as TorrentResult[])
         )
       );
@@ -96,7 +116,8 @@ export class BludvScraper {
 
   private async searchPosts(
     query: string,
-    targetSeason?: number
+    targetSeason?: number,
+    searchQueries?: string[]
   ): Promise<{ title: string; url: string }[]> {
     const encoded = encodeURIComponent(query);
     const searchUrl = `${BASE_URL}/?s=${encoded}`;
@@ -108,9 +129,9 @@ export class BludvScraper {
     $('a[href]').each((_, el) => {
       const href = ($(el).attr('href') || '').trim();
       const text = ($(el).text() || '').trim();
-      if (!href.includes('bludvfilmes.xyz')) return;
+      if (!href.includes('bludvfilmes')) return;
 
-      const path = href.replace(/^https?:\/\/bludvfilmes\.xyz/, '').replace(/\/$/, '');
+      const path = new URL(href).pathname;
       const segments = path.split('/').filter(Boolean);
 
       if (segments.length === 1 && segments[0].length > 20 && segments[0].includes('-')) {
@@ -122,16 +143,31 @@ export class BludvScraper {
     });
 
     if (targetSeason !== undefined) {
+      // Monta todas as frases possíveis a partir das queries oficiais
+      const allQueries = new Set<string>([query, ...(searchQueries || [])]);
+      const frases = new Set<string>();
+
+      for (const q of allQueries) {
+        const phrase = normalizarTexto(
+          q
+            .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+            .replace(/\btemporada\s*\d+\b/gi, '')
+            .replace(/\bseason\s*\d+\b/gi, '')
+            .replace(/\b\d{4}\b/g, '')
+        );
+        if (phrase) frases.add(phrase);
+      }
+
+      logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
+
       const filtered = items.filter(item => {
         const range = extrairRangeEpisodios(item.title);
         if (range && range.season !== targetSeason) return false;
-        const queryWords = query.toLowerCase().split(/\s+/).filter(w => w.length > 2);
-        if (queryWords.length > 0) {
-          const titleLower = item.title.toLowerCase();
-          return queryWords.some(word => titleLower.includes(word));
-        }
-        return true;
+
+        const titleNormalizado = normalizarTexto(item.title);
+        return [...frases].some(frase => titleNormalizado.includes(frase));
       });
+
       return filtered.slice(0, 5);
     }
 
@@ -184,7 +220,6 @@ export class BludvScraper {
 
     let quality = qualityOverride || null;
     if (!quality) {
-      // Prioriza a qualidade do texto do link, depois do contexto
       quality = this.extractQualityFromText(linkText) || this.extractQualityFromText(contextText);
     }
 
@@ -217,10 +252,8 @@ export class BludvScraper {
 
     const metadata = this.extractPostMetadata($, contentHtml);
 
-    // Tenta obter links de protetor primeiro
     const dualLinks = this.extractDualSectionProtectorLinks($, contentHtml);
 
-    // Estrutura unificada: { magnet, link: { linkText, parentText, fullContextText } }
     type LinkContext = {
       linkText: string;
       parentText: string;
@@ -229,7 +262,6 @@ export class BludvScraper {
     let allMagnets: { magnet: string; link: LinkContext }[] = [];
 
     if (dualLinks.length > 0) {
-      // Processa protetores normalmente
       for (let i = 0; i < dualLinks.length; i += this.BATCH_SIZE) {
         const batch = dualLinks.slice(i, i + this.BATCH_SIZE);
         const batchPromises = batch.map(async (link) => {
@@ -244,7 +276,6 @@ export class BludvScraper {
         }
       }
     } else {
-      // Fallback: coleta magnets diretos do HTML
       const directLinks = this.extractDirectMagnets($, contentHtml);
       allMagnets = directLinks.map((item: {
         magnet: string;
@@ -277,7 +308,6 @@ export class BludvScraper {
     const results: TorrentResult[] = [];
 
     for (const { magnet, link, canonicalName } of analyzedMagnets) {
-      // ═══ PRIORIDADE DA QUALIDADE: dn → linkText → contexto amplo → post ═══
       const dnQuality = canonicalName ? this.extractQualityFromText(canonicalName) : null;
       const linkQuality = this.extractQualityFromText(link.linkText);
       const contextQuality = this.extractQualityFromText(link.fullContextText);
@@ -290,13 +320,11 @@ export class BludvScraper {
         }
       }
 
-      // Extrai número do episódio (se houver)
       let episode: number | undefined;
       const contextForEpisode = link.fullContextText || link.linkText;
       const epMatch = contextForEpisode.match(/EPISÓDIO\s*(\d+)/i);
       if (epMatch) episode = parseInt(epMatch[1], 10);
 
-      // Constrói título
       let title: string;
       if (canonicalName) {
         title = canonicalName;
@@ -315,7 +343,6 @@ export class BludvScraper {
       const size = metadata.size || 'Desconhecido';
       const language = metadata.language || 'Desconhecido';
 
-      // htmlTitle: episódio + qualidade (do link, depois contexto)
       const cleanedHtmlTitle = this.cleanHtmlTitle(
         link.fullContextText || link.linkText,
         link.linkText,

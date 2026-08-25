@@ -47,7 +47,6 @@ export class TorboxService {
   /** Cache of target titles for each infoHash (e.g., ["Kung Fu Hustle", "Kung-Fusao"]) */
   private titleCache = new Map<string, string[]>();
 
-  // Singleton global – garante que a mesma instância seja usada em todo o addon
   public static getInstance(baseUrl?: string): TorboxService {
     if (!TorboxService.instance) {
       TorboxService.instance = new TorboxService(baseUrl);
@@ -70,7 +69,10 @@ export class TorboxService {
   public setTitlesForHash(infoHash: string, titles: string[]): void {
     if (infoHash && titles.length > 0) {
       this.titleCache.set(infoHash.toLowerCase(), titles);
-      console.log(`[DEBUG-TORBOX] setTitlesForHash: ${infoHash.toLowerCase()} -> ${JSON.stringify(titles)}`);
+      this.logger.debug('Títulos registrados para seleção de arquivo', {
+        infoHash: infoHash.toLowerCase(),
+        titles,
+      });
     }
   }
 
@@ -119,9 +121,19 @@ export class TorboxService {
     this.validateMagnetLink(magnetLink);
     const client = this.createHttpClient(apiKey);
 
+    // Utiliza o magnetHelper para extrair hash e nome canônico (dn)
+    const dadosMagnet = await analisarMagnet(magnetLink);
+    const hash = dadosMagnet?.infoHash?.toLowerCase() || 'unknown';
+    const nome = dadosMagnet?.nome || this.titleCache.get(hash)?.[0] || '';
+
     try {
       const body = new URLSearchParams();
       body.append('magnet', magnetLink);
+
+      // Envia nome para evitar "Unknown Torrent Name" no Torbox
+      if (nome) {
+        body.append('name', nome);
+      }
 
       const response = await this.retryableRequest<TorboxCreateTorrentResponse>(
         () => client.post('/torrents/createtorrent', body.toString(), {
@@ -137,34 +149,42 @@ export class TorboxService {
         || response.data?.data?.queued_id;
 
       if (torrentId) {
-        const hash = await this.extrairMagnetHash(magnetLink);
-        if (hash) TorboxService.queuedTorrentCache.set(hash.toLowerCase(), String(torrentId));
+        if (hash !== 'unknown') {
+          TorboxService.queuedTorrentCache.set(hash, String(torrentId));
+        }
+
         this.logger.info('Magnet adicionado ao Torbox', {
           torrentId,
           magnetHash: hash,
+          nomeMagnet: nome?.substring(0, 80) || 'N/A',
           campoEncontrado: response.data?.torrent_id ? 'torrent_id' :
             response.data?.id ? 'id' :
             response.data?.data?.torrent_id ? 'data.torrent_id' :
             response.data?.data?.id ? 'data.id' : 'data.queued_id'
         });
+
         return String(torrentId);
       }
 
       throw new Error('Formato de resposta inválido do createtorrent: ' + JSON.stringify(response.data));
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
+
       const msg = error instanceof Error ? error.message : '';
       if (/already queued/i.test(msg)) {
-        const hash = await this.extrairMagnetHash(magnetLink);
-        const cachedId = hash ? TorboxService.queuedTorrentCache.get(hash.toLowerCase()) : undefined;
+        const cachedId = hash !== 'unknown' ? TorboxService.queuedTorrentCache.get(hash) : undefined;
         if (cachedId) {
-          this.logger.info('Magnet já na fila, usando ID cacheado', { torrentId: cachedId, magnetHash: hash?.substring(0, 16) });
+          this.logger.info('Magnet já na fila, usando ID cacheado', {
+            torrentId: cachedId,
+            magnetHash: hash?.substring(0, 16),
+          });
           return cachedId;
         }
       }
+
       this.logger.error('Falha ao adicionar magnet ao Torbox', {
         error: msg || 'Erro',
-        magnetHash: await this.extrairMagnetHash(magnetLink)
+        magnetHash: hash,
       });
       throw error;
     }
@@ -278,20 +298,17 @@ export class TorboxService {
       const files = info.files || [];
       const minSize = (targetSeason !== undefined) ? 5 * 1024 * 1024 : 10 * 1024 * 1024;
 
-      // Filtra apenas arquivos de vídeo com tamanho mínimo
       let candidateFiles = files.filter(f =>
         this.videoExtensions.some(ext => f.name.toLowerCase().endsWith(ext)) &&
         f.size >= minSize
       );
 
-      // Se episódio alvo foi informado, filtra estritamente pelos arquivos que pertencem a ele
       if (targetSeason !== undefined && targetEpisode !== undefined) {
         const episodeFiles = candidateFiles.filter(f =>
           this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode)
         );
 
         if (episodeFiles.length === 0) {
-          // Nenhum arquivo corresponde ao episódio solicitado – o torrent não serve
           throw new StreamStatusException(
             StaticResponse.FAILED_UNEXPECTED,
             info.download_state,
@@ -300,37 +317,35 @@ export class TorboxService {
           );
         }
 
-        candidateFiles = episodeFiles; // Trabalha apenas com os que batem
+        candidateFiles = episodeFiles;
       }
 
-      // Recupera títulos do cache interno se não foram passados
       if (!targetTitles || targetTitles.length === 0) {
         const hash = info.hash?.toLowerCase();
         if (hash && this.titleCache.has(hash)) {
           targetTitles = this.titleCache.get(hash);
-          console.log(`[DEBUG-TORBOX] getStreamLinkForTorrent: títulos recuperados do cache para ${hash}: ${JSON.stringify(targetTitles)}`);
-        } else {
-          console.log(`[DEBUG-TORBOX] getStreamLinkForTorrent: cache vazio ou hash não encontrado para ${hash}`);
+          this.logger.debug('Títulos recuperados do cache para seleção de arquivo', {
+            hash,
+            titles: targetTitles,
+          });
         }
       }
 
       let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
-      console.log(`[DEBUG-TORBOX] 📁 Iniciando seleção entre ${candidateFiles.length} vídeos (episódio ${targetSeason}x${targetEpisode})...`);
+      this.logger.debug(`Iniciando seleção entre ${candidateFiles.length} vídeos (episódio ${targetSeason}x${targetEpisode})`);
 
       for (const f of candidateFiles) {
         let score = 0;
         let titleScore = 0;
         let qualityScore = 0;
 
-        // 1. Correspondência de título (peso moderado)
         if (targetTitles && targetTitles.length > 0) {
           titleScore = this.calculateTitleMatchScore(f.name, targetTitles);
           score += titleScore * 50_000_000_000;
         }
 
-        // 2. QUALIDADE (prioridade máxima)
         if (targetQuality) {
           const fileQuality = this.extractQualityFromFilename(f.name);
           if (fileQuality) {
@@ -346,10 +361,8 @@ export class TorboxService {
               if (targetRank !== -1 && fileRank !== -1) {
                 const diff = Math.abs(targetRank - fileRank);
                 if (fileRank < targetRank) {
-                  // Qualidade superior (ex: 2160p quando pediu 1080p)
                   qualityScore = 80_000_000_000 - diff * 10_000_000_000;
                 } else {
-                  // Qualidade inferior
                   qualityScore = Math.max(0, 30_000_000_000 - diff * 15_000_000_000);
                 }
               }
@@ -360,20 +373,15 @@ export class TorboxService {
           score += qualityScore;
         }
 
-        // 3. Tamanho (desempate)
         score += f.size;
-
-        console.log(`[DEBUG-TORBOX]   - ${f.name}`);
-        console.log(`[DEBUG-TORBOX]     titleScore=${titleScore}, qualityScore=${qualityScore}, size=${f.size}, TOTAL=${score}`);
 
         if (score > bestScore) {
           bestScore = score;
           bestFile = f;
-          console.log(`[DEBUG-TORBOX]     -> NOVO MELHOR (score=${score})`);
         }
       }
 
-      console.log(`[DEBUG-TORBOX] 🏆 Escolhido: ${bestFile?.name} (score final: ${bestScore})`);
+      this.logger.debug(`Arquivo escolhido: ${bestFile?.name} (score: ${bestScore})`);
 
       if (!bestFile) {
         throw new StreamStatusException(StaticResponse.FAILED_RAR, info.download_state, 100, 'Nenhum arquivo de vídeo encontrado');
@@ -438,11 +446,25 @@ export class TorboxService {
   async processTorrent(magnetLink: string, apiKey: string) {
     const hash = await this.extrairMagnetHash(magnetLink);
     try {
+      // Se já temos um ID cacheado, tenta usá-lo antes de adicionar novamente
+      const cachedId = hash !== 'unknown' ? TorboxService.queuedTorrentCache.get(hash.toLowerCase()) : undefined;
+      if (cachedId) {
+        try {
+          const info = await this.getTorrentInfo(cachedId, apiKey);
+          const ready = this.isReadyStatus(info.download_state);
+          this.logger.info('Usando torrent cacheado', { torrentId: cachedId, status: info.download_state });
+          return { added: true, ready, status: info.download_state, torrentId: cachedId, progress: Math.round(info.progress * 100) };
+        } catch (err) {
+          this.logger.warn('Falha ao obter info do cache, tentando adicionar novamente', { torrentId: cachedId, error: (err as Error).message });
+        }
+      }
+
       const existing = await this.findExistingTorrent(hash, apiKey);
       if (existing) {
         const ready = this.isReadyStatus(existing.download_state);
         return { added: true, ready, status: existing.download_state, torrentId: String(existing.id), progress: Math.round(existing.progress * 100) };
       }
+
       const id = await this.addMagnet(magnetLink, apiKey);
       try {
         const info = await this.getTorrentInfo(id, apiKey);
@@ -474,7 +496,6 @@ export class TorboxService {
     const fileWords = normalize(fileName).split(' ');
     let maxScore = 0;
 
-    console.log(`[DEBUG-TORBOX] calculateTitleMatchScore para arquivo "${fileName}"`);
     for (const title of targetTitles) {
       const normalizedTitle = normalize(title);
       const titleWords = normalizedTitle.split(' ').filter(w => w.length > 2);
@@ -482,13 +503,10 @@ export class TorboxService {
       for (const tw of titleWords) {
         if (fileWords.some(fw => fw.includes(tw))) {
           score++;
-          console.log(`[DEBUG-TORBOX]   palavra "${tw}" encontrada no arquivo`);
         }
       }
-      console.log(`[DEBUG-TORBOX]   score contra título "${title}" -> ${score}`);
       if (score > maxScore) maxScore = score;
     }
-    console.log(`[DEBUG-TORBOX]   maxScore final: ${maxScore}`);
     return maxScore;
   }
 

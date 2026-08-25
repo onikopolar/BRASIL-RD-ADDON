@@ -77,11 +77,25 @@ export class TitleFilter {
       const metadados = this.extrairMetadados(tituloTorrent);
       const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
-      // ── 1. EXTRAI RANGE DE EPISÓDIOS (o mais cedo possível) ──
-      const tituloParaRange = htmlTitle || tituloParaIdioma || tituloTorrent;
-      let range = extrairRangeEpisodios(tituloParaRange);
-      if (!range && tituloTorrent !== tituloParaRange) {
-        range = extrairRangeEpisodios(tituloTorrent);
+      // ── 1.5 VALIDAÇÃO DE ANO (evita aceitar filmes com anos muito diferentes) ──
+      if (anoTorrent !== undefined && imdbTitles?.year !== undefined && anoTorrent !== imdbTitles.year) {
+        return {
+          matches: false,
+          similarity: 0,
+          torrentMetadata: metadados,
+          reason: `Ano divergente: ${anoTorrent} vs ${imdbTitles.year}`
+        };
+      }
+
+      // ── 1. EXTRAI RANGE DE EPISÓDIOS (prioridade: título principal > htmlTitle > título alternativo) ──
+      const tituloParaRange = tituloTorrent || htmlTitle || tituloParaIdioma;
+      let range = tituloParaRange ? extrairRangeEpisodios(tituloParaRange) : null;
+
+      if (!range && htmlTitle) {
+        range = extrairRangeEpisodios(htmlTitle);
+      }
+      if (!range && tituloParaIdioma) {
+        range = extrairRangeEpisodios(tituloParaIdioma);
       }
 
       // ── 2. VALIDAÇÃO DE EPISÓDIO (agora com suporte a range) ──

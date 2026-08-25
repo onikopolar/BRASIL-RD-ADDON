@@ -167,7 +167,6 @@ export const configureTemplate = (manifest: any) => {
         </div>
         
         <script>
-            console.log('[Brasil RD] Configuração v2.2.0 - Sistema Torrentio-style');
             
             const apiKeyInput = document.getElementById('${manifest.config[0].key}');
             const installLink = document.getElementById('installLink');

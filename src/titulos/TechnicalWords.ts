@@ -91,6 +91,16 @@ export function isTechnicalWord(word: string): boolean {
   return _ALL_NON_TITLE_WORDS.has(lower) || (typeof TECHNICAL_STRIP_WORDS !== 'undefined' && TECHNICAL_STRIP_WORDS.has(lower));
 }
 
+export function normalizarTexto(texto: string): string {
+  return texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export function isInternationalReleaseGroup(word: string): boolean {
   const lowerWord = word.toLowerCase();
   return INTERNATIONAL_RELEASE_GROUPS.includes(lowerWord);
@@ -132,9 +142,6 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
 const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
   'coletanea', 'franquia', 'duologia', 'saga',
-  'all seasons', 'todas as temporadas', 'temporada completa', 'complete season',
-  'season pack', 'complete series', 'serie completa',
-  'todos os episódios', 'todos os episodios', 'temporadas',
 ]);
 
 export function isCollectionTitle(title: string): boolean {
@@ -276,31 +283,21 @@ export interface EpisodeRange {
   episodeEnd: number;
 }
 
-/**
- * Extrai o range de episódios de um título de torrent.
- * 
- * Padrões suportados:
- *   S02E04              → season=2, start=4, end=4
- *   S02E01-02-03        → season=2, start=1, end=3
- *   S02E01-10           → season=2, start=1, end=10
- *   S02E01 E02 E03      → season=2, start=1, end=3
- *   2x04                → season=2, start=4, end=4
- *   Season 2 Episode 4  → season=2, start=4, end=4
- *   2ª Temporada Ep 4   → season=2, start=4, end=4
- *   "4ª Temporada Completa" → season=4, start=0, end=0 (pack completo)
- *   "Episódio 02: 1080p" → season=0, start=2, end=2
- *   "Episódio 03: 720p | 1080p" → season=0, start=3, end=3
- *   "Episódio 06 ao 10" → season=0, start=6, end=10
- *   "Episódio 01 a 05"  → season=0, start=1, end=5
- *   "Episódios 1-5"     → season=0, start=1, end=5
- * 
- * Retorna null apenas para títulos sem qualquer informação de temporada/episódio.
- */
 export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const t = title
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .trim();
+
+  // ═══ Padrão 0: SxxEyy-Ezz (range simples com hífen) ═══
+  const sxxExxRange = t.match(/s(\d{1,2})\s*e(\d{1,3})\s*-\s*(\d{1,3})\b/i);
+  if (sxxExxRange) {
+    return {
+      season: parseInt(sxxExxRange[1]),
+      episodeStart: parseInt(sxxExxRange[2]),
+      episodeEnd: parseInt(sxxExxRange[3]),
+    };
+  }
 
   // ═══ Padrão 1: SxxExx (S02E04, S02E01-02-03, S02E01-10) ═══
   const sxxExx = t.match(/s(\d{1,2})\s*e(\d{1,3})/i);
@@ -377,6 +374,23 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
       episodeStart: parseInt(episodioRangeHyphen[1]),
       episodeEnd: parseInt(episodioRangeHyphen[2]),
     };
+  }
+
+  // ═══ Padrão 4c: "01º E 02º EPISÓDIO" (range português com ordinal) ═══
+  const ptRangeComOrdinal = t.match(/(\d{1,3})\s*º\s*e\s*(\d{1,3})\s*º\s*epis[oó]dio/i);
+  if (ptRangeComOrdinal) {
+    return {
+      season: 0,
+      episodeStart: parseInt(ptRangeComOrdinal[1]),
+      episodeEnd: parseInt(ptRangeComOrdinal[2]),
+    };
+  }
+
+  // ═══ Padrão 5b: "01º EPISÓDIO" (episódio único com ordinal) ═══
+  const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
+  if (ptSingleComOrdinal) {
+    const ep = parseInt(ptSingleComOrdinal[1]);
+    return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
   // ═══ Padrão 5: "Episódio 02" (episódio único, sem temporada) ═══

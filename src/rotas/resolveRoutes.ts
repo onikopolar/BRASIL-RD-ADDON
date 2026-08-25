@@ -9,11 +9,11 @@ import { StreamHandler } from '../stream/StreamHandler.js';
 import { Torrent, ImdbTitleCache } from '../database/models.js';
 
 function sendStatusVideo(res: any, resolveLogger: Logger, requestId: string, videoUrl: string) {
-  const filename = videoUrl.split('/').pop() || 'downloading_v2.mp4';
-  resolveLogger.info('🎬 ENVIANDO vídeo de status DIRETO (redirect)', { requestId, filename });
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-  res.redirect(302, `/static/videos/${filename}`);
+    const filename = videoUrl.split('/').pop() || 'downloading_v2.mp4';
+    resolveLogger.info('🎬 ENVIANDO vídeo de status DIRETO (redirect)', { requestId, filename });
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.redirect(302, `/static/videos/${filename}`);
 }
 
 const logger = new Logger('ResolveRoutes');
@@ -25,10 +25,14 @@ const resolveLogger = new Logger('🔄RESOLVE');
 
 const emVoo = new Map<string, Promise<any>>();
 
-// Cache local de títulos por infoHash (evita consultas repetidas ao DB e TMDB)
+// Cache local de títulos por infoHash
 const titlesCache = new Map<string, string[]>();
 
-// TTL do cache em banco (7 dias) para atualizar títulos periodicamente
+// Cache de torrents em processamento (evita re-chamadas ao Torbox)
+const pendingTorrentCache = new Map<string, { timestamp: number; status: string; torrentId?: string }>();
+const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
+// TTL do cache em banco (7 dias)
 const DB_TITLE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function createStreamFromStaticResponse(
@@ -61,17 +65,11 @@ async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
     return dados ? dados.infoHash : null;
 }
 
-/**
- * Busca títulos enriquecidos (com ano) para um infoHash.
- * Agora aceita imdbId e season externos (vindos da URL) para busca direta,
- * sem depender da tabela Torrent.
- */
 async function getEnrichedTitlesForHash(
     infoHash: string,
     externalImdbId?: string,
     externalSeason?: number
 ): Promise<string[] | undefined> {
-    // Cache local (memória) – rápido, evita até consulta ao banco
     const cached = titlesCache.get(infoHash);
     if (cached !== undefined) {
         resolveLogger.info('💾 TÍTULOS DO CACHE LOCAL (memória)', { infoHash, titles: cached.join(', ') });
@@ -79,12 +77,10 @@ async function getEnrichedTitlesForHash(
     }
 
     try {
-        // Determina imdbId e season (prioridade: parâmetros externos > banco Torrent)
         let imdbId: string | undefined = externalImdbId;
         let season: number | undefined = externalSeason;
 
         if (!imdbId) {
-            // Tenta obter do banco Torrent
             const torrent = await Torrent.findOne({
                 where: { infoHash: infoHash.toLowerCase() },
                 attributes: ['imdbId', 'imdbSeason'],
@@ -95,7 +91,6 @@ async function getEnrichedTitlesForHash(
                 season = torrent.imdbSeason ?? undefined;
                 resolveLogger.info('📋 imdbId obtido do banco Torrent', { infoHash, imdbId, season });
             } else {
-                // Sem imdbId de qualquer fonte
                 titlesCache.set(infoHash, []);
                 return undefined;
             }
@@ -103,14 +98,12 @@ async function getEnrichedTitlesForHash(
             resolveLogger.info('🎯 imdbId recebido da URL de resolução', { infoHash, imdbId, season });
         }
 
-        // 2. Tenta carregar do cache em banco (ImdbTitleCache)
         const cachedTitle = await ImdbTitleCache.findOne({
             where: { imdbId, season: season ?? null },
             attributes: ['titlesPt', 'titlesEn', 'year', 'updatedAt'],
             raw: true
         });
 
-        // Se existir no banco e ainda não expirou (TTL), usa direto
         if (cachedTitle) {
             const ageMs = Date.now() - new Date(cachedTitle.updatedAt).getTime();
             if (ageMs < DB_TITLE_CACHE_TTL_MS) {
@@ -133,7 +126,6 @@ async function getEnrichedTitlesForHash(
             }
         }
 
-        // 3. Cache DB não existe ou expirou → busca da API TMDB
         const streamHandler = StreamHandler.getInstance();
         const tmdbData = await streamHandler.catalog.getTmdbSearchData(imdbId, season);
 
@@ -182,112 +174,100 @@ async function getEnrichedTitlesForHash(
     }
 }
 
-// Essa função NUNCA rejeita – sempre retorna um objeto com status
+// ── Processa magnet usando TorboxService.processTorrent (cache/existente/fila) ──
 async function processMagnetWithTorbox(
     magnet: string, apiKey: string, infoHash: string,
     season?: number, episode?: number, type: string = 'movie', quality?: string,
     titles?: string[]
 ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string; torrentId?: string }> {
     try {
-        const cached = await rdTorrentCacheService.getTorrentId(infoHash, apiKey, torboxService);
-        if (cached.torrentId) {
-            const details = await torboxService.getTorrentInfo(cached.torrentId, apiKey);
-            if (titles && titles.length > 0) {
-                const link = await torboxService.getStreamLinkForTorrent(
-                    cached.torrentId, apiKey, season, episode, quality, details, titles
-                );
-                return {
-                    success: true,
-                    status: details.download_state,
-                    streamLink: link || undefined,
-                    message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
-                    torrentId: cached.torrentId
-                };
-            }
-            const linkResult = await rdTorrentCacheService.getStreamLink(
-                cached.torrentId, apiKey, season, episode, torboxService, quality, details
-            );
+        const hashKey = infoHash.toLowerCase();
+
+        // 1. Cache de processamento recente (evita repetições)
+        const pending = pendingTorrentCache.get(hashKey);
+        if (pending && Date.now() - pending.timestamp < PENDING_TTL_MS) {
+            resolveLogger.info('⏳ Torrent em processamento recente (cache local)', {
+                infoHash: hashKey,
+                status: pending.status,
+                torrentId: pending.torrentId,
+            });
             return {
                 success: true,
-                status: details.download_state,
-                streamLink: linkResult.streamLink || undefined,
-                message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
-                torrentId: cached.torrentId
+                status: pending.status,
+                torrentId: pending.torrentId,
+                message: 'Torrent está em processamento',
             };
         }
-    } catch (err) {
-        // Fallback
-    }
 
-    try {
-        const existing = await torboxService.findExistingTorrent(infoHash, apiKey);
-        if (existing?.id) {
-            const tid = String(existing.id);
-            const details = await torboxService.getTorrentInfo(tid, apiKey);
-            let streamLink: string | undefined;
-            if (details.download_state === 'completed' || details.download_state === 'cached') {
-                if (titles && titles.length > 0) {
-                    const link = await torboxService.getStreamLinkForTorrent(
-                        tid, apiKey, season, episode, quality, details, titles
-                    );
-                    streamLink = link || undefined;
-                } else {
-                    const linkResult = await rdTorrentCacheService.getStreamLink(
-                        tid, apiKey, season, episode, torboxService, quality, details
-                    );
-                    streamLink = linkResult.streamLink || undefined;
-                }
-            }
-            return {
-                success: true,
-                status: details.download_state,
-                streamLink,
-                message: getStatusMessage(details.download_state, Math.round(details.progress * 100)),
-                torrentId: tid,
-            };
+        // Registra os títulos no TorboxService para fallback do nome do magnet
+        if (titles && titles.length > 0) {
+            torboxService.setTitlesForHash(infoHash, titles);
         }
-    } catch (err) {
-        // findExistingTorrent falhou
-    }
 
-    try {
-        const torrentId = await torboxService.addMagnet(magnet, apiKey);
-        try {
-            const torrentInfo = await torboxService.getTorrentInfo(torrentId, apiKey);
-            const ready = torrentInfo.download_state === 'completed' || torrentInfo.download_state === 'cached';
-            let streamLink: string | undefined;
-            if (ready) {
-                if (titles && titles.length > 0) {
-                    const link = await torboxService.getStreamLinkForTorrent(
-                        torrentId, apiKey, season, episode, quality, torrentInfo, titles
-                    );
-                    streamLink = link || undefined;
-                } else {
-                    const linkResult = await rdTorrentCacheService.getStreamLink(
-                        torrentId, apiKey, season, episode, torboxService, quality, torrentInfo
-                    );
-                    streamLink = linkResult.streamLink || undefined;
-                }
-            }
-            return {
-                success: true,
-                status: torrentInfo.download_state,
-                streamLink,
-                message: `Torrent adicionado: ${torrentInfo.download_state}`,
+        // 2. Usa o fluxo completo do TorboxService
+        const resultado = await torboxService.processTorrent(magnet, apiKey);
+
+        if (!resultado.added) {
+            return { success: false, status: 'error', message: 'Falha ao processar magnet' };
+        }
+
+        const torrentId = resultado.torrentId;
+        if (!torrentId) {
+            return { success: false, status: 'error', message: 'Falha ao processar magnet' };
+        }
+
+        const status = resultado.status;
+        const ready = resultado.ready;
+
+        if (!ready) {
+            pendingTorrentCache.set(hashKey, {
+                timestamp: Date.now(),
+                status,
                 torrentId,
-            };
-        } catch (infoErr) {
+            });
+
             return {
                 success: true,
-                status: 'downloading',
+                status,
+                torrentId,
                 message: 'Torrent na fila do Torbox, aguardando processamento',
             };
         }
+
+        // 3. Se pronto, obtém o stream link
+        const info = await torboxService.getTorrentInfo(torrentId, apiKey);
+        let streamLink: string | undefined;
+
+        if (titles && titles.length > 0) {
+            const link = await torboxService.getStreamLinkForTorrent(
+                torrentId, apiKey, season, episode, quality, info, titles
+            );
+            streamLink = link || undefined;
+        } else {
+            const linkResult = await rdTorrentCacheService.getStreamLink(
+                torrentId, apiKey, season, episode, torboxService, quality, info
+            );
+            streamLink = linkResult.streamLink || undefined;
+        }
+
+        return {
+            success: true,
+            status,
+            streamLink,
+            torrentId,
+            message: getStatusMessage(status, Math.round(info.progress * 100)),
+        };
     } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
+
         if (/already queued|already exists|already added/i.test(errorMessage)) {
+            pendingTorrentCache.set(infoHash.toLowerCase(), {
+                timestamp: Date.now(),
+                status: 'downloading',
+            });
             return { success: true, status: 'downloading', message: 'Torrent já está na fila do Torbox' };
         }
+
         return { success: false, status: 'error', message: errorMessage };
     }
 }
@@ -302,7 +282,8 @@ export const setupResolveRoutes = (app: any) => {
         const episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
         const quality = req.query.quality as string | undefined;
         const type = req.query.type as string || (season !== undefined ? 'series' : 'movie');
-        const imdbId = req.query.imdbId as string | undefined;   // NOVO: extrai imdbId da URL
+        const imdbId = req.query.imdbId as string | undefined;
+        const magnetFromUrl = typeof req.query.magnet === 'string' ? req.query.magnet : undefined;
 
         const protocol = req.get('x-forwarded-proto') || 'https';
         const host = req.get('host') || 'localhost:7000';
@@ -320,49 +301,49 @@ export const setupResolveRoutes = (app: any) => {
             return res.status(200).end();
         }
 
-        const cacheKey = `resolve:torrentio:${apiKey.substring(0,8)}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
+        const cacheKey = `resolve:torrentio:${apiKey.substring(0, 8)}:${infoHash}:${fileIndex}:${season || 'all'}:${episode || 'all'}:${type}`;
         const cachedDirectLink = cacheService.get<string>(cacheKey);
         if (cachedDirectLink) {
             res.setHeader('Access-Control-Allow-Origin', '*');
             return res.redirect(302, cachedDirectLink);
         }
 
-        const dedupKey = `${apiKey.substring(0,8)}:${infoHash}`;
+        const dedupKey = `${apiKey.substring(0, 8)}:${infoHash}`;
         let promiseEmVoo = emVoo.get(dedupKey);
         if (!promiseEmVoo) {
-          promiseEmVoo = (async () => {
-            try {
-              resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
+            promiseEmVoo = (async () => {
+                try {
+                    resolveLogger.info('🔄 RESOLVE CACHE MISS - Processando magnet no Torbox', {
+                        requestId: req._ultraDebugId,
+                        infoHash,
+                    });
+
+                    if (!apiKey || apiKey.length < 10 || !infoHash || infoHash.length < 40) {
+                        throw new Error('Parâmetros inválidos');
+                    }
+
+                    // Usa o magnet completo da URL, se disponível; senão reconstrói com o infoHash
+                    const magnetLink = magnetFromUrl || `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
+
+                    const titles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
+                    if (titles) {
+                        resolveLogger.info('🔤 Títulos obtidos para seleção de arquivo', {
+                            infoHash,
+                            titles: titles.join(', '),
+                        });
+                    }
+
+                    return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles);
+                } finally {
+                    emVoo.delete(dedupKey);
+                }
+            })();
+            emVoo.set(dedupKey, promiseEmVoo);
+        } else {
+            resolveLogger.info('🔄 RESOLVE DEDUP - Aguardando requisição em voo', {
                 requestId: req._ultraDebugId,
                 infoHash,
-              });
-
-              if (!apiKey || apiKey.length < 10 || !infoHash || infoHash.length < 40) {
-                throw new Error('Parâmetros inválidos');
-              }
-
-              const magnetLink = `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
-              
-              // Passa imdbId e season externos (da URL) para busca direta
-              const titles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
-              if (titles) {
-                  resolveLogger.info('🔤 Títulos obtidos para seleção de arquivo', {
-                      infoHash,
-                      titles: titles.join(', '),
-                  });
-              }
-
-              return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles);
-            } finally {
-              emVoo.delete(dedupKey);
-            }
-          })();
-          emVoo.set(dedupKey, promiseEmVoo);
-        } else {
-          resolveLogger.info('🔄 RESOLVE DEDUP - Aguardando requisição em voo', {
-            requestId: req._ultraDebugId,
-            infoHash,
-          });
+            });
         }
 
         let streamResponse: any = null;
@@ -386,7 +367,7 @@ export const setupResolveRoutes = (app: any) => {
                     return res.redirect(302, tbResult.streamLink);
                 }
 
-                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'checking']; 
+                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'checking'];
                 const statusLower = tbResult.status?.toLowerCase() || '';
                 if (progressStatuses.some(s => statusLower.includes(s))) {
                     const staticResponseService = new StaticResponseService(baseUrl);
