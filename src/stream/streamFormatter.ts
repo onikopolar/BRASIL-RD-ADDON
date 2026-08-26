@@ -2,13 +2,10 @@ import { Stream, StreamRequest } from '../types/index.js';
 import { analisarMagnet, gerarUrlResolve } from '../magnet/magnetHelper.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { Logger } from '../utils/logger.js';
-import { MetadataExtractor } from '../titulos/MetadataExtractor.js';
-import { EnhancedSeriesMetadata } from '../titulos/interfaces.js';
 
 export class StreamFormatter {
   private readonly logger: Logger;
   private readonly qualityDetector: QualityDetector;
-  private readonly metadataExtractor: MetadataExtractor;
 
   private static instance: StreamFormatter;
 
@@ -22,7 +19,6 @@ export class StreamFormatter {
   constructor() {
     this.logger = new Logger('StreamFormatter');
     this.qualityDetector = QualityDetector.getInstance();
-    this.metadataExtractor = MetadataExtractor.getInstance();
     this.logger.debug('StreamFormatter ready');
   }
 
@@ -124,10 +120,6 @@ export class StreamFormatter {
     return match ? match[1] : undefined;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  MÉTODO PRINCIPAL (compatível com chamadas antigas)
-  // ═══════════════════════════════════════════════════════════
-
   async createMultipleQualityStreams(
     torrent: any,
     request: StreamRequest,
@@ -154,10 +146,6 @@ export class StreamFormatter {
     );
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  CRIA STREAMS PARA MÚLTIPLAS QUALIDADES
-  // ═══════════════════════════════════════════════════════════
-
   private async criarStreamsMultiplasQualidades(
     torrent: any,
     request: StreamRequest,
@@ -172,7 +160,6 @@ export class StreamFormatter {
   ): Promise<Stream[]> {
     let tituloFonte = torrent.canonicalName || torrent.title;
 
-    // Inclui htmlTitle (episódio/range) no título do stream, se existente
     if (torrent.htmlTitle && torrent.htmlTitle.trim().length > 0) {
       const htmlClean = torrent.htmlTitle.trim();
       if (!tituloFonte.includes(htmlClean)) {
@@ -184,12 +171,12 @@ export class StreamFormatter {
       }
     }
 
-    // Usa a qualidade do scraper (se válida), senão tenta extrair do título
     let qualidades: string[];
     if (torrent.quality && torrent.quality !== 'HD' && torrent.quality !== 'Desconhecido') {
       qualidades = [torrent.quality];
     } else {
-      const todas = this.extrairTodasQualidades(tituloFonte);
+      // Usa o QualityDetector (robusto) em vez de método local duplicado
+      const todas = this.qualityDetector.extractAllQualities(tituloFonte);
       qualidades = todas.length > 0 ? todas : ['HD'];
     }
 
@@ -240,10 +227,6 @@ export class StreamFormatter {
     return streams;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  STREAM LAZY (RESOLVER TORBOX)
-  // ═══════════════════════════════════════════════════════════
-
   private async criarStreamLazy(
     torrentTitle: string,
     descricao: string,
@@ -259,10 +242,14 @@ export class StreamFormatter {
     titles?: string[],
     imdbId?: string
   ): Promise<Stream> {
+    this.logger.debug('MAGNET_CRU', {
+      magnet: magnet.substring(0, 250),
+      tamanho: magnet.length
+    });
+
     const dadosMagnet = await analisarMagnet(magnet);
     const magnetHash = dadosMagnet?.infoHash;
 
-    // Qualidade real do magnet (dn) tem prioridade máxima
     let qualidadeReal = qualidade;
     if (dadosMagnet?.nome) {
       const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(dadosMagnet.nome);
@@ -272,8 +259,6 @@ export class StreamFormatter {
       }
     }
 
-    // Ajusta o título para refletir a qualidade real, se necessário
-    // Isso evita divergência entre o nome exibido e behaviorHints.streamQuality
     const tituloComQualidadeReal = this.atualizarQualidadeNoTitulo(torrentTitle, qualidadeReal);
 
     const fileIdxFinal = fileIdx ?? 0;
@@ -341,10 +326,6 @@ export class StreamFormatter {
     return stream;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  STREAM DIRETO
-  // ═══════════════════════════════════════════════════════════
-
   private async criarStreamDireto(
     torrentTitle: string,
     descricao: string,
@@ -393,10 +374,6 @@ export class StreamFormatter {
     return stream;
   }
 
-  // ═══════════════════════════════════════════════════════════
-  //  UTILITÁRIOS
-  // ═══════════════════════════════════════════════════════════
-
   private extrairIdiomaDaDescricao(descricao: string): string {
     const padroesIdioma = [
       /\b(PT-BR|Dual|EN|Multi|ES|FR)\b/i,
@@ -414,116 +391,17 @@ export class StreamFormatter {
     return 'PT-BR';
   }
 
-  private extrairTodasQualidades(titulo: string): string[] {
-    const padroesQualidade = [
-      /\b(2160p|4k|uhd)\b/gi,
-      /\b(1080p|fullhd|full hd)\b/gi,
-      /\b(720p|hd|high definition)\b/gi,
-      /\b(480p|sd|standard definition)\b/gi,
-      /\b(360p|low)\b/gi,
-      /(\d{3,4}p)\s*\/\s*(\d{3,4}p)/gi,
-      /(\d{3,4}p)\s*[eE]\s*(\d{3,4}p)/gi,
-      /(\d{3,4}p)\s*[ou]\s*(\d{3,4}p)/gi
-    ];
-
-    const qualidadesEncontradas: Set<string> = new Set();
-    const tituloLower = titulo.toLowerCase();
-
-    for (const padrao of padroesQualidade.slice(0, 5)) {
-      const matches = tituloLower.match(padrao);
-      if (matches) {
-        for (const match of matches) {
-          const normalizada = this.normalizarQualidade(match);
-          if (normalizada) {
-            qualidadesEncontradas.add(normalizada);
-          }
-        }
-      }
-    }
-
-    for (const padrao of padroesQualidade.slice(5)) {
-      const matches = tituloLower.match(padrao);
-      if (matches) {
-        for (const match of matches) {
-          const qualityMatches = match.match(/\d{3,4}p/gi);
-          if (qualityMatches) {
-            for (const qualityMatch of qualityMatches) {
-              const normalizada = this.normalizarQualidade(qualityMatch);
-              if (normalizada) {
-                qualidadesEncontradas.add(normalizada);
-              }
-            }
-          }
-        }
-      }
-    }
-
-    const listPattern = /(\d{3,4}p|4k|uhd|hd)(?:\s*,\s*|\s+e\s+|\s+ou\s+)/gi;
-    let listMatch;
-    while ((listMatch = listPattern.exec(tituloLower)) !== null) {
-      const normalizada = this.normalizarQualidade(listMatch[1]);
-      if (normalizada) {
-        qualidadesEncontradas.add(normalizada);
-      }
-    }
-
-    const resultado = Array.from(qualidadesEncontradas);
-
-    if (resultado.length === 0) {
-      const qualidadePadrao = this.qualityDetector.extractBestQuality(titulo);
-      if (qualidadePadrao && qualidadePadrao !== 'unknown') {
-        resultado.push(qualidadePadrao);
-      }
-    }
-
-    const ordemQualidade = ['2160p', '1080p', '720p', 'HD', 'SD'];
-    resultado.sort((a, b) => {
-      const indexA = ordemQualidade.indexOf(a);
-      const indexB = ordemQualidade.indexOf(b);
-      return indexA - indexB;
-    });
-
-    return resultado;
-  }
-
-  private normalizarQualidade(qualidade: string): string {
-    const qualidadeLower = qualidade.toLowerCase();
-
-    if (qualidadeLower.includes('4k') || qualidadeLower.includes('2160p') || qualidadeLower.includes('uhd')) {
-      return '2160p';
-    } else if (qualidadeLower.includes('1080p') || qualidadeLower.includes('fullhd') || qualidadeLower.includes('full hd')) {
-      return '1080p';
-    } else if (qualidadeLower.includes('720p') || qualidadeLower.includes('hd') || qualidadeLower.includes('high definition')) {
-      return '720p';
-    } else if (qualidadeLower.includes('480p') || qualidadeLower.includes('sd') || qualidadeLower.includes('standard definition')) {
-      return 'SD';
-    } else if (qualidadeLower.includes('360p') || qualidadeLower.includes('low')) {
-      return 'SD';
-    } else if (qualidadeLower.includes('hd')) {
-      return 'HD';
-    }
-
-    if (qualidadeLower.match(/\d{3,4}p/)) {
-      return qualidadeLower;
-    }
-
-    return '';
-  }
-
   private atualizarQualidadeNoTitulo(titulo: string, qualidade: string): string {
-    // Se o título já contém a qualidade real, não modifica.
     const regexQualidade = new RegExp(`\\b${qualidade}\\b`, 'i');
     if (regexQualidade.test(titulo)) {
       return titulo;
     }
 
-    // Se houver uma qualidade entre parênteses (ex.: "(1080p)"), substitui pela real.
     const regexEntreParenteses = /\s*\(\s*(\d{3,4}p|4k|uhd|hd)\s*\)/i;
     if (regexEntreParenteses.test(titulo)) {
       return titulo.replace(regexEntreParenteses, ` (${qualidade})`);
     }
 
-    // Se não houver qualidade entre parênteses, adiciona no final.
     return `${titulo} (${qualidade})`;
   }
 
@@ -532,19 +410,22 @@ export class StreamFormatter {
   }
 
   private ordenarStreamsPorQualidade(streams: Stream[]): Stream[] {
-    const tierMap: Record<string, number> = {
-      '2160p': 5000, '4k': 5000, 'uhd': 5000,
-      '1080p': 4000, 'fullhd': 4000,
-      '720p': 3000, 'hd': 2000,
-      '480p': 1000, 'sd': 1000
-    };
-
     const getTier = (s: Stream): number => {
       const q = (s.behaviorHints?.streamQuality || '').toLowerCase();
-      if (tierMap[q]) return tierMap[q];
+      if (q) {
+        const normalized = this.qualityDetector.extractBestQuality(q);
+        if (normalized && normalized !== 'unknown') {
+          return this.qualityDetector.getQualityOrder(normalized);
+        }
+      }
       const match = (s.name || '').match(/\b(\d{3,4}p|4k|uhd|hd|sd)\b/i);
-      if (match) return tierMap[match[1].toLowerCase()] || 0;
-      return 0;
+      if (match) {
+        const normalized = this.qualityDetector.extractBestQuality(match[1]);
+        if (normalized && normalized !== 'unknown') {
+          return this.qualityDetector.getQualityOrder(normalized);
+        }
+      }
+      return this.qualityDetector.getQualityOrder('HD');
     };
 
     const extrairSeeds = (s: Stream): number => {
@@ -559,7 +440,8 @@ export class StreamFormatter {
     return streams.sort((a, b) => {
       const tierA = getTier(a);
       const tierB = getTier(b);
-      if (tierA !== tierB) return tierB - tierA;
+      // Menor índice = melhor qualidade (2160p = 0)
+      if (tierA !== tierB) return tierA - tierB;
 
       const seedsA = extrairSeeds(a);
       const seedsB = extrairSeeds(b);

@@ -9,7 +9,6 @@ export * from './interfaces.js';
 export { TitleCleaner } from './TitleCleaner.js';
 export { LanguageDetector } from './LanguageDetector.js';
 export { SimilarityCalculator } from './SimilarityCalculator.js';
-export { MetadataExtractor } from './MetadataExtractor.js';
 export { CacheManager } from './CacheManager.js';
 
 // NOTA: O TitleFilter principal está em ../titleFilter.ts

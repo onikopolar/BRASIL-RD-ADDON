@@ -1,5 +1,5 @@
 import 'dotenv/config';
-import { sequelize, Torrent } from '../src/database/models.js';
+import { sequelize, Torrent, ImdbTitleCache } from '../src/database/models.js';
 
 function formatSize(size?: number): string {
   if (!size) return '?';
@@ -18,8 +18,29 @@ function formatEpisodeRange(t: any): string {
   return `${season}E${t.imdbEpisodeStart}-E${t.imdbEpisodeEnd}`;
 }
 
+async function getPrimaryTitle(imdbId: string, torrentTitles: string[]): Promise<string> {
+  try {
+    const cacheEntries = await ImdbTitleCache.findAll({
+      where: { imdbId },
+      raw: true,
+      order: [['season', 'ASC']],
+    });
+
+    if (cacheEntries.length > 0) {
+      const first = cacheEntries[0] as any;
+      const ptFirst = first.titlesPt ? first.titlesPt.split(',').map((s: string) => s.trim()).find(Boolean) : undefined;
+      const enFirst = first.titlesEn ? first.titlesEn.split(',').map((s: string) => s.trim()).find(Boolean) : undefined;
+      return ptFirst || enFirst || torrentTitles[0] || 'Título desconhecido';
+    }
+  } catch {
+    // ignora e usa fallback
+  }
+  return torrentTitles[0] || 'Título desconhecido';
+}
+
 async function main() {
   await sequelize.authenticate();
+
   const all = await Torrent.findAll({
     raw: true,
     order: [
@@ -40,7 +61,29 @@ async function main() {
   console.log(`${all.length} torrents, ${groups.size} IMDBs\n`);
 
   for (const [id, ts] of groups) {
-    console.log(`🎬 ${id} (${ts.length})`);
+    const torrentTitles = ts.map(t => t.title).filter(Boolean);
+    const primaryTitle = await getPrimaryTitle(id, torrentTitles);
+    console.log(`🎬 ${id} (${ts.length}) - ${primaryTitle.substring(0, 70)}`);
+
+    // Exibe informações do ImdbTitleCache
+    try {
+      const cacheEntries = await ImdbTitleCache.findAll({
+        where: { imdbId: id },
+        raw: true,
+        order: [['season', 'ASC']],
+      });
+
+      for (const entry of cacheEntries as any[]) {
+        const seasonLabel = entry.season ? ` [S${entry.season}]` : '';
+        const pt = entry.titlesPt ? entry.titlesPt.split(',').map((s: string) => s.trim()).filter(Boolean).join(', ') : '';
+        const en = entry.titlesEn ? entry.titlesEn.split(',').map((s: string) => s.trim()).filter(Boolean).join(', ') : '';
+        const year = entry.year ? ` (${entry.year})` : '';
+        console.log(`  🗂 Cache${seasonLabel}${year}: PT=[${pt}] EN=[${en}]`);
+      }
+    } catch {
+      // ignora falhas na consulta de cache
+    }
+
     for (const t of ts) {
       const ep = formatEpisodeRange(t);
       const idioma = t.idioma || '?';

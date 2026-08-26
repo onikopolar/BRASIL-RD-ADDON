@@ -63,6 +63,7 @@ Torrent.init({
     seeders: { type: sequelize_1.DataTypes.INTEGER },
     idioma: { type: sequelize_1.DataTypes.STRING(50) },
     qualidade: { type: sequelize_1.DataTypes.STRING(10) },
+    magnet: { type: sequelize_1.DataTypes.TEXT },
     uploadDate: { type: sequelize_1.DataTypes.DATE },
     lastSeen: { type: sequelize_1.DataTypes.DATE },
     rescrapeAt: { type: sequelize_1.DataTypes.DATE, allowNull: true, defaultValue: null }

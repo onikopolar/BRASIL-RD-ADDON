@@ -60,6 +60,54 @@ function createStreamFromStaticResponse(
     };
 }
 
+// NOVO helper central para criação de stream de status baseado no resultado do Torbox
+function createStatusStreamForTorboxResult(
+    baseUrl: string,
+    tbResult: { success: boolean; status: string; message?: string; streamLink?: string },
+    requestId: string,
+    season?: number,
+    episode?: number
+): any {
+    const staticResponseService = new StaticResponseService(baseUrl);
+    let staticResponse = StaticResponse.FAILED_UNEXPECTED;
+    let extraInfo = '';
+
+    if (tbResult.success) {
+        const readyStatuses = ['ready', 'completed', 'cached', 'uploading', 'seeding'];
+        if (readyStatuses.some(s => (tbResult.status || '').toLowerCase().includes(s)) && tbResult.streamLink) {
+            // Se já tem streamLink, não deve chamar esse helper; mas mantemos por segurança
+            return null;
+        }
+
+        const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'checking'];
+        const statusLower = tbResult.status?.toLowerCase() || '';
+        if (progressStatuses.some(s => statusLower.includes(s))) {
+            staticResponse = StaticResponse.DOWNLOADING;
+        } else if (['error', 'dead', 'missingfiles'].some(s => statusLower.includes(s))) {
+            staticResponse = StaticResponse.FAILED_DOWNLOAD;
+        } else {
+            staticResponse = StaticResponse.FAILED_UNEXPECTED;
+            extraInfo = `\nStatus desconhecido: ${tbResult.status}`;
+        }
+    } else {
+        const errorMessage = tbResult.message || 'Falha no Torbox';
+        if (errorMessage.includes('infringing')) {
+            staticResponse = StaticResponse.FAILED_INFRINGEMENT;
+            extraInfo = '\nConteúdo bloqueado (direitos autorais)';
+        } else if (errorMessage.includes('hoster_unavailable')) {
+            staticResponse = StaticResponse.FAILED_DOWNLOAD;
+            extraInfo = '\nServidor RD indisponível';
+        } else {
+            logger.error('Erro na resolução', { error: errorMessage });
+            extraInfo = `\nErro: ${errorMessage}`;
+        }
+    }
+
+    const stream = createStreamFromStaticResponse(staticResponseService, staticResponse, requestId, season, episode);
+    stream.description += extraInfo;
+    return stream;
+}
+
 async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
     const dados = await analisarMagnet(magnet);
     return dados ? dados.infoHash : null;
@@ -308,7 +356,8 @@ export const setupResolveRoutes = (app: any) => {
             return res.redirect(302, cachedDirectLink);
         }
 
-        const dedupKey = `${apiKey.substring(0, 8)}:${infoHash}`;
+        // CORREÇÃO: dedupKey inclui season/episode
+        const dedupKey = `${apiKey.substring(0, 8)}:${infoHash}:${season || 'all'}:${episode || 'all'}`;
         let promiseEmVoo = emVoo.get(dedupKey);
         if (!promiseEmVoo) {
             promiseEmVoo = (async () => {
@@ -359,61 +408,17 @@ export const setupResolveRoutes = (app: any) => {
                 message: tbResult.message?.substring(0, 150),
             });
 
-            if (tbResult.success) {
-                const readyStatuses = ['ready', 'completed', 'cached', 'uploading', 'seeding'];
-                if (readyStatuses.some(s => (tbResult.status || '').toLowerCase().includes(s)) && tbResult.streamLink) {
-                    cacheService.set(cacheKey, tbResult.streamLink, CACHE_TTL);
-                    res.setHeader('Access-Control-Allow-Origin', '*');
-                    return res.redirect(302, tbResult.streamLink);
-                }
-
-                const progressStatuses = ['downloading', 'stalled', 'metadl', 'queued', 'checkingresumedata', 'paused', 'checking'];
-                const statusLower = tbResult.status?.toLowerCase() || '';
-                if (progressStatuses.some(s => statusLower.includes(s))) {
-                    const staticResponseService = new StaticResponseService(baseUrl);
-                    const response = staticResponseService.getResponseForTorboxStatus(tbResult.status) || StaticResponse.DOWNLOADING;
-                    streamResponse = createStreamFromStaticResponse(staticResponseService, response, `resolve-${Date.now()}`, season, episode);
-                    streamResponse.description += `\nStatus: ${tbResult.status}`;
-                } else if (['error', 'dead', 'missingfiles'].some(s => statusLower.includes(s))) {
-                    const staticResponseService = new StaticResponseService(baseUrl);
-                    streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponse.FAILED_DOWNLOAD, `resolve-${Date.now()}`, season, episode);
-                    streamResponse.description += `\nDetalhes: ${tbResult.message || tbResult.status}`;
-                } else {
-                    const staticResponseService = new StaticResponseService(baseUrl);
-                    streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponse.FAILED_UNEXPECTED, `resolve-${Date.now()}`, season, episode);
-                    streamResponse.description += `\nStatus desconhecido: ${tbResult.status}`;
-                }
-            } else {
-                const staticResponseService = new StaticResponseService(baseUrl);
-                const errorMessage = tbResult.message || 'Falha no Torbox';
-
-                let staticResponse = StaticResponse.FAILED_UNEXPECTED;
-                let extraInfo = '';
-
-                if (errorMessage.includes('infringing')) {
-                    staticResponse = StaticResponse.FAILED_INFRINGEMENT;
-                    extraInfo = '\nConteúdo bloqueado (direitos autorais)';
-                } else if (errorMessage.includes('hoster_unavailable')) {
-                    staticResponse = StaticResponse.FAILED_DOWNLOAD;
-                    extraInfo = '\nServidor RD indisponível';
-                } else {
-                    logger.error('Erro na resolução', { error: errorMessage, infoHash });
-                    resolveLogger.error('❌ ERRO NA RESOLUÇÃO', {
-                        requestId: req._ultraDebugId,
-                        errorMessage,
-                        infoHash,
-                    });
-                    extraInfo = `\nErro: ${errorMessage}`;
-                }
-
-                streamResponse = createStreamFromStaticResponse(staticResponseService, staticResponse, `resolve-${Date.now()}`, season, episode);
-                streamResponse.description += extraInfo;
+            if (tbResult.success && tbResult.streamLink) {
+                cacheService.set(cacheKey, tbResult.streamLink, CACHE_TTL);
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                return res.redirect(302, tbResult.streamLink);
             }
+
+            streamResponse = createStatusStreamForTorboxResult(baseUrl, tbResult, `resolve-${Date.now()}`, season, episode);
         } catch (error) {
             const staticResponseService = new StaticResponseService(baseUrl);
             const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';
             logger.error('Exceção inesperada', { error: errorMessage, infoHash });
-
             streamResponse = createStreamFromStaticResponse(staticResponseService, StaticResponse.FAILED_UNEXPECTED, `resolve-${Date.now()}`, season, episode);
             streamResponse.description += `\nErro: ${errorMessage}`;
         }
@@ -450,38 +455,13 @@ export const setupResolveRoutes = (app: any) => {
             const titles = await getEnrichedTitlesForHash(magnetHash, imdbId, season);
             const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type, undefined, titles);
 
-            if (tbResult.success) {
-                if ((tbResult.status === 'ready' || tbResult.status === 'completed' || tbResult.status === 'cached') && tbResult.streamLink) {
-                    res.setHeader('Access-Control-Allow-Origin', '*');
-                    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-                    return res.redirect(302, tbResult.streamLink);
-                }
-
-                const staticResponseService = new StaticResponseService(baseUrl);
-                let staticResponse = StaticResponse.DOWNLOADING;
-                if (tbResult.status === 'error' || tbResult.status === 'dead') staticResponse = StaticResponse.FAILED_DOWNLOAD;
-                streamResponse = createStreamFromStaticResponse(staticResponseService, staticResponse, `resolve-${Date.now()}`, season, episode);
-                streamResponse.description += `\nStatus: ${tbResult.status}`;
-            } else {
-                const staticResponseService = new StaticResponseService(baseUrl);
-                const errorMessage = tbResult.message || 'Falha no Torbox';
-
-                let staticResponse = StaticResponse.FAILED_UNEXPECTED;
-                let extraInfo = '';
-                if (errorMessage.includes('infringing')) {
-                    staticResponse = StaticResponse.FAILED_INFRINGEMENT;
-                    extraInfo = '\nConteúdo bloqueado';
-                } else if (errorMessage.includes('hoster_unavailable')) {
-                    staticResponse = StaticResponse.FAILED_DOWNLOAD;
-                    extraInfo = '\nServidor RD indisponível';
-                } else {
-                    logger.error('Erro na resolução', { error: errorMessage });
-                    extraInfo = `\nErro: ${errorMessage}`;
-                }
-
-                streamResponse = createStreamFromStaticResponse(staticResponseService, staticResponse, `resolve-${Date.now()}`, season, episode);
-                streamResponse.description += extraInfo;
+            if (tbResult.success && tbResult.streamLink) {
+                res.setHeader('Access-Control-Allow-Origin', '*');
+                res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+                return res.redirect(302, tbResult.streamLink);
             }
+
+            streamResponse = createStatusStreamForTorboxResult(baseUrl, tbResult, `resolve-${Date.now()}`, season, episode);
         } catch (error) {
             const staticResponseService = new StaticResponseService(baseUrl);
             const errorMessage = error instanceof Error ? error.message : 'Erro desconhecido';

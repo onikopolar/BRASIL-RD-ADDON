@@ -1,6 +1,5 @@
 import { Logger } from '../utils/logger.js';
 import { SimilarityCalculator } from './SimilarityCalculator.js';
-import { MetadataExtractor } from './MetadataExtractor.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
 import { extrairRangeEpisodios } from './TechnicalWords.js';
@@ -13,11 +12,13 @@ import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
  * SÓ valida similaridade de título (NÃO idioma).
  * Idioma é responsabilidade de quem chama (usar LanguageDetector direto).
  * Temporada/episódio é delegado ao EpisodeMatcher ou validado diretamente via parâmetro.
+ * 
+ * IMPORTANTE: O parâmetro `tituloTorrent` deve ser o **título original extraído dos metadados do scraper**,
+ * nunca o canonicalName ou magnet. Os scrapers devem fornecer `originalTitle` (ex.: "The Drama").
  */
 export class TitleFilter {
   private readonly logger = new Logger('TitleFilter');
   private readonly similarityCalculator = SimilarityCalculator.getInstance();
-  private readonly metadataExtractor = MetadataExtractor.getInstance();
   private readonly languageDetector = LanguageDetector.getInstance();
   private readonly episodeMatcher = EpisodeMatcher.getInstance();
 
@@ -31,7 +32,14 @@ export class TitleFilter {
   // ═══ MÉTODOS PÚBLICOS (delegações) ═══
 
   extrairMetadados(titulo: string): SeriesMetadata {
-    return this.metadataExtractor.extractSeriesMetadata(titulo);
+    const range = extrairRangeEpisodios(titulo);
+    return {
+      season: range?.season ?? undefined,
+      episode: range?.episodeStart ?? undefined,
+      isCompleteSeason: range ? (range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0) : false,
+      hasEpisodeInfo: !!(range && (range.season > 0 || range.episodeStart > 0)),
+      matchedPattern: undefined,
+    };
   }
 
   conteudoEmPortugues(titulo: string): boolean {
@@ -52,7 +60,7 @@ export class TitleFilter {
   /**
    * Verifica se o título do torrent combina com o título TMDB do IMDB.
    * 
-   * @param tituloTorrent   título principal do torrent (ex: canonicalName)
+   * @param tituloTorrent   título principal do torrent (originalTitle dos metadados)
    * @param imdbId          identificador IMDb
    * @param temporadaAlvo   temporada alvo (opcional)
    * @param episodioAlvo    episódio alvo (opcional)
@@ -77,8 +85,12 @@ export class TitleFilter {
       const metadados = this.extrairMetadados(tituloTorrent);
       const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
-      // ── 1.5 VALIDAÇÃO DE ANO (evita aceitar filmes com anos muito diferentes) ──
-      if (anoTorrent !== undefined && imdbTitles?.year !== undefined && anoTorrent !== imdbTitles.year) {
+      // ── 1.5 VALIDAÇÃO DE ANO (tolerância de ±1 ano para lançamentos regionais) ──
+      if (
+        anoTorrent !== undefined &&
+        imdbTitles?.year !== undefined &&
+        Math.abs(anoTorrent - imdbTitles.year) > 1
+      ) {
         return {
           matches: false,
           similarity: 0,
@@ -98,21 +110,11 @@ export class TitleFilter {
         range = extrairRangeEpisodios(tituloParaIdioma);
       }
 
-      // ── 2. VALIDAÇÃO DE EPISÓDIO (agora com suporte a range) ──
+      // ── 2. VALIDAÇÃO DE EPISÓDIO (com prioridade para episódio exato) ──
       if (episodioAlvo !== undefined) {
-        if (range && range.episodeStart > 0 && range.episodeEnd > 0) {
-          // Range explícito (ex: "Episódio 06 ao 10")
-          if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
-            return {
-              matches: false,
-              similarity: 0,
-              torrentMetadata: metadados,
-              reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
-            };
-          }
-          // Episódio está dentro do range → prosseguir
-        } else if (episodioTorrent !== undefined) {
-          // Sem range: validação exata
+        const episodioExato = episodioTorrent !== undefined && episodioTorrent > 0;
+
+        if (episodioExato) {
           if (episodioTorrent !== episodioAlvo) {
             return {
               matches: false,
@@ -121,10 +123,24 @@ export class TitleFilter {
               reason: `Episódio diferente: E${episodioTorrent} vs alvo E${episodioAlvo}`
             };
           }
+        } else {
+          const isSeasonPack = range && range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0;
+          if (isSeasonPack && temporadaAlvo !== undefined && range!.season === temporadaAlvo) {
+            // Pack de temporada: aceita como fallback
+          } else if (range && range.episodeStart > 0 && range.episodeEnd > 0) {
+            if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
+              return {
+                matches: false,
+                similarity: 0,
+                torrentMetadata: metadados,
+                reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
+              };
+            }
+          }
         }
       }
 
-      // ── 3. VALIDAÇÃO DE TEMPORADA (se range contiver season) ──
+      // ── 3. VALIDAÇÃO DE TEMPORADA ──
       if (range && temporadaAlvo !== undefined && range.season > 0 && range.season !== temporadaAlvo) {
         return {
           matches: false,
@@ -134,12 +150,8 @@ export class TitleFilter {
         };
       }
 
-      // ── 4. SIMILARIDADE (SimilarityCalculator) ──
-      // CORREÇÃO: sempre passar a temporada alvo quando definida.
-      // Isso evita que o SimilarityCalculator trate SxxExx como indicador de filme
-      // quando a temporada alvo é conhecida (ex.: séries).
+      // ── 4. SIMILARIDADE ──
       const seasonParaSimilaridade = temporadaAlvo;
-
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent,
         imdbId,
@@ -148,7 +160,7 @@ export class TitleFilter {
         imdbTitles ?? undefined
       );
 
-      // ── 5. FILTRO FINAL: TMDB movie mas torrent com indicador de série ──
+      // ── 5. FILTRO FINAL ──
       if (resultado.mediaType === 'movie' && this.episodeMatcher.temIndicadorTemporada(tituloTorrent)) {
         return {
           matches: false,

@@ -85,36 +85,6 @@ export class StreamHandler {
     this.torboxService.setStaticResponseBaseUrl(baseUrl);
   }
 
-  private deduplicateStreamsByInfoHash(streams: Stream[]): Stream[] {
-    const seenCombinations = new Set<string>();
-    const uniqueStreams: Stream[] = [];
-
-    for (const stream of streams) {
-      const infoHash = stream.infoHash?.toLowerCase();
-      let quality = 'unknown';
-      if (stream.behaviorHints?.streamQuality) {
-        quality = stream.behaviorHints.streamQuality;
-      } else if (stream.title) {
-        const qualityMatch = stream.title.match(/\((\d+p|4K|HD|SD|2160p|1080p|720p|480p)\)/i);
-        if (qualityMatch) {
-          quality = qualityMatch[1].toLowerCase();
-        }
-      }
-
-      const uniqueKey = infoHash
-        ? `${infoHash}_${quality}`
-        : `${stream.title || 'stream'}_${quality}_${stream.fileIdx ?? 0}`;
-      if (seenCombinations.has(uniqueKey)) {
-        this.stats.duplicatesRemoved++;
-        continue;
-      }
-      seenCombinations.add(uniqueKey);
-      uniqueStreams.push(stream);
-    }
-
-    return uniqueStreams;
-  }
-
   public async handleStreamRequest(request: StreamRequest): Promise<{ streams: Stream[] }> {
     const requestId = request.id;
     this.stats.totalRequests++;
@@ -147,9 +117,10 @@ export class StreamHandler {
       const dbResult = await this.getStreamsFromDatabase(request);
       if (dbResult.success && dbResult.streams.length > 0) {
         this.stats.servedFromDatabase++;
-        const deduped = this.deduplicateStreamsByInfoHash(dbResult.streams);
+        const originalCount = dbResult.streams.length;
+        const deduped = this.catalogProvider.removeDuplicatesByInfoHash(dbResult.streams);
+        this.stats.duplicatesRemoved += originalCount - deduped.length;
         const sorted = this.streamFormatter.sortStreamsByQuality(deduped);
-        // Registra títulos enriquecidos (incluindo ano) para cada stream com infoHash
         this.registerTitlesForStreams(sorted, tmdbTitles, tmdbYear);
         return { streams: sorted };
       }
@@ -158,9 +129,10 @@ export class StreamHandler {
       const catalogResult = await this.getStreamsFromCatalog(request);
       if (catalogResult.success && catalogResult.streams.length > 0) {
         this.stats.servedFromCatalog++;
-        const deduped = this.deduplicateStreamsByInfoHash(catalogResult.streams);
+        const originalCount = catalogResult.streams.length;
+        const deduped = this.catalogProvider.removeDuplicatesByInfoHash(catalogResult.streams);
+        this.stats.duplicatesRemoved += originalCount - deduped.length;
         const sorted = this.streamFormatter.sortStreamsByQuality(deduped);
-        // Registra títulos enriquecidos (incluindo ano) para cada stream com infoHash
         this.registerTitlesForStreams(sorted, tmdbTitles, tmdbYear);
         return { streams: sorted };
       }
@@ -192,7 +164,6 @@ export class StreamHandler {
   private registerTitlesForStreams(streams: Stream[], titles?: string[], year?: number): void {
     if (!titles || titles.length === 0) return;
     
-    // Enriquece os títulos com o ano, se disponível
     const enrichedTitles = year 
       ? titles.map(t => `${t} ${year}`)
       : titles;
@@ -317,10 +288,13 @@ export class StreamHandler {
         }
       }
 
+      // Usa o magnet completo salvo no banco, se existir; caso contrário, fallback para magnet mínimo.
+      const magnetCompleto = torrent.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`;
+      
       const torrentWithMagnet = {
         ...torrent,
-        magnet: `magnet:?xt=urn:btih:${torrent.infoHash}`,
-        magnet_link: `magnet:?xt=urn:btih:${torrent.infoHash}`,
+        magnet: magnetCompleto,
+        magnet_link: magnetCompleto,
       };
 
       const streams = await this.streamFormatter.createMultipleQualityStreams(

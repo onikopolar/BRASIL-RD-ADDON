@@ -357,7 +357,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   }
 
   // ═══ Padrão 4a: "Episódio 06 ao 10", "Episódios 01 a 05", "Episódio 1 até 5" ═══
-  const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos)\s*(\d{1,3})\b/i);
+  const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e)\s*(\d{1,3})\b/i);
   if (episodioRangeWords) {
     return {
       season: 0,

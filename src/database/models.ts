@@ -3,7 +3,7 @@ import dotenv from 'dotenv';
 
 dotenv.config();
 
-const DATABASE_URL = 
+const DATABASE_URL =
   process.env.DATABASE_URL ||
   process.env.POSTGRES_URL ||
   process.env.DATABASE_PUBLIC_URL;
@@ -25,7 +25,7 @@ const isRailwayExternal = DATABASE_URL?.includes('railway.app') && !DATABASE_URL
 const sequelizeConfig: any = {
   logging: false,
   dialect: 'postgres',
-  pool: { 
+  pool: {
     max: 5,
     min: 1,
     acquire: 30000,
@@ -68,6 +68,7 @@ interface TorrentAttributes {
   seeders?: number;
   idioma?: string;
   qualidade?: string;
+  magnet?: string; // NOVO: magnet completo para uso futuro
   uploadDate: Date;
   lastSeen: Date;
   rescrapeAt?: Date | null;
@@ -86,6 +87,7 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public seeders?: number;
   public idioma?: string;
   public qualidade?: string;
+  public magnet?: string; // NOVO
   public uploadDate!: Date;
   public lastSeen!: Date;
   public rescrapeAt?: Date | null;
@@ -105,6 +107,7 @@ Torrent.init(
     seeders:    { type: DataTypes.INTEGER },
     idioma:     { type: DataTypes.STRING(50) },
     qualidade:  { type: DataTypes.STRING(10) },
+    magnet:     { type: DataTypes.TEXT }, // NOVO
     uploadDate: { type: DataTypes.DATE },
     lastSeen:   { type: DataTypes.DATE },
     rescrapeAt: { type: DataTypes.DATE, allowNull: true, defaultValue: null }

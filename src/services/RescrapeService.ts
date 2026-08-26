@@ -10,33 +10,50 @@ const logger = new Logger('RescrapeService');
 /**
  * Intervalos de re-scraping por tipo de fonte no título.
  * Detectado via regex no nome do torrent (dn do magnet).
+ * Agora cada entrada também carrega um `rank` para ordenação de melhor resultado.
  *
  * LÓGICA:
- * - CAM/TS/Workprint → 3 dias (filmado no cinema, releases melhores saem rápido)
+ * - CAM/TS/Workprint → 3 dias
  * - HDCAM/HDTS/Telecine → 5 dias
  * - HDTV/HDRip → 7 dias
  * - DVDSCR/SCREENER/HC → 10 dias
- * - WEBRip → 14 dias (rip de streaming, já é decente mas pode sair Web-DL/BluRay)
- * - BluRay/WEB-DL/Remux/2160p → NUNCA (qualidade final)
+ * - WEBRip → 14 dias
+ * - BluRay/WEB-DL/Remux/2160p → NUNCA (final)
  * - Sem padrão conhecido → 7 dias (conservador)
  */
-const SOURCE_PATTERNS: Array<{ regex: RegExp; days: number | null }> = [
+const SOURCE_PATTERNS: Array<{ regex: RegExp; days: number | null; rank: number }> = [
   // Qualidades FINAIS (null = nunca re-scrape)
-  { regex: /\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i, days: null },
-  { regex: /\b(2160p|4k|uhd)\b/i, days: null },
-  { regex: /\b(dv|hdr10\+?|dolby\s*vision)\b/i, days: null },
+  { regex: /\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i, days: null, rank: 9 },
+  { regex: /\b(2160p|4k|uhd)\b/i, days: null, rank: 10 },
+  { regex: /\b(dv|hdr10\+?|dolby\s*vision)\b/i, days: null, rank: 10 },
 
   // Qualidades INTERMEDIÁRIAS
-  { regex: /\b(webrip|web\.rip|web\s*rip)\b/i, days: 14 },
-  { regex: /\b(dvdscr|screener|dvd-scr|dvdscr)\b/i, days: 10 },
-  { regex: /\b(hc|hard\s*coded)\b/i, days: 10 },
+  { regex: /\b(webrip|web\.rip|web\s*rip)\b/i, days: 14, rank: 7 },
+  { regex: /\b(dvdscr|screener|dvd-scr|dvdscr)\b/i, days: 10, rank: 4 },
+  { regex: /\b(hc|hard\s*coded)\b/i, days: 10, rank: 4 },
 
   // Qualidades BAIXAS
-  { regex: /\b(hdtv|hd-tv)\b/i, days: 7 },
-  { regex: /\b(hdrip|hd-rip|hd\.rip)\b/i, days: 7 },
-  { regex: /\b(hdcam|hd-cam|hdts|hd-ts|telecine|telesync)\b/i, days: 5 },
-  { regex: /\b(camrip|cam-rip|cam\.rip|cam\b|ts\b|workprint|wp\b)\b/i, days: 3 },
+  { regex: /\b(hdtv|hd-tv)\b/i, days: 7, rank: 6 },
+  { regex: /\b(hdrip|hd-rip|hd\.rip)\b/i, days: 7, rank: 6 },
+  { regex: /\b(hdcam|hd-cam|hdts|hd-ts|telecine|telesync)\b/i, days: 5, rank: 2 },
+  { regex: /\b(camrip|cam-rip|cam\.rip|cam\b|ts\b|workprint|wp\b)\b/i, days: 3, rank: 1 },
 ];
+
+/**
+ * Ranking adicional para strings de qualidade que podem vir no campo `quality`,
+ * sem correspondência direta nas fontes acima.
+ */
+const QUALITY_RANK_EXTRA: Record<string, number> = {
+  '2160p': 10,
+  '4k': 10,
+  'uhd': 10,
+  'hdr': 10,
+  'dv': 10,
+  '1080p': 9,
+  '720p': 7,
+  'hd': 5,
+  'sd': 2,
+};
 
 /** Delay entre cada re-scrape (evita flood nos scrapers) */
 const DELAY_BETWEEN_RESCRAPES = 60000; // 1 min
@@ -47,16 +64,6 @@ const MAX_RESCRAPE_PER_BATCH = 5;
 /** Tempo entre execuções do job de verificação (30 minutos) */
 const RESCRAPE_CHECK_INTERVAL = 30 * 60 * 1000;
 
-/**
- * Serviço de re-scraping periódico.
- *
- * Problema resolvido:
- * - Um filme é lançado como CAM rip → o addon salva no banco
- * - 2 semanas depois, sai release 1080p/2160p nos trackers
- * - Mas o addon NUNCA re-scrapeia esse IMDB porque já tem torrent salvo
- * - O RescrapeService resolve isso: periodicamente, re-scrapeia títulos
- *   com qualidade baixa para achar releases melhores
- */
 export class RescrapeService {
   private static instance: RescrapeService;
   private timer: NodeJS.Timeout | null = null;
@@ -79,10 +86,6 @@ export class RescrapeService {
     return RescrapeService.instance;
   }
 
-  /**
-   * Inicia o job periódico de re-scraping.
-   * Chame uma vez no startup do servidor.
-   */
   start(): void {
     if (this.timer) {
       logger.warn('RescrapeService já está rodando');
@@ -94,16 +97,10 @@ export class RescrapeService {
       maxPorBatch: MAX_RESCRAPE_PER_BATCH,
     });
 
-    // Primeira execução: 2 min após startup (espera tudo inicializar)
     setTimeout(() => this.runRescrapeCycle(), 2 * 60 * 1000);
-
-    // Execuções subsequentes: a cada RESCRAPE_CHECK_INTERVAL
     this.timer = setInterval(() => this.runRescrapeCycle(), RESCRAPE_CHECK_INTERVAL);
   }
 
-  /**
-   * Para o job periódico.
-   */
   stop(): void {
     if (this.timer) {
       clearInterval(this.timer);
@@ -116,42 +113,30 @@ export class RescrapeService {
     return { ...this.stats };
   }
 
-  /**
-   * Analisa o TÍTULO do torrent (dn do magnet via parse-torrent)
-   * para determinar quando fazer o próximo re-scrape.
-   *
-   * Retorna uma data futura ou null se for qualidade final.
-   *
-   * @param title - Título completo do torrent (fonte canônica: dn do magnet)
-   * @param qualidade - Resolução detectada (1080p, 2160p, 720p, HD) — fallback
-   */
   static computeRescrapeAt(title: string | undefined, qualidade?: string): Date | null {
     if (!title && !qualidade) return null;
 
     const titleLower = (title || '').toLowerCase();
 
-    // 1. Verifica padrões de FONTE no título (CAMRip, WEBRip, BluRay...)
+    // 1. Verifica padrões de fonte no título
     for (const { regex, days } of SOURCE_PATTERNS) {
       if (regex.test(titleLower)) {
-        if (days === null) return null; // qualidade final
+        if (days === null) return null;
         return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
       }
     }
 
-    // 2. Fallback: se qualidade é 1080p ou 2160p, provavelmente é final
+    // 2. Fallback pela qualidade informada
     if (qualidade) {
       const q = qualidade.toLowerCase();
       if (q === '2160p' || q === '4k') return null;
-      if (q === '1080p') return null; // 1080p sem CAM → provavelmente decente
+      if (q === '1080p') return null;
     }
 
-    // 3. Qualidade desconhecida: 7 dias (conservador)
+    // 3. Desconhecido
     return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   }
 
-  /**
-   * Ciclo principal: busca títulos vencidos e re-scrapeia.
-   */
   private async runRescrapeCycle(): Promise<void> {
     if (this.isRunning) {
       logger.debug('Ciclo de re-scrape já em andamento, pulando...');
@@ -162,7 +147,6 @@ export class RescrapeService {
     const startTime = Date.now();
 
     try {
-      // 1. Busca títulos que precisam de re-scrape
       const dueTitles = await this.findTitlesDueForRescrape();
 
       if (dueTitles.length === 0) {
@@ -174,7 +158,6 @@ export class RescrapeService {
         titles: dueTitles.map(t => `${t.imdbId} (${t.type})`),
       });
 
-      // 2. Processa cada título (limitado a MAX_RESCRAPE_PER_BATCH)
       const batch = dueTitles.slice(0, MAX_RESCRAPE_PER_BATCH);
       let newTorrentsFound = 0;
 
@@ -189,11 +172,9 @@ export class RescrapeService {
           logger.error(`Erro no re-scrape de ${title.imdbId}`, {
             error: err instanceof Error ? err.message : 'Erro',
           });
-          // Atualiza rescrapeAt mesmo com erro (tenta de novo depois)
           await this.updateRescrapeAt(title.imdbId, new Date(Date.now() + 6 * 60 * 60 * 1000));
         }
 
-        // Delay entre títulos (evita flood)
         if (i < batch.length - 1) {
           await this.sleep(DELAY_BETWEEN_RESCRAPES);
         }
@@ -207,7 +188,6 @@ export class RescrapeService {
       });
 
       this.stats.lastRun = new Date().toISOString();
-
     } catch (error) {
       logger.error('Erro no ciclo de re-scrape', {
         error: error instanceof Error ? error.message : 'Erro',
@@ -217,9 +197,6 @@ export class RescrapeService {
     }
   }
 
-  /**
-   * Busca IMDB IDs únicos com rescrapeAt vencido.
-   */
   private async findTitlesDueForRescrape(): Promise<Array<{ imdbId: string; type: string }>> {
     const now = new Date();
     const dueTorrents = await Torrent.findAll({
@@ -231,7 +208,6 @@ export class RescrapeService {
       raw: true,
     });
 
-    // Deduplica por imdbId
     const seen = new Set<string>();
     const result: Array<{ imdbId: string; type: string }> = [];
     for (const t of dueTorrents as any[]) {
@@ -244,14 +220,9 @@ export class RescrapeService {
     return result;
   }
 
-  /**
-   * Re-scrapeia um título específico.
-   * Retorna o número de novos torrents encontrados.
-   */
   private async rescrapeTitle(imdbId: string, type: string): Promise<number> {
     logger.info(`🔍 Re-scraping: ${imdbId} (${type})`);
 
-    // Busca dados TMDB
     const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
     if (!imdbTitles || !imdbTitles.originalTitle) {
       logger.warn(`Sem títulos TMDB para ${imdbId}, atualizando rescrapeAt`);
@@ -261,14 +232,12 @@ export class RescrapeService {
 
     const searchQuery = imdbTitles.portugueseTitleRaw || imdbTitles.portugueseTitle || imdbTitles.originalTitle;
 
-    // Chama os scrapers com ambos prioritários e fallbacks
-    const resultsPriority = await this.torrentScraper.searchTorrents(
+    const results = await this.torrentScraper.searchTorrents(
       searchQuery, type as 'movie' | 'series', undefined, undefined, imdbId
     );
 
-    // Merge e deduplica
     const seen = new Set<string>();
-    const allResults = [...resultsPriority].filter(r => {
+    const allResults = results.filter(r => {
       if (seen.has(r.magnet)) return false;
       seen.add(r.magnet);
       return true;
@@ -276,12 +245,10 @@ export class RescrapeService {
 
     if (allResults.length === 0) {
       logger.debug(`Nenhum resultado novo para ${imdbId}`);
-      // Atualiza rescrapeAt para +12h (tenta de novo mais tarde, pode ser timing)
       await this.updateRescrapeAt(imdbId, new Date(Date.now() + 12 * 60 * 60 * 1000));
       return 0;
     }
 
-    // Tenta salvar cada torrent via AutoMagnetService
     let newTorrents = 0;
     for (const result of allResults) {
       try {
@@ -293,9 +260,9 @@ export class RescrapeService {
           result.seeders || 0,
           result.quality,
           result.size,
-          undefined, // season (auto-detect)
-          undefined, // episode (auto-detect)
-          undefined, // infoHash (extraído do magnet pelo autoAddMagnet)
+          undefined,
+          undefined,
+          undefined,
           result.provider
         );
 
@@ -303,24 +270,19 @@ export class RescrapeService {
           newTorrents++;
           logger.info(`🆕 Novo torrent: ${result.title.substring(0, 60)} (${result.quality})`);
         }
-      } catch (err) {
-        // Continua com o próximo
+      } catch {
+        // continua com o próximo
       }
     }
 
-    // Atualiza rescrapeAt baseado na melhor qualidade/título encontrado
-    const bestResult = this.findBestResult(allResults);
-    const nextRescrape = RescrapeService.computeRescrapeAt(bestResult?.title, bestResult?.quality);
+    const best = this.findBestResult(allResults);
+    const nextRescrape = RescrapeService.computeRescrapeAt(best?.title, best?.quality);
     await this.updateRescrapeAt(imdbId, nextRescrape);
 
     logger.info(`✅ Re-scrape ${imdbId}: ${newTorrents} novos de ${allResults.length} resultados`);
-
     return newTorrents;
   }
 
-  /**
-   * Atualiza rescrapeAt para TODOS os torrents de um imdbId.
-   */
   private async updateRescrapeAt(imdbId: string, rescrapeAt: Date | null): Promise<void> {
     await Torrent.update(
       { rescrapeAt } as any,
@@ -328,39 +290,12 @@ export class RescrapeService {
     );
   }
 
-  /**
-   * Encontra o melhor resultado (título + qualidade) de uma lista.
-   * Prioriza títulos com melhor qualidade de fonte.
-   */
   private findBestResult(results: Array<{ title: string; quality?: string }>): { title: string; quality?: string } | undefined {
-    const qualityRank: Record<string, number> = {
-      '2160p': 10, '4k': 10, 'hdr': 10, 'dv': 10, 'bluray': 9,
-      '1080p': 8, 'web-dl': 7,
-      '720p': 5, 'hd': 5, 'hdtv': 4,
-      'webrip': 3, 'hdrip': 3, 'dvdscr': 2,
-      'cam': 1, 'ts': 1, 'hdts': 1, 'hdcam': 1,
-    };
-
     let best: { title: string; quality?: string } | undefined;
     let bestRank = -1;
 
     for (const r of results) {
-      const titleLower = r.title.toLowerCase();
-      let rank = 0;
-
-      // Pontua pela qualidade detectada
-      if (r.quality) {
-        const q = r.quality.toLowerCase();
-        for (const [key, score] of Object.entries(qualityRank)) {
-          if (q.includes(key) && score > rank) rank = score;
-        }
-      }
-
-      // Pontua por padrões no título (fonte)
-      for (const [key, score] of Object.entries(qualityRank)) {
-        if (titleLower.includes(key) && score > rank) rank = score;
-      }
-
+      const rank = this.getRank(r.title, r.quality);
       if (rank > bestRank) {
         bestRank = rank;
         best = r;
@@ -368,6 +303,28 @@ export class RescrapeService {
     }
 
     return best;
+  }
+
+  private getRank(title: string, quality?: string): number {
+    const titleLower = title.toLowerCase();
+    let rank = 0;
+
+    // Avalia padrões de fonte no título
+    for (const { regex, rank: ruleRank } of SOURCE_PATTERNS) {
+      if (regex.test(titleLower) && ruleRank > rank) {
+        rank = ruleRank;
+      }
+    }
+
+    // Adiciona ranking extra da qualidade informada
+    if (quality) {
+      const q = quality.toLowerCase();
+      if (QUALITY_RANK_EXTRA[q] && QUALITY_RANK_EXTRA[q] > rank) {
+        rank = QUALITY_RANK_EXTRA[q];
+      }
+    }
+
+    return rank;
   }
 
   private sleep(ms: number): Promise<void> {

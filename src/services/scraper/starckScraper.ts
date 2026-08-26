@@ -9,26 +9,18 @@ const logger = new Logger('StarckScraper');
 
 const STARCK_BASE = 'https://www.starck-oficial.com';
 
-// ── Tipos ─────────────────────────────────────────────────────────────
-
 export interface StarckTorrent {
   magnet: string;
   infoHash: string;
-  /** Título original extraído do HTML do post ("Nome Original: ...") */
   originalTitle?: string;
-  /** Ano de lançamento extraído do HTML do post ("Lançamento: 2026") */
   year?: number;
-  /** Idioma da seção onde o magnet foi encontrado (DUAL ÁUDIO, LEGENDADO, etc.) */
   language?: string;
-  /** Nome canônico extraído do magnet via parse-torrent (campo "dn") */
   canonicalName?: string;
-  /** Texto ao redor do link (ex.: "EPISÓDIO 02: 1080p") para detecção de qualidade */
   qualityHint?: string;
-  /** Temporada alvo, se fornecida e detectada na busca */
   season?: number;
+  episode?: number;
 }
 
-// ── Config do axios (igual TPB/WordPress) ─────────────────────────────
 const axiosConfig = {
   timeout: 15000,
   httpsAgent: agenteHttps,
@@ -40,38 +32,50 @@ const axiosConfig = {
   },
 };
 
-// ═══════════════════════════════════════════════════════════════════════
-//  Helpers de slug e temporada
-// ═══════════════════════════════════════════════════════════════════════
-
 function cleanSlug(slug: string): string {
-  const semData = slug.replace(/-\d{2}-\d{2}-\d{4}$/, '');
+  let decodificado = slug;
+  try {
+    decodificado = decodeURIComponent(slug);
+  } catch {}
+
+  let semData = decodificado.replace(/-\d{2}-\d{2}-\d{4}$/, '');
+
+  semData = semData.replace(
+    /([0-9a-f]{2})-([0-9a-f]{2})(?:-([0-9a-f]{2}))?/gi,
+    (match, h1, h2, h3) => {
+      const bytes = [parseInt(h1, 16), parseInt(h2, 16)];
+      if (h3) bytes.push(parseInt(h3, 16));
+
+      const isValid2 = bytes.length === 2 && bytes[0] >= 0xc0 && bytes[0] <= 0xdf && bytes[1] >= 0x80 && bytes[1] <= 0xbf;
+      const isValid3 = bytes.length === 3 && bytes[0] >= 0xe0 && bytes[0] <= 0xef && bytes[1] >= 0x80 && bytes[1] <= 0xbf && bytes[2] >= 0x80 && bytes[2] <= 0xbf;
+
+      if (isValid2 || isValid3) {
+        try {
+          return Buffer.from(bytes).toString('utf8');
+        } catch {
+          return match;
+        }
+      }
+      return match;
+    }
+  );
+
   return semData.replace(/-/g, ' ');
 }
 
 function extrairTituloBaseDoSlug(slug: string): string {
   const limpo = cleanSlug(slug);
+  const range = extrairRangeEpisodios(limpo);
   const normalizado = normalizarTexto(limpo);
-  
-  const semTemporada = normalizado
+
+  // Remove temporada e ano, mantendo apenas o título base
+  return normalizado
     .replace(/\b\d+\s*(?:a|ª|º|°)?\s*temporad[ao]?\b/gi, '')
     .replace(/\btemporad[ao]?\s*\d+\b/gi, '')
-    .replace(/\bseason\s*\d+\b/gi, '');
-  
-  const semAno = semTemporada.replace(/\b(19|20)\d{2}\b/g, '');
-  
-  return semAno.trim();
+    .replace(/\bseason\s*\d+\b/gi, '')
+    .replace(/\b(19|20)\d{2}\b/g, '')
+    .trim();
 }
-
-function extrairTemporadaDoSlug(slug: string): number | undefined {
-  const limpo = cleanSlug(slug);
-  const match = limpo.match(/(\d+)\s*temporad[ao]?/i);
-  return match ? parseInt(match[1], 10) : undefined;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PASSO 1: Busca → lista de URLs de posts
-// ═══════════════════════════════════════════════════════════════════════
 
 interface SearchResultItem {
   title: string;
@@ -96,17 +100,18 @@ async function searchStarckLinks(
     $('a[href*="/catalog/"]').each((_i, el) => {
       const href = $(el).attr('href');
       if (!href) return;
-      
+
       const fullUrl = href.startsWith('http') ? href : `${STARCK_BASE}${href}`;
-      
       if (itemsMap.has(fullUrl)) return;
-      
+
       const slug = fullUrl.split('/').filter(Boolean).pop() || '';
       const slugTitle = extrairTituloBaseDoSlug(slug);
-      const season = extrairTemporadaDoSlug(slug) || targetSeason;
-      
+      // Usa extrairRangeEpisodios para temporada
+      const range = extrairRangeEpisodios(cleanSlug(slug));
+      const season = range?.season;
+
       if (!slugTitle || slugTitle.length < 3) return;
-      
+
       itemsMap.set(fullUrl, {
         title: $(el).text().trim() || slugTitle,
         postUrl: fullUrl,
@@ -128,8 +133,6 @@ async function searchStarckLinks(
       );
       if (phrase) frases.add(phrase);
     }
-
-    logger.debug(`Starck: frases possíveis para filtro: [${[...frases].join(' | ')}]`);
 
     const filtered = results.filter(item => {
       const titleNormalizado = normalizarTexto(item.slugTitle);
@@ -155,10 +158,6 @@ async function searchStarckLinks(
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Extrai metadados e magnets da página do post
-// ═══════════════════════════════════════════════════════════════════════
-
 interface PostMetadata {
   originalTitle?: string;
   year?: number;
@@ -170,7 +169,6 @@ interface PostMetadata {
 function extractPostMetadata($: any): PostMetadata {
   const result: PostMetadata = {};
 
-  // Percorre os parágrafos dentro de .post-description
   $('.post-description p').each((_i: any, p: any) => {
     const spans = $(p).find('span');
     if (spans.length >= 2) {
@@ -189,13 +187,11 @@ function extractPostMetadata($: any): PostMetadata {
     }
   });
 
-  // Se não encontrou qualidade nos metadados, tenta a classe sl-quality
   if (!result.quality) {
     const q = $('.sl-quality').first().text().trim();
     if (q) result.quality = q;
   }
 
-  // Determina language a partir do título se não veio dos metadados
   if (!result.language) {
     const h1 = $('h1').first().text().toLowerCase();
     if (h1.includes('dual áudio') || h1.includes('dual audio')) result.language = 'Dual Áudio';
@@ -207,25 +203,43 @@ function extractPostMetadata($: any): PostMetadata {
   return result;
 }
 
-async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
-  const rawMagnets: { magnet: string; qualityHint: string }[] = [];
+function linkEhDaSecaoDual($: any, el: any): boolean {
+  const html = $('body').html() || '';
+  const legendadoPos = html.search(/VERS[ÃA]O\s+LEGENDAD[OA]/i);
+  if (legendadoPos === -1) return true;
 
-  // Coleta todos os links filmedl.com e decodifica o id
+  const linkHtml = $(el).toString();
+  const linkPos = html.indexOf(linkHtml);
+  if (linkPos === -1) return false;
+
+  return linkPos < legendadoPos;
+}
+
+async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
+  const rawMagnets: { magnet: string; qualityHint: string; episode?: number }[] = [];
+
   $('a[href*="filmedl.com"]').each((_i: any, el: any) => {
     const href = $(el).attr('href') || '';
     const idMatch = href.match(/[?&]id=([^&]+)/i);
     if (!idMatch) return;
+
+    if (!linkEhDaSecaoDual($, el)) return;
+
     try {
       const decoded = decodeURIComponent(idMatch[1]);
       const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
       if (!magnet.startsWith('magnet:?')) return;
       const parentP = $(el).closest('p');
       const parentText = parentP.text().trim() || '';
-      rawMagnets.push({ magnet, qualityHint: parentText });
+
+      // Extrai episódio usando extrairRangeEpisodios
+      const range = extrairRangeEpisodios(parentText);
+      const episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
+
+      rawMagnets.push({ magnet, qualityHint: parentText, episode });
     } catch {}
   });
 
-  // Analisa cada magnet
   const analyzed = await Promise.all(
     rawMagnets.map(async (item) => {
       try {
@@ -236,6 +250,7 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
           infoHash: dados.infoHash.toLowerCase(),
           canonicalName: dados.nome || undefined,
           qualityHint: item.qualityHint,
+          episode: item.episode,
         };
       } catch {
         return null;
@@ -243,26 +258,31 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
     })
   );
 
-  // Remove nulos e duplicados por infoHash
   const seen = new Set<string>();
   const results: StarckTorrent[] = [];
   for (const item of analyzed) {
     if (!item || seen.has(item.infoHash)) continue;
     seen.add(item.infoHash);
+
+    // Se episódio não foi detectado pelo contexto, tenta pelo canonicalName
+    let episode = item.episode;
+    if (episode === undefined && item.canonicalName) {
+      const range = extrairRangeEpisodios(item.canonicalName);
+      episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
+    }
+
     results.push({
       magnet: item.magnet,
       infoHash: item.infoHash,
       canonicalName: item.canonicalName,
       qualityHint: item.qualityHint,
+      episode,
+      language: 'Dual Áudio', // filtro de seção Dual
     });
   }
 
   return results;
 }
-
-// ═══════════════════════════════════════════════════════════════════════
-//  API PÚBLICA
-// ═══════════════════════════════════════════════════════════════════════
 
 export async function searchStarck(
   query: string,
@@ -272,10 +292,7 @@ export async function searchStarck(
 ): Promise<StarckTorrent[]> {
   const startTime = Date.now();
 
-  const queriesParaBusca = searchQueries && searchQueries.length > 0
-    ? searchQueries
-    : [query];
-
+  const queriesParaBusca = searchQueries && searchQueries.length > 0 ? searchQueries : [query];
   const allQueries = [...new Set([query, ...(searchQueries || [])])];
 
   const allResults: StarckTorrent[] = [];
@@ -284,12 +301,8 @@ export async function searchStarck(
   for (const q of queriesParaBusca) {
     logger.debug(`Starck: tentando busca com query "${q}"`);
     const links = await searchStarckLinks(q, allQueries, targetSeason);
-    if (links.length === 0) {
-      logger.debug(`Starck: query "${q}" não retornou links, tentando próxima...`);
-      continue;
-    }
+    if (links.length === 0) continue;
 
-    // Processa cada link, extrai metadados e magnets
     for (const link of links) {
       try {
         const res = await axios.get(link.postUrl, axiosConfig);
@@ -301,16 +314,12 @@ export async function searchStarck(
           if (seenInfoHashes.has(magnet.infoHash)) continue;
           seenInfoHashes.add(magnet.infoHash);
 
-          // Define season, language, originalTitle, year, qualityHint
-          if (targetSeason && magnet.season === undefined) {
-            magnet.season = targetSeason;
-          }
-          magnet.language = metadata.language || magnet.language;
+          // Define season (se não veio do slug, usa targetSeason)
+          if (magnet.season === undefined && targetSeason) magnet.season = targetSeason;
+          magnet.language = magnet.language || metadata.language;
           magnet.originalTitle = metadata.originalTitle;
           magnet.year = metadata.year;
-          if (metadata.quality && !magnet.qualityHint) {
-            magnet.qualityHint = metadata.quality;
-          }
+          if (metadata.quality && !magnet.qualityHint) magnet.qualityHint = metadata.quality;
 
           allResults.push(magnet);
         }
@@ -319,14 +328,10 @@ export async function searchStarck(
       }
     }
 
-    if (allResults.length > 0) {
-      logger.debug(`Starck: query "${q}" retornou ${allResults.length} magnets. Encerrando busca.`);
-      break;
-    }
+    if (allResults.length > 0) break;
   }
 
   const duration = Date.now() - startTime;
   logger.info(`Starck: ${allResults.length} magnets em ${duration}ms para "${query.substring(0, 50)}"`);
-
   return allResults;
 }
