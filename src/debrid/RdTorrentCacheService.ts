@@ -1,7 +1,6 @@
 import { TorboxService } from './RealDebridService.js';
 import { TorboxTorrentInfo } from '../types/index.js';
 import { Logger } from '../utils/logger.js';
-import { torrentCacheService, streamCacheService } from './AdvancedCacheService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
 
 export interface CachedTorrent {
@@ -18,23 +17,40 @@ export interface CachedStreamLink {
 
 export class RdTorrentCacheService {
   private readonly logger: Logger;
-  
-  // Camada 1: Hash do magnet -> Informações do torrent no RD (30 dias)
+
+  // Cache de torrent: magnetHash + apiKey -> informações do torrent no Torbox
   private readonly torrentCache: Map<string, CachedTorrent> = new Map();
-  
-  // Camada 2: Torrent ID + Season + Episode -> Stream link (24 horas)
+
+  // Cache de stream link: torrentId + season + episode -> stream link
   private readonly streamLinkCache: Map<string, CachedStreamLink> = new Map();
-  
+
   // TTLs otimizados
-  private readonly TORRENT_CACHE_TTL = 30 * 24 * 60 * 60 * 1000;
-  private readonly STREAM_LINK_TTL = 24 * 60 * 60 * 1000;
-  
+  private readonly TORRENT_CACHE_TTL = 6 * 60 * 60 * 1000; // 6 horas
+  private readonly STREAM_LINK_TTL = 3 * 60 * 60 * 1000;   // 3 horas
+
+  // Limites de tamanho para evitar crescimento descontrolado
+  private readonly MAX_TORRENT_CACHE_SIZE = 5000;
+  private readonly MAX_STREAM_LINK_CACHE_SIZE = 10000;
+
   // Lock por magnet hash para evitar chamadas concorrentes
   private readonly processingLocks: Map<string, Promise<any>> = new Map();
 
+  // Timer de limpeza automática
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly CLEANUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutos
+
   constructor() {
     this.logger = new Logger('RdTorrentCacheService');
+    this.startCleanupTimer();
     this.logger.debug('RdTorrentCacheService ready');
+  }
+
+  private startCleanupTimer(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      this.cleanupExpiredCache();
+    }, this.CLEANUP_INTERVAL_MS);
+    if (this.cleanupTimer.unref) this.cleanupTimer.unref();
   }
 
   // Gera chave para cache de torrent
@@ -60,57 +76,35 @@ export class RdTorrentCacheService {
     return Date.now() - cachedAt > ttl;
   }
 
-  // Obtém torrent ID do cache ou busca no RD com cache avançado
+  // Atualiza métricas do cache
+  private updateCacheMetrics(): void {
+    metricsService.setCacheSize(this.torrentCache.size + this.streamLinkCache.size);
+  }
+
+  // Obtém torrent ID do cache ou busca no Torbox
   async getTorrentId(
-    magnetHash: string, 
-    apiKey: string, 
+    magnetHash: string,
+    apiKey: string,
     torboxService: TorboxService
   ): Promise<{ torrentId: string | null; status: string; fromCache: boolean }> {
     const cacheKey = this.getTorrentCacheKey(magnetHash, apiKey);
     const lockKey = this.getLockKey(magnetHash, apiKey);
 
-    // Verificar lock existente
     const existingLock = this.processingLocks.get(lockKey);
     if (existingLock) {
       this.logger.debug('Lock existente encontrado', { magnetHash, lockKey });
       return existingLock;
     }
 
-    // Criar nova promise com lock
     const processPromise = (async () => {
       try {
-        // Tenta obter do cache avançado primeiro (stale-while-revalidate)
-        const advancedCacheKey = `torrent:${magnetHash}:${apiKey.substring(0, 8)}`;
-        const cachedFromAdvanced = await torrentCacheService.get<CachedTorrent>(advancedCacheKey);
-        
-        if (cachedFromAdvanced) {
-          // Verifica se ainda é válido
-          if (!this.isCacheExpired(cachedFromAdvanced.cachedAt, this.TORRENT_CACHE_TTL)) {
-            this.logger.debug('Cache avançado de torrent HIT', { 
-              magnetHash, 
-              torrentId: cachedFromAdvanced.torrentId,
-              status: cachedFromAdvanced.status
-            });
-            return {
-              torrentId: cachedFromAdvanced.torrentId,
-              status: cachedFromAdvanced.status,
-              fromCache: true
-            };
-          }
-        }
-
-        // Cache antigo (backward compatibility)
         const cachedTorrent = this.torrentCache.get(cacheKey);
         if (cachedTorrent && !this.isCacheExpired(cachedTorrent.cachedAt, this.TORRENT_CACHE_TTL)) {
-          this.logger.debug('Cache de torrent HIT', { 
-            magnetHash, 
+          this.logger.debug('Cache de torrent HIT', {
+            magnetHash,
             torrentId: cachedTorrent.torrentId,
             status: cachedTorrent.status
           });
-          
-          // Atualiza cache avançado em background
-          this.updateAdvancedCacheInBackground(advancedCacheKey, cachedTorrent);
-          
           return {
             torrentId: cachedTorrent.torrentId,
             status: cachedTorrent.status,
@@ -119,32 +113,22 @@ export class RdTorrentCacheService {
         }
 
         this.logger.debug('Cache de torrent MISS', { magnetHash });
-        
-        // Buscar no RD
+
         const existingTorrent = await torboxService.findExistingTorrent(magnetHash, apiKey);
-        
+
         if (existingTorrent && existingTorrent.id) {
           const tid = String(existingTorrent.id);
-          // Salvar no cache avançado
-          const cachedTorrent: CachedTorrent = {
+          const cachedData: CachedTorrent = {
             torrentId: tid,
             status: existingTorrent.download_state,
             cachedAt: Date.now(),
             apiKeyPrefix: apiKey.substring(0, 8)
           };
 
-          // Salva em ambos os caches
-          await torrentCacheService.set(advancedCacheKey, cachedTorrent, {
-            ttl: this.TORRENT_CACHE_TTL,
-            staleWhileRevalidate: 60 * 60 * 1000 // 1 hora para revalidação
-          });
+          this.setTorrentCache(cacheKey, cachedData);
+          this.updateCacheMetrics();
 
-          this.torrentCache.set(cacheKey, cachedTorrent);
-
-          // Atualiza métricas
-          metricsService.setCacheSize(this.torrentCache.size);
-
-          this.logger.info('Torrent salvo no cache avançado', {
+          this.logger.info('Torrent salvo no cache', {
             magnetHash,
             torrentId: tid,
             status: existingTorrent.download_state
@@ -157,28 +141,24 @@ export class RdTorrentCacheService {
           };
         }
 
-        // Torrent não encontrado no Torbox
         return {
           torrentId: null,
           status: 'not_found',
           fromCache: false
         };
-        
       } finally {
-        // Remover lock após processamento
         this.processingLocks.delete(lockKey);
         this.logger.debug('Lock removido', { magnetHash, lockKey });
       }
     })();
 
-    // Armazenar lock
     this.processingLocks.set(lockKey, processPromise);
     this.logger.debug('Novo lock criado', { magnetHash, lockKey });
-    
+
     return processPromise;
   }
 
-  // Obtém stream link do cache ou busca no RD com cache avançado
+  // Obtém stream link do cache ou busca no Torbox
   async getStreamLink(
     torrentId: string,
     apiKey: string,
@@ -186,131 +166,73 @@ export class RdTorrentCacheService {
     episode?: number,
     torboxService?: TorboxService,
     quality?: string,
-    cachedInfo?: TorboxTorrentInfo  // evita 2ª chamada à API
+    cachedInfo?: TorboxTorrentInfo
   ): Promise<{ streamLink: string | null; fromCache: boolean }> {
     const cacheKey = this.getStreamLinkCacheKey(torrentId, season, episode);
-    const advancedCacheKey = `stream:${torrentId}:${season || 'all'}:${episode || 'all'}`;
-    
-    // Tenta obter do cache avançado primeiro
-    const cachedFromAdvanced = await streamCacheService.get<CachedStreamLink>(advancedCacheKey);
-    
-    if (cachedFromAdvanced) {
-      // Verifica se ainda é válido
-      if (!this.isCacheExpired(cachedFromAdvanced.cachedAt, this.STREAM_LINK_TTL)) {
-        this.logger.debug('Cache avançado de stream link HIT', { 
-          torrentId, 
-          season, 
-          episode,
-          streamLink: cachedFromAdvanced.streamLink.substring(0, 50) + '...'
-        });
-        return {
-          streamLink: cachedFromAdvanced.streamLink,
-          fromCache: true
-        };
-      }
-    }
-    
-    // Cache antigo (backward compatibility)
+
     const cachedStream = this.streamLinkCache.get(cacheKey);
     if (cachedStream && !this.isCacheExpired(cachedStream.cachedAt, this.STREAM_LINK_TTL)) {
-      this.logger.debug('Cache de stream link HIT', { 
-        torrentId, 
-        season, 
+      this.logger.debug('Cache de stream link HIT', {
+        torrentId,
+        season,
         episode,
         streamLink: cachedStream.streamLink.substring(0, 50) + '...'
       });
-      
-      // Atualiza cache avançado em background
-      this.updateAdvancedCacheInBackground(advancedCacheKey, cachedStream);
-      
       return {
         streamLink: cachedStream.streamLink,
         fromCache: true
       };
     }
-    
+
     this.logger.debug('Cache de stream link MISS', { torrentId, season, episode });
-    
-    // Se não tem rdService ou stream não está no cache, retorna null
+
     if (!torboxService) {
       return { streamLink: null, fromCache: false };
     }
-    
-    // Buscar no RD
-    const streamLink = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality, cachedInfo);
-    
+
+    const streamLink = await torboxService.getStreamLinkForTorrent(
+      torrentId,
+      apiKey,
+      season,
+      episode,
+      quality,
+      cachedInfo
+    );
+
     if (streamLink) {
-      // Salvar no cache avançado
-      const cachedStream: CachedStreamLink = {
+      const cachedData: CachedStreamLink = {
         streamLink,
         cachedAt: Date.now()
       };
-      
-      // Salva em ambos os caches
-      await streamCacheService.set(advancedCacheKey, cachedStream, {
-        ttl: this.STREAM_LINK_TTL,
-        staleWhileRevalidate: 30 * 60 * 1000 // 30 minutos para revalidação
-      });
-      
-      this.streamLinkCache.set(cacheKey, cachedStream);
-      
-      // Atualiza métricas
-      metricsService.setCacheSize(this.streamLinkCache.size);
-      
-      this.logger.info('Stream link salvo no cache avançado', {
+
+      this.setStreamLinkCache(cacheKey, cachedData);
+      this.updateCacheMetrics();
+
+      this.logger.info('Stream link salvo no cache', {
         torrentId,
         season,
         episode,
         streamLink: streamLink.substring(0, 50) + '...'
       });
     }
-    
+
     return {
       streamLink,
       fromCache: false
     };
   }
 
-  // Atualiza cache avançado em background (stale-while-revalidate)
-  private async updateAdvancedCacheInBackground(key: string, data: any): Promise<void> {
-    // Executa em background sem bloquear
-    setImmediate(async () => {
-      try {
-        if (key.startsWith('torrent:')) {
-          await torrentCacheService.set(key, data, {
-            ttl: this.TORRENT_CACHE_TTL,
-            staleWhileRevalidate: 60 * 60 * 1000
-          });
-        } else if (key.startsWith('stream:')) {
-          await streamCacheService.set(key, data, {
-            ttl: this.STREAM_LINK_TTL,
-            staleWhileRevalidate: 30 * 60 * 1000
-          });
-        }
-        this.logger.debug('Cache avançado atualizado em background', { key });
-      } catch (error) {
-        this.logger.debug('Erro ao atualizar cache avançado em background', { 
-          key, 
-          error: error instanceof Error ? error.message : 'Erro desconhecido' 
-        });
-      }
-    });
-  }
-
   // Atualiza status de um torrent no cache
   updateTorrentStatus(magnetHash: string, apiKey: string, status: string): void {
     const cacheKey = this.getTorrentCacheKey(magnetHash, apiKey);
-    const advancedCacheKey = `torrent:${magnetHash}:${apiKey.substring(0, 8)}`;
     const cachedTorrent = this.torrentCache.get(cacheKey);
-    
+
     if (cachedTorrent) {
       cachedTorrent.status = status;
       cachedTorrent.cachedAt = Date.now();
       this.torrentCache.set(cacheKey, cachedTorrent);
-      
-      // Atualiza cache avançado também
-      this.updateAdvancedCacheInBackground(advancedCacheKey, cachedTorrent);
-      
+      this.updateCacheMetrics();
+
       this.logger.debug('Status do torrent atualizado no cache', {
         magnetHash,
         status
@@ -318,29 +240,23 @@ export class RdTorrentCacheService {
     }
   }
 
-  // Remove torrent do cache (quando deletado do RD)
+  // Remove torrent do cache (quando deletado do Torbox)
   invalidateTorrent(magnetHash: string, apiKey: string): void {
     const cacheKey = this.getTorrentCacheKey(magnetHash, apiKey);
-    const advancedCacheKey = `torrent:${magnetHash}:${apiKey.substring(0, 8)}`;
     const torrent = this.torrentCache.get(cacheKey);
-    
+
     if (torrent) {
-      // Remover do cache avançado
-      torrentCacheService.delete(advancedCacheKey);
-      
-      // Remover torrent e todos seus stream links
       this.torrentCache.delete(cacheKey);
-      
-      // Remover todos os stream links deste torrent
+
       const streamKeyPrefix = `stream:${torrent.torrentId}:`;
       for (const [key] of this.streamLinkCache) {
         if (key.startsWith(streamKeyPrefix)) {
           this.streamLinkCache.delete(key);
-          streamCacheService.delete(`stream:${torrent.torrentId}:${key.split(':').slice(2).join(':')}`);
         }
       }
-      
-      this.logger.info('Torrent invalidado do cache avançado', {
+
+      this.updateCacheMetrics();
+      this.logger.info('Torrent invalidado do cache', {
         magnetHash,
         torrentId: torrent.torrentId
       });
@@ -352,52 +268,64 @@ export class RdTorrentCacheService {
     const now = Date.now();
     let torrentsRemoved = 0;
     let streamsRemoved = 0;
-    
-    // Limpar torrents expirados
+
     for (const [key, cached] of this.torrentCache) {
       if (this.isCacheExpired(cached.cachedAt, this.TORRENT_CACHE_TTL)) {
         this.torrentCache.delete(key);
         torrentsRemoved++;
       }
     }
-    
-    // Limpar stream links expirados
+
     for (const [key, cached] of this.streamLinkCache) {
       if (this.isCacheExpired(cached.cachedAt, this.STREAM_LINK_TTL)) {
         this.streamLinkCache.delete(key);
         streamsRemoved++;
       }
     }
-    
+
     if (torrentsRemoved > 0 || streamsRemoved > 0) {
       this.logger.debug('Cache expirado limpo', {
         torrentsRemoved,
         streamsRemoved
       });
-      metricsService.setCacheSize(this.torrentCache.size + this.streamLinkCache.size);
+      this.updateCacheMetrics();
     }
+  }
+
+  // Métodos privados para inserção com controle de tamanho
+  private setTorrentCache(key: string, data: CachedTorrent): void {
+    if (this.torrentCache.size >= this.MAX_TORRENT_CACHE_SIZE) {
+      const firstKey = this.torrentCache.keys().next().value;
+      if (firstKey) this.torrentCache.delete(firstKey);
+    }
+    this.torrentCache.set(key, data);
+  }
+
+  private setStreamLinkCache(key: string, data: CachedStreamLink): void {
+    if (this.streamLinkCache.size >= this.MAX_STREAM_LINK_CACHE_SIZE) {
+      const firstKey = this.streamLinkCache.keys().next().value;
+      if (firstKey) this.streamLinkCache.delete(firstKey);
+    }
+    this.streamLinkCache.set(key, data);
   }
 
   // Estatísticas do cache
   getStats() {
     return {
-      version: '1.1.0',
+      version: '2.0.0',
       torrentCacheSize: this.torrentCache.size,
       streamLinkCacheSize: this.streamLinkCache.size,
       activeLocks: this.processingLocks.size,
       ttlConfig: {
-        torrentCache: '30 dias',
-        streamLinkCache: '24 horas'
+        torrentCache: `${this.TORRENT_CACHE_TTL / 3600000} horas`,
+        streamLinkCache: `${this.STREAM_LINK_TTL / 3600000} horas`
       },
       features: [
-        'Cache inteligente de 2 camadas',
-        'Lock por magnet hash para evitar duplicatas',
-        'Cache compartilhado por hash (diferentes usuários)',
-        'Invalidacao automatica ao deletar torrent',
-        'Limpeza automatica de cache expirado',
-        'Cache avançado com stale-while-revalidate',
-        'LRU automático para gerenciamento de memória',
-        'Métricas integradas com Prometheus'
+        'Cache local com LRU simples',
+        'Lock por magnet hash',
+        'Limpeza automática de expirados',
+        'Limites de tamanho configuráveis',
+        'Métricas integradas'
       ]
     };
   }

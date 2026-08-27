@@ -17,6 +17,8 @@ export interface StarckTorrent {
   language?: string;
   canonicalName?: string;
   qualityHint?: string;
+  quality?: string;
+  size?: string;
   season?: number;
   episode?: number;
 }
@@ -213,8 +215,60 @@ function linkEhDaSecaoDual($: any, el: any): boolean {
   return linkPos < legendadoPos;
 }
 
-async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
-  const rawMagnets: { magnet: string; qualityHint: string; episode?: number }[] = [];
+/**
+ * Extrai metadados de um botão .buttons-content
+ */
+function extrairMetadadosDoBotao($: any, linkEl: any): {
+  idioma?: string;
+  formato?: string;
+  qualidade?: string;
+  tamanho?: string;
+} {
+  const container = $(linkEl).closest('.buttons-content');
+  if (!container.length) return {};
+
+  const textoSpan = container.find('.text').first().text().trim();
+  if (!textoSpan) return {};
+
+  // Divide as linhas
+  const linhas = textoSpan.split('\n').map((s: string) => s.trim()).filter(Boolean);
+  if (linhas.length < 3) return {};
+
+  // Primeira linha: "Dual ÁudioMKV" ou "Dual ÁudioHDR"
+  const primeiraLinha = linhas[0];
+  const idiomaMatch = primeiraLinha.match(/(Dual Áudio|Dublado|Legendado|Nacional)/i);
+  const idioma = idiomaMatch ? idiomaMatch[1] : undefined;
+
+  // Formato: geralmente após o idioma, sem espaço
+  let formato: string | undefined;
+  if (idiomaMatch && idiomaMatch[0]) {
+    const restante = primeiraLinha.substring(idiomaMatch[0].length);
+    if (restante) formato = restante.trim();
+  }
+
+  // Terceira linha: "1080p (3.12 GB)" ou "2160p (28.05 GB)"
+  const terceiraLinha = linhas[2];
+  const qualidadeMatch = terceiraLinha.match(/(\d{3,4}p|4K|HD)/i);
+  const tamanhoMatch = terceiraLinha.match(/\(([\d.]+)\s*GB\)/i);
+
+  return {
+    idioma,
+    formato,
+    qualidade: qualidadeMatch ? qualidadeMatch[1] : undefined,
+    tamanho: tamanhoMatch ? `${tamanhoMatch[1]} GB` : undefined,
+  };
+}
+
+async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMetadata): Promise<StarckTorrent[]> {
+  const rawMagnets: {
+    magnet: string;
+    qualityHint: string;
+    quality?: string;
+    size?: string;
+    language?: string;
+    format?: string;
+    episode?: number;
+  }[] = [];
 
   $('a[href*="filmedl.com"]').each((_i: any, el: any) => {
     const href = $(el).attr('href') || '';
@@ -227,29 +281,52 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
       const decoded = decodeURIComponent(idMatch[1]);
       const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
       if (!magnet.startsWith('magnet:?')) return;
+
+      const botaoMetadados = extrairMetadadosDoBotao($, el);
+
       const parentP = $(el).closest('p');
       const parentText = parentP.text().trim() || '';
 
       const range = extrairRangeEpisodios(parentText);
       const episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
 
-      rawMagnets.push({ magnet, qualityHint: parentText, episode });
-    } catch {}
+      rawMagnets.push({
+        magnet,
+        qualityHint: parentText,
+        quality: botaoMetadados.qualidade,
+        size: botaoMetadados.tamanho,
+        language: botaoMetadados.idioma,
+        format: botaoMetadados.formato,
+        episode,
+      });
+    } catch (err) {
+      logger.warn('Starck: erro ao decodificar magnet', { error: (err as Error).message });
+    }
   });
+
+  logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalLinks=${rawMagnets.length}`);
 
   const analyzed = await Promise.all(
     rawMagnets.map(async (item) => {
       try {
         const dados = await analisarMagnet(item.magnet);
-        if (!dados || !dados.infoHash) return null;
+        if (!dados || !dados.infoHash) {
+          logger.warn('Starck decode | magnet sem infoHash', { magnet: item.magnet.substring(0, 60) });
+          return null;
+        }
         return {
           magnet: item.magnet,
           infoHash: dados.infoHash.toLowerCase(),
           canonicalName: dados.nome || undefined,
           qualityHint: item.qualityHint,
+          quality: item.quality,
+          size: item.size,
+          language: item.language,
+          format: item.format,
           episode: item.episode,
         };
-      } catch {
+      } catch (err) {
+        logger.warn('Starck decode | falha ao analisar magnet', { error: (err as Error).message });
         return null;
       }
     })
@@ -267,16 +344,31 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
       episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
     }
 
+    // Se o magnet não tem nome (dn), monta a partir de metadados da página
+    if (!item.canonicalName) {
+      const tituloBase = metadata.originalTitle || postTitle;
+      const partes = [
+        tituloBase,
+        item.language || metadata.language,
+        item.quality || item.qualityHint,
+        item.size,
+      ].filter(Boolean);
+      item.canonicalName = partes.join(' ');
+    }
+
     results.push({
       magnet: item.magnet,
       infoHash: item.infoHash,
       canonicalName: item.canonicalName,
       qualityHint: item.qualityHint,
+      quality: item.quality,
+      size: item.size,
+      language: item.language || 'Dual Áudio',
       episode,
-      language: 'Dual Áudio',
     });
   }
 
+  logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
   return results;
 }
 
@@ -308,7 +400,7 @@ export async function searchStarck(
         const res = await axios.get(link.postUrl, axiosConfig);
         const $ = cheerio.load(res.data);
         const metadata = extractPostMetadata($);
-        const magnets = await decodeBase64Magnets($);
+        const magnets = await decodeBase64Magnets($, link.title, metadata);
 
         for (const magnet of magnets) {
           if (seenInfoHashes.has(magnet.infoHash)) continue;
@@ -319,6 +411,7 @@ export async function searchStarck(
           magnet.originalTitle = metadata.originalTitle;
           magnet.year = metadata.year;
           if (metadata.quality && !magnet.qualityHint) magnet.qualityHint = metadata.quality;
+          if (!magnet.size && metadata.size) magnet.size = metadata.size;
 
           allResults.push(magnet);
         }

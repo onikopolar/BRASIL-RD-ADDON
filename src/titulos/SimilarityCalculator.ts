@@ -2,17 +2,12 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-
-const CACHE_CLEANUP_INTERVAL = 10 * 60 * 1000;
+import { normalizarTexto } from './TechnicalWords.js';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
   private readonly tmdbScraper: ImdbScraperService | null;
   private readonly languageDetector: LanguageDetector;
-
-  private readonly tmdbCache = new Map<string, { data: ImdbTitles; timestamp: number }>();
-  private readonly cacheTTL = 5 * 60 * 1000;
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
   private static instance: SimilarityCalculator;
 
@@ -27,20 +22,6 @@ export class SimilarityCalculator {
     this.logger = new Logger('SimilarityCalculator');
     this.tmdbScraper = useTmdbScraper ? ImdbScraperService.getInstance() : null;
     this.languageDetector = LanguageDetector.getInstance();
-    this.startCacheCleanup();
-  }
-
-  private startCacheCleanup(): void {
-    if (this.cleanupTimer) return;
-    this.cleanupTimer = setInterval(() => {
-      const now = Date.now();
-      for (const [key, entry] of this.tmdbCache.entries()) {
-        if (now - entry.timestamp > this.cacheTTL) {
-          this.tmdbCache.delete(key);
-        }
-      }
-    }, CACHE_CLEANUP_INTERVAL);
-    this.cleanupTimer.unref?.();
   }
 
   async smartTitleContainsCheck(
@@ -73,15 +54,8 @@ export class SimilarityCalculator {
     if (!movieInfo && this.tmdbScraper) {
       try {
         const season = _torrentMetadata?.season;
-        const cacheKey = season ? `tmdb-${imdbId}:s${season}` : `tmdb-${imdbId}`;
-        const cached = this.tmdbCache.get(cacheKey);
-        let tmdbData: ImdbTitles;
-        if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-          tmdbData = cached.data;
-        } else {
-          tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId, season);
-          this.tmdbCache.set(cacheKey, { data: tmdbData, timestamp: Date.now() });
-        }
+        const tmdbData = await this.tmdbScraper.getTitlesFromImdbId(imdbId, season);
+
         movieInfo = {
           portugueseTitle: tmdbData.portugueseTitle,
           originalTitle: tmdbData.originalTitle,
@@ -222,8 +196,7 @@ export class SimilarityCalculator {
   }
 
   private tokenizar(texto: string): string[] {
-    const normalizado = this.normalizarParaComparacao(texto);
-    return normalizado.split(' ').filter(w => w.length > 0);
+    return normalizarTexto(texto).split(' ').filter(w => w.length > 0);
   }
 
   private calcularLCS(a: string, b: string): number {
@@ -330,16 +303,6 @@ export class SimilarityCalculator {
     } else {
       return { passou: false, motivo: `Ordem das palavras quebrada: esperado [${palavrasTmdb.join(' ')}]` };
     }
-  }
-
-  private normalizarParaComparacao(titulo: string): string {
-    return titulo
-      .toLowerCase()
-      .normalize('NFD')
-      .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^a-z0-9\s]/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
   }
 
   private extrairAnoDoTitulo(titulo: string): number | null {

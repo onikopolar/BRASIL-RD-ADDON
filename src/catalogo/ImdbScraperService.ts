@@ -40,19 +40,24 @@ export interface ImdbTitles {
   portuguesePriority: boolean;
 }
 
+interface GlobalCacheEntry {
+  data: ImdbTitles;
+  timestamp: number;
+  tmdbId?: number;
+  mediaType?: 'movie' | 'tv';
+}
+
 export class ImdbScraperService {
   private readonly tmdbBaseUrl = 'https://api.themoviedb.org/3';
   private readonly tmdbApiKey: string;
   private readonly language = 'pt-BR';
-  
-  private static globalCache = new Map<string, {
-    data: ImdbTitles;
-    timestamp: number;
-    tmdbId?: number;
-    mediaType?: 'movie' | 'tv';
-  }>();
-  
+
+  private static globalCache = new Map<string, GlobalCacheEntry>();
+
   private readonly cacheTTL = 5 * 60 * 1000;
+  private static readonly MAX_CACHE_SIZE = 1000;
+  private static cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private static readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
   private static instance: ImdbScraperService;
 
@@ -65,144 +70,121 @@ export class ImdbScraperService {
 
   constructor() {
     this.tmdbApiKey = process.env.TMDB_API_KEY || '';
-    
+
     if (!this.tmdbApiKey) {
       logger.warn('TMDB_API_KEY não configurada! Metadados em português não estarão disponíveis. Obtenha uma key gratuita em: https://www.themoviedb.org/settings/api');
     }
-    
+
+    ImdbScraperService.startCleanupTimer();
     logger.debug('TMDB Scraper ready');
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  CACHE GLOBAL COM LRU E LIMPEZA PROATIVA
+  // ═══════════════════════════════════════════════════════════════════
+
+  private static startCleanupTimer(): void {
+    if (ImdbScraperService.cleanupTimer) return;
+
+    ImdbScraperService.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+
+      for (const [key, entry] of ImdbScraperService.globalCache.entries()) {
+        if (now - entry.timestamp > ImdbScraperService.prototype.cacheTTL) {
+          ImdbScraperService.globalCache.delete(key);
+        }
+      }
+
+      if (ImdbScraperService.globalCache.size === 0) return;
+
+      logger.debug(`🧹 TMDB cache cleanup: ${ImdbScraperService.globalCache.size} entradas restantes`);
+    }, ImdbScraperService.CACHE_CLEANUP_INTERVAL);
+
+    if (ImdbScraperService.cleanupTimer.unref) {
+      ImdbScraperService.cleanupTimer.unref();
+    }
+  }
+
+  private static getFromCache(key: string): GlobalCacheEntry | undefined {
+    const cached = ImdbScraperService.globalCache.get(key);
+    if (!cached) return undefined;
+
+    const ttl = ImdbScraperService.prototype.cacheTTL;
+    if (Date.now() - cached.timestamp > ttl) {
+      ImdbScraperService.globalCache.delete(key);
+      return undefined;
+    }
+
+    return cached;
+  }
+
+  private static setCache(key: string, entry: GlobalCacheEntry): void {
+    if (ImdbScraperService.globalCache.size >= ImdbScraperService.MAX_CACHE_SIZE) {
+      const firstKey = ImdbScraperService.globalCache.keys().next().value;
+      if (firstKey) ImdbScraperService.globalCache.delete(firstKey);
+    }
+
+    ImdbScraperService.globalCache.set(key, entry);
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  PRINCIPAL
+  // ═══════════════════════════════════════════════════════════════════
 
   async getTitlesFromImdbId(imdbId: string, season?: number): Promise<ImdbTitles> {
     try {
       const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
-      const cached = ImdbScraperService.globalCache.get(cacheKey);
-      
-      if (cached && (Date.now() - cached.timestamp) < this.cacheTTL) {
+      const cached = ImdbScraperService.getFromCache(cacheKey);
+      if (cached) {
+        logger.debug('TMDB cache hit', { imdbId, season });
         return cached.data;
       }
 
       const tmdbInfo = await this.findInTMDB(imdbId);
-      
+
       if (!tmdbInfo) {
         // Fallback 1: TMDB HTML scraper (OMDB → TMDB search → scrape)
         logger.debug('TMDB API offline, usando fallback HTML', { imdbId });
         const htmlResult = await getTmdbTitlesViaHtml(imdbId);
         if (htmlResult) {
-          ImdbScraperService.globalCache.set(cacheKey, {
-            data: htmlResult,
-            timestamp: Date.now(),
-          });
+          ImdbScraperService.setCache(cacheKey, { data: htmlResult, timestamp: Date.now() });
           return htmlResult;
         }
+
         // Fallback 2: IMDb HTML (só título original)
         logger.debug('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
-        return await this.scrapeImdbTitle(imdbId);
+        const imdbResult = await this.scrapeImdbTitle(imdbId);
+        ImdbScraperService.setCache(cacheKey, { data: imdbResult, timestamp: Date.now() });
+        return imdbResult;
       }
 
       const { tmdbId: tmdbIdNum, mediaType } = tmdbInfo;
-      
-      let year: number | undefined;
-      let originalTitle = '';
-      let portugueseTitle = '';
-      
-      if (mediaType === 'movie') {
-        const details = await this.fetchDetailsFromTMDB(tmdbIdNum, 'movie');
-        if (details) {
-          originalTitle = details.original_title || details.title || '';
-          portugueseTitle = details.title || '';
-          
-          if (details.release_date) {
-            year = parseInt(details.release_date.substring(0, 4));
-          }
-        }
-      } else if (mediaType === 'tv') {
-        if (season !== undefined && season > 0) {
-          try {
-            const seasonData = await this.fetchSeasonFromTMDB(tmdbIdNum, season);
-            if (seasonData) {
-              const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
-              if (seriesDetails) {
-                originalTitle = seriesDetails.original_name || seriesDetails.name || '';
-                portugueseTitle = seriesDetails.name || '';
-              }
-              
-              if (seasonData.air_date) {
-                year = parseInt(seasonData.air_date.substring(0, 4));
-              }
-            }
-          } catch (seasonError) {
-            logger.warn('TMDB erro temporada, usando dados da série', { imdbId, season, error: seasonError instanceof Error ? seasonError.message : 'Erro' });
-            
-            const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
-            if (seriesDetails) {
-              originalTitle = seriesDetails.original_name || seriesDetails.name || '';
-              portugueseTitle = seriesDetails.name || '';
-              if (seriesDetails.first_air_date) {
-                year = parseInt(seriesDetails.first_air_date.substring(0, 4));
-              }
-            }
-          }
-        } else {
-          const seriesDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, 'tv');
-          if (seriesDetails) {
-            originalTitle = seriesDetails.original_name || seriesDetails.name || '';
-            portugueseTitle = seriesDetails.name || '';
-            if (seriesDetails.first_air_date) {
-              year = parseInt(seriesDetails.first_air_date.substring(0, 4));
-            }
-          }
-        }
-      }
+
+      const resolved = await this.resolveTitleFromTMDB(tmdbIdNum, mediaType, imdbId, season);
 
       // Se título original é não-latino, busca em inglês (animes, etc)
-      if (originalTitle && !/^[a-z0-9\s\-\.':,!]+$/i.test(originalTitle)) {
-        const enDetails = await this.fetchDetailsFromTMDB(tmdbIdNum, mediaType === 'tv' ? 'tv' : 'movie', 'en-US');
-        const enTitle = mediaType === 'tv' ? enDetails?.name : enDetails?.title;
-        if (enTitle) {
-          originalTitle = enTitle;
-        }
+      let finalOriginal = resolved.originalTitle;
+      if (finalOriginal && !/^[a-z0-9\s\-\.':,!]+$/i.test(finalOriginal)) {
+        finalOriginal = await this.getEnglishTitle(tmdbIdNum, mediaType) || finalOriginal;
       }
 
-      // OMDB → título em inglês para complementar
-      let englishTitle = '';
-      try {
-        const omdbUrl = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
-        const omdbResp = await axios.get(omdbUrl, { timeout: 5000 });
-        if (omdbResp.data?.Response === 'True' && omdbResp.data?.Title) {
-          englishTitle = omdbResp.data.Title;
-        }
-      } catch { /* OMDB offline, sem problema */ }
-
-      // ---- ESTRATÉGIA ROBUSTA: Se a API devolveu título vazio, acionar fallback HTML ----
-      if (!originalTitle || originalTitle.trim() === '') {
-        logger.debug('Título vazio da API, acionando fallback HTML', { imdbId, season });
-        const htmlResult = await getTmdbTitlesViaHtml(imdbId);
-        if (htmlResult) {
-          ImdbScraperService.globalCache.set(cacheKey, { data: htmlResult, timestamp: Date.now() });
-          logger.info('Fallback HTML bem-sucedido', { imdbId, title: htmlResult.originalTitle.substring(0, 50) });
-          return htmlResult;
-        }
-        logger.debug('Fallback HTML falhou, tentando IMDb HTML', { imdbId });
-        return await this.scrapeImdbTitle(imdbId);
-      }
-      // ---------------------------------------------------------------------------------
-
-      const normalizedOriginal = this.normalizeTitle(originalTitle);
-      const normalizedPortuguese = portugueseTitle ? this.normalizeTitle(portugueseTitle) : '';
+      const normalizedOriginal = this.normalizeTitle(finalOriginal);
+      const normalizedPortuguese = resolved.portugueseTitle ? this.normalizeTitle(resolved.portugueseTitle) : '';
 
       const hasPortuguese = !!normalizedPortuguese && normalizedPortuguese !== normalizedOriginal;
       const portuguesePriority = hasPortuguese;
 
       const allTitles: string[] = [];
-      
+
       if (hasPortuguese) {
         allTitles.push(normalizedPortuguese);
         allTitles.push(normalizedOriginal);
       } else {
         allTitles.push(normalizedOriginal);
       }
-      
+
+      // OMDB → título em inglês para complementar
+      const englishTitle = await this.getEnglishTitleFromOmdb(imdbId);
       if (englishTitle) {
         const normalizedEn = this.normalizeTitle(englishTitle);
         if (normalizedEn && normalizedEn !== normalizedOriginal && normalizedEn !== normalizedPortuguese) {
@@ -215,54 +197,133 @@ export class ImdbScraperService {
       const result: ImdbTitles = {
         originalTitle: normalizedOriginal,
         portugueseTitle: hasPortuguese ? normalizedPortuguese : null,
-        portugueseTitleRaw: hasPortuguese ? portugueseTitle : null,
+        portugueseTitleRaw: hasPortuguese ? resolved.portugueseTitle : null,
         allTitles: uniqueTitles,
         foundInPortuguese: hasPortuguese,
-        year,
+        year: resolved.year,
         mediaType,
-        portuguesePriority
+        portuguesePriority,
       };
 
-      ImdbScraperService.globalCache.set(cacheKey, {
+      ImdbScraperService.setCache(cacheKey, {
         data: result,
         timestamp: Date.now(),
         tmdbId: tmdbIdNum,
-        mediaType
+        mediaType,
       });
 
       logger.debug('Títulos TMDB obtidos', {
-        imdbId, tmdbId: tmdbIdNum, year, mediaType, season,
+        imdbId,
+        tmdbId: tmdbIdNum,
+        year: resolved.year,
+        mediaType,
+        season,
         portugues: hasPortuguese ? 'SIM' : 'NÃO',
-        tituloOriginal: normalizedOriginal.substring(0, 50)
+        tituloOriginal: normalizedOriginal.substring(0, 50),
       });
 
       return result;
-
     } catch (error) {
       logger.error('TMDB erro geral', {
-        imdbId, season,
-        error: error instanceof Error ? error.message : 'Erro desconhecido'
+        imdbId,
+        season,
+        error: error instanceof Error ? error.message : 'Erro desconhecido',
       });
 
-      return this.createEmptyResult(imdbId);
+      const empty = this.createEmptyResult(imdbId);
+      const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
+      ImdbScraperService.setCache(cacheKey, { data: empty, timestamp: Date.now() });
+      return empty;
     }
   }
 
-  private async findInTMDB(imdbId: string): Promise<{tmdbId: number, mediaType: 'movie' | 'tv'} | null> {
+  // ═══════════════════════════════════════════════════════════════════
+  //  RESOLUÇÃO DE TÍTULOS TMDB
+  // ═══════════════════════════════════════════════════════════════════
+
+  private async resolveTitleFromTMDB(
+    tmdbId: number,
+    mediaType: 'movie' | 'tv',
+    imdbId: string,
+    season?: number
+  ): Promise<{ originalTitle: string; portugueseTitle: string | null; year?: number }> {
+    if (mediaType === 'movie') {
+      const details = await this.fetchDetailsFromTMDB(tmdbId, 'movie');
+      if (details) {
+        return {
+          originalTitle: details.original_title || details.title || '',
+          portugueseTitle: details.title || null,
+          year: details.release_date ? parseInt(details.release_date.substring(0, 4)) : undefined,
+        };
+      }
+    }
+
+    if (mediaType === 'tv') {
+      // Tenta dados da temporada, se aplicável
+      let year: number | undefined;
+      if (season !== undefined && season > 0) {
+        try {
+          const seasonData = await this.fetchSeasonFromTMDB(tmdbId, season);
+          if (seasonData?.air_date) {
+            year = parseInt(seasonData.air_date.substring(0, 4));
+          }
+        } catch (seasonError) {
+          logger.warn('TMDB erro temporada, usando dados da série', { imdbId, season, error: seasonError instanceof Error ? seasonError.message : 'Erro' });
+        }
+      }
+
+      const seriesDetails = await this.fetchDetailsFromTMDB(tmdbId, 'tv');
+      if (seriesDetails) {
+        return {
+          originalTitle: seriesDetails.original_name || seriesDetails.name || '',
+          portugueseTitle: seriesDetails.name || null,
+          year: year ?? (seriesDetails.first_air_date ? parseInt(seriesDetails.first_air_date.substring(0, 4)) : undefined),
+        };
+      }
+    }
+
+    return { originalTitle: '', portugueseTitle: null };
+  }
+
+  private async getEnglishTitle(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<string | null> {
+    const enDetails = await this.fetchDetailsFromTMDB(tmdbId, mediaType, 'en-US');
+    if (!enDetails) return null;
+
+    return mediaType === 'tv' ? enDetails.name : enDetails.title;
+  }
+
+  private async getEnglishTitleFromOmdb(imdbId: string): Promise<string> {
+    try {
+      const omdbUrl = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
+      const omdbResp = await axios.get(omdbUrl, { timeout: 5000 });
+      if (omdbResp.data?.Response === 'True' && omdbResp.data?.Title) {
+        return omdbResp.data.Title;
+      }
+    } catch {
+      // OMDB offline, sem problema
+    }
+    return '';
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  FIND TMDB
+  // ═══════════════════════════════════════════════════════════════════
+
+  private async findInTMDB(imdbId: string): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/find/${imdbId}`, {
         params: {
           api_key: this.tmdbApiKey,
           external_source: 'imdb_id',
-          language: this.language
+          language: this.language,
         },
-        timeout: 10000
+        timeout: 10000,
       });
 
       if (response.data.movie_results && response.data.movie_results.length > 0) {
         return { tmdbId: response.data.movie_results[0].id, mediaType: 'movie' };
       }
-      
+
       if (response.data.tv_results && response.data.tv_results.length > 0) {
         return { tmdbId: response.data.tv_results[0].id, mediaType: 'tv' };
       }
@@ -279,7 +340,7 @@ export class ImdbScraperService {
       const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
       const response = await axios.get(`${this.tmdbBaseUrl}/${endpoint}/${tmdbId}`, {
         params: { api_key: this.tmdbApiKey, language: langOverride || this.language },
-        timeout: 10000
+        timeout: 10000,
       });
       return response.data;
     } catch (error) {
@@ -292,7 +353,7 @@ export class ImdbScraperService {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/tv/${tmdbId}/season/${season}`, {
         params: { api_key: this.tmdbApiKey, language: this.language },
-        timeout: 10000
+        timeout: 10000,
       });
       return response.data;
     } catch (error) {
@@ -300,6 +361,10 @@ export class ImdbScraperService {
       throw error;
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  FALLBACKS
+  // ═══════════════════════════════════════════════════════════════════
 
   /** Fallback: scrape IMDb HTML quando TMDB não conhece o ID */
   private async scrapeImdbTitle(imdbId: string): Promise<ImdbTitles> {
@@ -352,9 +417,13 @@ export class ImdbScraperService {
       portugueseTitleRaw: null,
       allTitles: [],
       foundInPortuguese: false,
-      portuguesePriority: false
+      portuguesePriority: false,
     };
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  NORMALIZAÇÃO E COMPATIBILIDADE
+  // ═══════════════════════════════════════════════════════════════════
 
   private normalizeTitle(title: string): string {
     return title
@@ -384,7 +453,7 @@ export class ImdbScraperService {
   static getGlobalCacheStats() {
     return {
       size: ImdbScraperService.globalCache.size,
-      entries: Array.from(ImdbScraperService.globalCache.keys())
+      entries: Array.from(ImdbScraperService.globalCache.keys()),
     };
   }
 
@@ -396,8 +465,8 @@ export class ImdbScraperService {
     return {
       cacheSize: ImdbScraperService.globalCache.size,
       cacheTTL: this.cacheTTL,
-      version: '2.1.0',
-      feature: 'Fallback HTML automático em caso de título vazio'
+      version: '2.2.0',
+      feature: 'Fallback HTML automático + cache LRU com cleanup',
     };
   }
 }

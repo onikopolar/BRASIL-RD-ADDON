@@ -43,6 +43,11 @@ export interface TmdbSearchData {
   mediaType: string | null;
 }
 
+interface CacheEntry<T> {
+  data: T;
+  timestamp: number;
+}
+
 export class CatalogProvider {
   private readonly logger: Logger;
   private readonly qualityDetector: QualityDetector;
@@ -52,16 +57,19 @@ export class CatalogProvider {
   private readonly titleFilter: TitleFilter;
   private readonly autoMagnetService: AutoMagnetService;
 
-  private readonly streamCache = new Map<string, { streams: Stream[]; timestamp: number; isEmpty: boolean }>();
-  private readonly STREAM_TTL = 24 * 60 * 60 * 1000;
+  private readonly streamCache = new Map<string, CacheEntry<Stream[]> & { isEmpty: boolean }>();
+  private readonly STREAM_TTL = 6 * 60 * 60 * 1000; // 6 horas (era 24h)
   private readonly STREAM_EMPTY_TTL = 10 * 1000;
-  private readonly MAX_CACHE_SIZE = 5000;
+  private readonly MAX_STREAM_CACHE_SIZE = 5000;
+
+  private readonly tmdbDataCache = new Map<string, CacheEntry<TmdbSearchData>>();
+  private readonly TMDB_CACHE_TTL = 5 * 60 * 1000;
+  private readonly MAX_TMDB_CACHE_SIZE = 1000;
 
   private readonly inFlightScraping: Set<string> = new Set();
 
-  private tmdbDataCache = new Map<string, { data: TmdbSearchData; timestamp: number }>();
-  private readonly TMDB_CACHE_TTL = 5 * 60 * 1000;
-  private readonly MAX_TMDB_CACHE_SIZE = 1000;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 min
 
   constructor(private readonly magnetService: CuratedMagnetService) {
     this.logger = new Logger('CatalogProvider');
@@ -71,12 +79,71 @@ export class CatalogProvider {
     this.imdbScraper = ImdbScraperService.getInstance();
     this.titleFilter = TitleFilter.getInstance();
     this.autoMagnetService = new AutoMagnetService();
+    this.startCacheCleanup();
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  CACHE GENÉRICO (DRY)
+  // ═══════════════════════════════════════════════════════════════════
+
+  private startCacheCleanup(): void {
+    if (this.cleanupTimer) return;
+    this.cleanupTimer = setInterval(() => {
+      const now = Date.now();
+
+      // Limpa streamCache
+      for (const [key, entry] of this.streamCache.entries()) {
+        const ttl = entry.isEmpty ? this.STREAM_EMPTY_TTL : this.STREAM_TTL;
+        if (now - entry.timestamp > ttl) {
+          this.streamCache.delete(key);
+        }
+      }
+
+      // Limpa tmdbDataCache
+      for (const [key, entry] of this.tmdbDataCache.entries()) {
+        if (now - entry.timestamp > this.TMDB_CACHE_TTL) {
+          this.tmdbDataCache.delete(key);
+        }
+      }
+    }, this.CACHE_CLEANUP_INTERVAL);
+    this.cleanupTimer.unref?.();
+  }
+
+  private getFromMap<T>(
+    map: Map<string, CacheEntry<T>>,
+    key: string,
+    ttl: number
+  ): T | null {
+    const entry = map.get(key);
+    if (!entry) return null;
+    if (Date.now() - entry.timestamp > ttl) {
+      map.delete(key);
+      return null;
+    }
+    return entry.data;
+  }
+
+  private setToMap<T>(
+    map: Map<string, CacheEntry<T>>,
+    key: string,
+    data: T,
+    maxSize: number
+  ): void {
+    if (map.size >= maxSize) {
+      const firstKey = map.keys().next().value;
+      if (firstKey) map.delete(firstKey);
+    }
+    map.set(key, { data, timestamp: Date.now() });
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  TMDB SEARCH DATA
+  // ═══════════════════════════════════════════════════════════════════
 
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
     const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
-    const cached = this.tmdbDataCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.TMDB_CACHE_TTL) return cached.data;
+    const cached = this.getFromMap(this.tmdbDataCache, cacheKey, this.TMDB_CACHE_TTL);
+    if (cached) return cached;
 
     let imdbTitles: ImdbTitles | null = null;
     let searchTitle = '';
@@ -95,12 +162,7 @@ export class CatalogProvider {
     }
 
     const data: TmdbSearchData = { searchTitle, imdbTitles, seasonYear, mediaType };
-
-    if (this.tmdbDataCache.size >= this.MAX_TMDB_CACHE_SIZE) {
-      const firstKey = this.tmdbDataCache.keys().next().value;
-      if (firstKey) this.tmdbDataCache.delete(firstKey);
-    }
-    this.tmdbDataCache.set(cacheKey, { data, timestamp: Date.now() });
+    this.setToMap(this.tmdbDataCache, cacheKey, data, this.MAX_TMDB_CACHE_SIZE);
     return data;
   }
 
@@ -108,6 +170,10 @@ export class CatalogProvider {
     const tmdb = await this.getTmdbSearchData(imdbId, season);
     return tmdb.seasonYear;
   }
+
+  // ═══════════════════════════════════════════════════════════════════
+  //  STREAMS
+  // ═══════════════════════════════════════════════════════════════════
 
   async getStreamsFromCatalog(request: any): Promise<Stream[]> {
     const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
@@ -455,28 +521,28 @@ export class CatalogProvider {
   }
 
   private getFromCache(key: string): Stream[] | null {
-    const entry = this.streamCache.get(key);
-    if (!entry) {
-      metricsService.recordCacheMiss();
-      return null;
+    const cached = this.getFromMap(this.streamCache, key, this.STREAM_TTL);
+    if (cached !== null) {
+      metricsService.recordCacheHit();
+      return cached;
     }
-    const now = Date.now();
-    const ttl = entry.isEmpty ? this.STREAM_EMPTY_TTL : this.STREAM_TTL;
-    if (now - entry.timestamp > ttl) {
-      this.streamCache.delete(key);
-      metricsService.recordCacheMiss();
-      return null;
-    }
-    metricsService.recordCacheHit();
-    return entry.streams;
+    metricsService.recordCacheMiss();
+    return null;
   }
 
   private saveToCache(key: string, streams: Stream[]): void {
-    if (this.streamCache.size >= this.MAX_CACHE_SIZE) {
-      const firstKey = this.streamCache.keys().next().value;
-      if (firstKey) this.streamCache.delete(firstKey);
+    const isEmpty = streams.length === 0;
+    this.setToMap(
+      this.streamCache as Map<string, CacheEntry<Stream[]>>,
+      key,
+      streams,
+      this.MAX_STREAM_CACHE_SIZE
+    );
+    // Ajusta a flag isEmpty
+    const entry = this.streamCache.get(key);
+    if (entry) {
+      entry.isEmpty = isEmpty;
     }
-    this.streamCache.set(key, { streams, timestamp: Date.now(), isEmpty: streams.length === 0 });
   }
 
   private async shouldAttemptScraping(request: any): Promise<boolean> {

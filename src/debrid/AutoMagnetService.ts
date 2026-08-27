@@ -63,8 +63,6 @@ export class AutoMagnetService {
   private titleValidationCache = new Map<string, { result: TitleMatchResult; timestamp: number }>();
   private readonly titleCacheTTL = 60000;
 
-  private imdbCache = new Map<string, { data: ImdbTitles; timestamp: number }>();
-  private readonly imdbCacheTTL = 300000;
 
   constructor() {}
 
@@ -410,14 +408,12 @@ export class AutoMagnetService {
   clearCache(): void {
     this.validationCache.clear();
     this.titleValidationCache.clear();
-    this.imdbCache.clear();
   }
 
   getStats() {
     return {
       cacheSize: this.validationCache.size,
       titleCacheSize: this.titleValidationCache.size,
-      imdbCacheSize: this.imdbCache.size
     };
   }
 }
