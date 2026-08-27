@@ -464,11 +464,11 @@ export class CatalogProvider {
     torrents: ScrapedTorrent[], request: any, season?: number, episode?: number
   ): Promise<Stream[]> {
     if (torrents.length > 0) {
-      this.logger.debug('ANTES_STREAM_FORMATTER', {
-        magnet: torrents[0]?.magnet?.substring(0, 200),
-        tamanho: torrents[0]?.magnet?.length,
-        title: torrents[0]?.title || torrents[0]?.canonicalName
-      });
+  //    this.logger.debug('ANTES_STREAM_FORMATTER', {
+  //      magnet: torrents[0]?.magnet?.substring(0, 200),
+  //      tamanho: torrents[0]?.magnet?.length,
+  //      title: torrents[0]?.title || torrents[0]?.canonicalName
+  //    });
     }
 
     return this.processInBatches(

@@ -38,7 +38,7 @@ function cleanSlug(slug: string): string {
   let decodificado = slug;
   try {
     decodificado = decodeURIComponent(slug);
-  } catch {}
+  } catch { }
 
   let semData = decodificado.replace(/-\d{2}-\d{2}-\d{4}$/, '');
 
@@ -279,8 +279,11 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
 
     try {
       const decoded = decodeURIComponent(idMatch[1]);
-      const magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+      let magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
       if (!magnet.startsWith('magnet:?')) return;
+
+      // Corrige "&" dentro do campo dn (não codificado pelo Starck)
+      magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
 
       const botaoMetadados = extrairMetadadosDoBotao($, el);
 
@@ -300,7 +303,7 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
         episode,
       });
     } catch (err) {
-      logger.warn('Starck: erro ao decodificar magnet', { error: (err as Error).message });
+      logger.warn('Starck decode | erro ao decodificar magnet', { error: (err as Error).message });
     }
   });
 

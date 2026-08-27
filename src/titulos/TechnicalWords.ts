@@ -96,7 +96,15 @@ export function normalizarTexto(texto: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[^\w\s]/g, ' ')
+    .replace(/&#0*38;/g, '&')          // decodifica &#038; → &
+    .replace(/&#x26;/gi, '&')          // decodifica &#x26; → &
+    .replace(/&amp;/gi, '&')           // decodifica &amp; → &
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0*39;/g, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/[^\w\s]/g, ' ')          // remove caracteres não alfanuméricos (incluindo &)
     .replace(/\s+/g, ' ')
     .trim();
 }

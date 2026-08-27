@@ -74,7 +74,7 @@ class TorrentScraperService {
                         .filter((r) => r !== null);
                 })
                     .catch(() => []),
-                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries)
+                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries, targetYear)
                     .then(results => {
                     const seen = new Set();
                     logger.debug(`📊 HDR: ${results.length} resultados brutos`);

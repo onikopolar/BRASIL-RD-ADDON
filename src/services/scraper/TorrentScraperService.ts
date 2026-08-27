@@ -113,7 +113,7 @@ export class TorrentScraperService {
           })
           .catch(() => []),
 
-        searchHdr(query, type, targetSeason, searchQueries)
+        searchHdr(query, type, targetSeason, searchQueries, targetYear)
           .then(results => {
             const seen = new Set<string>();
             logger.debug(`📊 HDR: ${results.length} resultados brutos`);

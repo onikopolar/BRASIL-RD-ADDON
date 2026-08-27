@@ -242,10 +242,10 @@ export class StreamFormatter {
     titles?: string[],
     imdbId?: string
   ): Promise<Stream> {
-    this.logger.debug('MAGNET_CRU', {
-      magnet: magnet.substring(0, 250),
-      tamanho: magnet.length
-    });
+    //this.logger.debug('MAGNET_CRU', {
+    //  magnet: magnet.substring(0, 250),
+    //  tamanho: magnet.length
+    //});
 
     const dadosMagnet = await analisarMagnet(magnet);
     const magnetHash = dadosMagnet?.infoHash;

@@ -2,8 +2,9 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
-import { extrairRangeEpisodios } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto } from '../../titulos/TechnicalWords.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
+
 
 const logger = new Logger('HdrScraper');
 
@@ -321,12 +322,23 @@ export async function searchHdr(
   query: string,
   type: 'movie' | 'series' = 'movie',
   targetSeason?: number,
-  searchQueries?: string[]
+  searchQueries?: string[],
+  targetYear?: number
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
-  // Usa SOMENTE as queries fornecidas pelo TorrentScraperService
-  const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
+  // Base de queries fornecida pelo TorrentScraperService
+  const queriesBase = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
+
+  // Adiciona variações com "4k"
+  const queriesParaBusca: string[] = [];
+  for (const q of queriesBase) {
+    if (!queriesParaBusca.includes(q)) queriesParaBusca.push(q);
+    const q4k = `${q} 4k`;
+    if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
+  }
+
+  const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
 
   try {
     const allResults: HdrTorrent[] = [];
@@ -341,8 +353,23 @@ export async function searchHdr(
         continue;
       }
 
-      // Processa os posts da query atual
-      for (const item of links) {
+      // Filtro local: mantém apenas links cujo título contenha alguma frase válida
+      const filtrados = links.filter(link => {
+        const tituloNorm = normalizarTexto(link.title);
+        const contemFrase = frasesValidas.some(frase => tituloNorm.includes(frase));
+        if (!contemFrase) return false;
+
+        if (targetYear && !tituloNorm.includes(String(targetYear))) return false;
+        return true;
+      });
+
+      logger.debug(`HDR: ${links.length} links → ${filtrados.length} após filtro local para query "${q}"`);
+
+      if (filtrados.length === 0) continue;
+
+      // Processa no máximo 5 posts filtrados
+      const limite = 5;
+      for (const item of filtrados.slice(0, limite)) {
         try {
           const res = await axios.get(item.postUrl, axiosConfig);
           const magnets = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
@@ -357,7 +384,7 @@ export async function searchHdr(
         }
       }
 
-      // Para na primeira query que retornou links
+      // Para na primeira query que gerou links filtrados
       break;
     }
 
