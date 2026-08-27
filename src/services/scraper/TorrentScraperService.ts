@@ -222,16 +222,16 @@ export class TorrentScraperService {
         .filter((t, i, arr) => arr.findIndex(x => x.toLowerCase() === t.toLowerCase()) === i)
         .slice(0, 2);
 
-      // 1º: com ano (original + português)
+      // 1º: sem ano (original + português)
+      for (const titulo of titulosUnicos) {
+        queries.push(titulo);
+      }
+
+      // 2º: com ano (original + português) — fallback
       for (const titulo of titulosUnicos) {
         if (yearToUse) {
           queries.push(`${titulo} ${yearToUse}`);
         }
-      }
-
-      // 2º: sem ano (fallback)
-      for (const titulo of titulosUnicos) {
-        queries.push(titulo);
       }
     }
 

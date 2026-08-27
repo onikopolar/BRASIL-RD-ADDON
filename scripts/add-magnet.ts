@@ -1,23 +1,20 @@
 #!/usr/bin/env ts-node
 /**
- * Curadoria pessoal — baixa magnet no Torbox e salva no banco
- * COM validação de similaridade (roda pipeline completo).
+ * Curadoria pessoal — baixa magnet no Torbox e salva no banco.
+ * Sem validação de similaridade: o usuário fornece IMDb ID e título.
  * Uso: npm run addmagnet
  */
 
 import 'dotenv/config';
 import { ImdbScraperService } from '../src/catalogo/ImdbScraperService.js';
-import { TitleFilter } from '../src/titulos/titleFilter.js';
 import { QualityDetector } from '../src/lib/qualityDetector.js';
 import { Logger } from '../src/utils/logger.js';
 import { analisarMagnet } from '../src/magnet/magnetHelper.js';
 import { getTorrent, createTorrent, upsertTorrent } from '../src/lib/repository.js';
-import { extrairRangeEpisodios } from '../src/titulos/TechnicalWords.js';
 import { TorboxService } from '../src/debrid/RealDebridService.js';
 import * as readline from 'readline';
 
 const imdbScraper = ImdbScraperService.getInstance();
-const titleFilter = TitleFilter.getInstance();
 const qualityDetector = QualityDetector.getInstance();
 const torboxService = new TorboxService();
 
@@ -28,8 +25,8 @@ async function question(rl: readline.Interface, prompt: string): Promise<string>
 async function main() {
   const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
 
-  console.log('=== BRASIL RD -- CURADORIA (COM VALIDAÇÃO) ===');
-  console.log('Similaridade e idioma VALIDADOS — igual ao scraping.\n');
+  console.log('=== BRASIL RD -- CURADORIA (SEM VALIDAÇÃO) ===');
+  console.log('O título e IMDb ID são fornecidos manualmente.\n');
 
   const magnet = await question(rl, 'Magnet: ');
   if (!magnet.startsWith('magnet:') || !magnet.includes('xt=urn:btih:')) {
@@ -45,24 +42,23 @@ async function main() {
   if (!imdbId.startsWith('tt')) { console.log('[ERRO] IMDb invalido.'); rl.close(); return; }
 
   console.log('\nBuscando TMDB...');
+  let tmdbTitles = { portugueseTitle: '', originalTitle: '' };
   try {
     const tmdb = await imdbScraper.getTitlesFromImdbId(imdbId);
+    tmdbTitles = { portugueseTitle: tmdb.portugueseTitle || '', originalTitle: tmdb.originalTitle };
     console.log(`   PT: ${tmdb.portugueseTitle || 'N/A'} | EN: ${tmdb.originalTitle}`);
     console.log(`   Ano: ${tmdb.year || '?'} | Tipo: ${tmdb.mediaType || '?'}`);
   } catch { console.log('   [AVISO] TMDB falhou.'); }
 
   const tipo = (await question(rl, 'Tipo (movie/series) [movie]: ')) === 'series' ? 'series' : 'movie';
   let season: number | null = null;
-  const epRange = extrairRangeEpisodios(dn);
+
   if (tipo === 'series') {
-    const seasonDetectada = epRange?.season || null;
-    const promptSeason = seasonDetectada 
-      ? `Temporada [${seasonDetectada}]: ` 
-      : 'Temporada (1, 2, 3...): ';
-    const seasonStr = await question(rl, promptSeason);
-    season = seasonStr ? parseInt(seasonStr) : seasonDetectada;
+    const seasonStr = await question(rl, 'Temporada (1, 2, 3...): ');
+    season = seasonStr ? parseInt(seasonStr) : null;
   }
-  const qualidade = qualityDetector.extractBestQuality(dn) || await question(rl, 'Qualidade [HD]: ') || 'HD';
+
+  const qualidade = await question(rl, 'Qualidade [HD]: ') || 'HD';
   const idioma = await question(rl, 'Idioma [pt-BR]: ') || 'pt-BR';
 
   console.log('\n=== TORBOX: Baixando e ativando AirLock ===');
@@ -121,8 +117,8 @@ async function main() {
       if (pct >= 100 || state === 'completed' || state === 'uploading' || state === 'cached') {
         downloadDone = true;
       }
-    } catch (e) {
-      // Erro no poll — tenta de novo
+    } catch {
+      // tenta de novo
     }
 
     if (!downloadDone) {
@@ -132,7 +128,7 @@ async function main() {
 
   console.log('\n   ✅ Download concluído!');
 
-  // Passo 3: Ativar AirLock (obrigatório)
+  // Passo 3: Ativar AirLock
   console.log('\nAtivando AirLock...');
   try {
     await torboxService.airlockTorrent(torrentId, curatorKey, !is4k);
@@ -144,23 +140,7 @@ async function main() {
     return;
   }
 
-  // Passo 4: Validar similaridade e salvar
-  console.log('\nValidando similaridade...');
-
-  // Verifica idioma PT-BR
-  const idiomaCheck = titleFilter.verificarIdiomaDetalhado(dn);
-  console.log(`   Idioma: ${idiomaCheck.ehPortugues ? '✅ PT-BR' : '❌ NÃO-PT'} (${idiomaCheck.motivo})`);
-
-  // Valida título contra TMDB
-  const tmdbMatch = await titleFilter.titulosCombinam(dn, imdbId, season ?? undefined, undefined);
-  console.log(`   Similaridade: ${tmdbMatch.matches ? '✅ ACEITO' : '❌ REJEITADO'}`);
-  if (!tmdbMatch.matches) {
-    console.log(`   Motivo: ${tmdbMatch.reason}`);
-    console.log('\n[REJEITADO] Magnet não passou na validação de similaridade.');
-    rl.close();
-    return;
-  }
-
+  // Passo 4: Salvar no banco
   console.log('\nSalvando no banco...');
 
   if (infoHash) {
@@ -181,12 +161,19 @@ async function main() {
 
   await createTorrent({
     infoHash: infoHash || 'manual-' + Date.now(),
-    provider: 'Curadoria', title: dn, size: 0, type: tipo,
-    imdbId, imdbSeason: season,
-    imdbEpisodeStart: epRange?.episodeStart ?? null,
-    imdbEpisodeEnd: epRange?.episodeEnd ?? null,
-    seeders: 50, idioma, qualidade,
-    uploadDate: new Date(), lastSeen: new Date(),
+    provider: 'Curadoria',
+    title: dn,
+    size: 0,
+    type: tipo,
+    imdbId,
+    imdbSeason: season,
+    imdbEpisodeStart: null,
+    imdbEpisodeEnd: null,
+    seeders: 50,
+    idioma,
+    qualidade,
+    uploadDate: new Date(),
+    lastSeen: new Date(),
   });
 
   console.log(`\nPRONTO! ${dn.substring(0, 70)}`);

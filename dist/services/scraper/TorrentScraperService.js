@@ -160,12 +160,12 @@ class TorrentScraperService {
                 .filter((t, i, arr) => arr.findIndex(x => x.toLowerCase() === t.toLowerCase()) === i)
                 .slice(0, 2);
             for (const titulo of titulosUnicos) {
+                queries.push(titulo);
+            }
+            for (const titulo of titulosUnicos) {
                 if (yearToUse) {
                     queries.push(`${titulo} ${yearToUse}`);
                 }
-            }
-            for (const titulo of titulosUnicos) {
-                queries.push(titulo);
             }
         }
         if (queries.length === 0) {

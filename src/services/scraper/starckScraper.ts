@@ -68,7 +68,6 @@ function extrairTituloBaseDoSlug(slug: string): string {
   const range = extrairRangeEpisodios(limpo);
   const normalizado = normalizarTexto(limpo);
 
-  // Remove temporada e ano, mantendo apenas o título base
   return normalizado
     .replace(/\b\d+\s*(?:a|ª|º|°)?\s*temporad[ao]?\b/gi, '')
     .replace(/\btemporad[ao]?\s*\d+\b/gi, '')
@@ -106,7 +105,6 @@ async function searchStarckLinks(
 
       const slug = fullUrl.split('/').filter(Boolean).pop() || '';
       const slugTitle = extrairTituloBaseDoSlug(slug);
-      // Usa extrairRangeEpisodios para temporada
       const range = extrairRangeEpisodios(cleanSlug(slug));
       const season = range?.season;
 
@@ -232,7 +230,6 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
       const parentP = $(el).closest('p');
       const parentText = parentP.text().trim() || '';
 
-      // Extrai episódio usando extrairRangeEpisodios
       const range = extrairRangeEpisodios(parentText);
       const episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
 
@@ -264,7 +261,6 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
     if (!item || seen.has(item.infoHash)) continue;
     seen.add(item.infoHash);
 
-    // Se episódio não foi detectado pelo contexto, tenta pelo canonicalName
     let episode = item.episode;
     if (episode === undefined && item.canonicalName) {
       const range = extrairRangeEpisodios(item.canonicalName);
@@ -277,7 +273,7 @@ async function decodeBase64Magnets($: any): Promise<StarckTorrent[]> {
       canonicalName: item.canonicalName,
       qualityHint: item.qualityHint,
       episode,
-      language: 'Dual Áudio', // filtro de seção Dual
+      language: 'Dual Áudio',
     });
   }
 
@@ -303,7 +299,11 @@ export async function searchStarck(
     const links = await searchStarckLinks(q, allQueries, targetSeason);
     if (links.length === 0) continue;
 
+    let processedPosts = 0;
+
     for (const link of links) {
+      if (processedPosts >= 5) break;
+
       try {
         const res = await axios.get(link.postUrl, axiosConfig);
         const $ = cheerio.load(res.data);
@@ -314,7 +314,6 @@ export async function searchStarck(
           if (seenInfoHashes.has(magnet.infoHash)) continue;
           seenInfoHashes.add(magnet.infoHash);
 
-          // Define season (se não veio do slug, usa targetSeason)
           if (magnet.season === undefined && targetSeason) magnet.season = targetSeason;
           magnet.language = magnet.language || metadata.language;
           magnet.originalTitle = metadata.originalTitle;
@@ -323,8 +322,11 @@ export async function searchStarck(
 
           allResults.push(magnet);
         }
+
+        processedPosts++;
       } catch (err) {
         logger.warn(`Starck: falha ao processar post ${link.postUrl}`, { error: (err as Error).message });
+        processedPosts++;
       }
     }
 

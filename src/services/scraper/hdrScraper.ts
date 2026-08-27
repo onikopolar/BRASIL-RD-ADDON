@@ -34,7 +34,9 @@ const axiosConfig = {
   },
 };
 
-// Helpers
+// ═══════════════════════════════════════════════════════════════════
+//  HELPERS
+// ═══════════════════════════════════════════════════════════════════
 
 export function detectSeasonFromText(text: string): number | null {
   const range = extrairRangeEpisodios(text);
@@ -81,12 +83,6 @@ export function isLikelyPostLink(href: string, text: string): boolean {
   const containsTorrentWord = torrentWords.some(w => lowerText.includes(w));
   const slugMatch = href.match(/\/([a-z0-9-]{15,})\/?$/i);
   return containsTorrentWord || !!slugMatch;
-}
-
-export function isLegendasOnly(parentText: string, linkText: string): boolean {
-  const lt = (linkText || '').trim().toLowerCase();
-  const pt = (parentText || '').trim().toLowerCase();
-  return lt === 'legendas' || /^legendas/.test(pt);
 }
 
 export function extractLanguage(parentText: string): string {
@@ -159,7 +155,9 @@ function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   return null;
 }
 
-// Busca
+// ═══════════════════════════════════════════════════════════════════
+//  BUSCA E EXTRAÇÃO
+// ═══════════════════════════════════════════════════════════════════
 
 interface SearchResultItem {
   title: string;
@@ -213,33 +211,6 @@ export async function extractMagnetsFromPost(
   const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
   const metadata = extractHdrMetadata($);
 
-  const reDual = /::\s*(?:VERS[ÃA]O\s+)?(?:DUAL\s+[ÁA]UDIO|DUBLADO)\s*::/i;
-  const reLeg = /::\s*(?:VERS[ÃA]O\s+)?(?:LEGENDAD[OA]|LEGENDA)\s*::/i;
-
-  const h3Elements = $('h3').toArray();
-  const h3Texts: string[] = [];
-  let temSecaoDual = false;
-  let temSecaoLegendado = false;
-
-  for (let i = 0; i < h3Elements.length; i++) {
-    const text = $(h3Elements[i]).text().trim();
-    h3Texts.push(text);
-    if (reDual.test(text)) {
-      temSecaoDual = true;
-    } else if (reLeg.test(text)) {
-      temSecaoLegendado = true;
-      break;
-    }
-  }
-
-  if (!temSecaoDual) {
-    if (temSecaoLegendado) {
-      logger.debug(`HDR LEGENDADO-only | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
-      return [];
-    }
-    logger.debug(`HDR sem DUAL/LEG | ${postTitle.substring(0, 60)} | ${postUrl || '?'} | H3s: [${h3Texts.join(' | ')}]`);
-  }
-
   const rawMagnets: {
     href: string;
     parentText: string;
@@ -248,22 +219,20 @@ export async function extractMagnetsFromPost(
     sizeMatch?: string;
   }[] = [];
 
+  // ── 1. Coleta magnets brutos ─────────────────────────────────────
   $('a[href^="magnet:"]').each((_i: number, el: any) => {
     const href = $(el).attr('href');
     if (!href) return;
-    const btihMatch = href.match(/btih:([a-fA-F0-9]{40})/i);
-    if (!btihMatch) return;
 
     const parentP = $(el).closest('p');
     const parentText = parentP.text().trim();
     const linkText = $(el).text().trim();
-    if (isLegendasOnly(parentText, linkText)) return;
 
-    if (temSecaoLegendado) {
-      const $prevH3 = $(el).prevAll('h3').first();
-      const prevText = $prevH3.text().trim();
-      if (reLeg.test(prevText)) return;
-    }
+    const isLegendado = /legendado|legendada|legenda/i.test(parentText);
+    const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(parentText);
+
+    // Rejeita somente legendados puros
+    if (isLegendado && !isDualOuDublado) return;
 
     const seasonNumber =
       detectSeasonFromText(parentText) ??
@@ -278,15 +247,29 @@ export async function extractMagnetsFromPost(
     rawMagnets.push({ href, parentText, linkText, qualityMatch, sizeMatch });
   });
 
+  logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalMagnetsBrutos=${rawMagnets.length}`);
+
+  // ── 2. Processa cada magnet bruto ────────────────────────────────
   for (const raw of rawMagnets) {
     try {
-      const dados = await analisarMagnet(raw.href);
-      if (!dados || !dados.infoHash) continue;
+      // Extrai infoHash de forma ampla (hex ou base32)
+      const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
+      const infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
 
-      const canonicalName = dados.nome ?? undefined;
-      const infoHash = dados.infoHash.toLowerCase();
+      if (!infoHash) {
+        logger.warn(`HDR extractMagnetsFromPost | magnet sem infoHash | magnet=${raw.href.substring(0, 60)}`);
+        continue;
+      }
+
+      let canonicalName: string | undefined;
+      try {
+        const dados = await analisarMagnet(raw.href);
+        canonicalName = dados?.nome ?? undefined;
+      } catch {
+        canonicalName = undefined;
+      }
+
       const language = extractLanguage(raw.parentText) || metadata.language || extractLanguage(pageTitle);
-
       const seasonNumber =
         detectSeasonFromText(raw.parentText) ??
         detectSeasonFromText(postTitle) ??
@@ -303,17 +286,19 @@ export async function extractMagnetsFromPost(
       }
 
       const episode = episodeStart;
+      const qualityMatch = raw.qualityMatch;
+      const sizeMatch = raw.sizeMatch;
 
       const magnetTitle = seasonNumber
-        ? `${pageTitle} - ${seasonNumber}ª Temporada${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${raw.qualityMatch ? ` ${raw.qualityMatch}` : ''}`
-        : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', raw.qualityMatch].filter(Boolean).join(' ');
+        ? `${pageTitle} - ${seasonNumber}ª Temporada${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
+        : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
 
       results.push({
         title: magnetTitle,
         magnet: raw.href,
         infoHash,
         seeders: 0,
-        size: raw.sizeMatch || '',
+        size: sizeMatch || '',
         language,
         originalTitle: metadata.originalTitle || metadata.originalTitleBruto,
         year: metadata.year,
@@ -321,11 +306,14 @@ export async function extractMagnetsFromPost(
         season: seasonNumber ?? undefined,
         episode,
       });
-    } catch {
-      // ignora
+
+      logger.debug(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | quality=${qualityMatch || 'N/A'}`);
+    } catch (err) {
+      logger.warn(`HDR extractMagnetsFromPost | erro ao processar magnet | magnet=${raw.href.substring(0, 60)} | error=${(err as Error).message}`);
     }
   }
 
+  logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
   return results;
 }
 
@@ -337,13 +325,8 @@ export async function searchHdr(
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
-  const queriesBase = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
-
-  const queriesParaBusca = [...queriesBase];
-  for (const q of queriesBase) {
-    const q4k = `${q} 4k`;
-    if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
-  }
+  // Usa SOMENTE as queries fornecidas pelo TorrentScraperService
+  const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
 
   try {
     const allResults: HdrTorrent[] = [];
@@ -352,44 +335,34 @@ export async function searchHdr(
     for (const q of queriesParaBusca) {
       logger.debug(`HDR: tentando busca com query "${q}"`);
       const links = await searchHdrLinks(q, targetSeason);
+
       if (links.length === 0) {
         logger.debug(`HDR: query "${q}" não retornou links, tentando próxima...`);
         continue;
       }
 
-      const batchSize = 8;
-      for (let i = 0; i < links.length; i += batchSize) {
-        const batch = links.slice(i, i + batchSize);
-        const batchResults = await Promise.all(
-          batch.map(async (item: SearchResultItem) => {
-            try {
-              const res = await axios.get(item.postUrl, axiosConfig);
-              return await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
-            } catch {
-              return [];
-            }
-          })
-        );
-
-        for (const results of batchResults) {
-          for (const r of results) {
+      // Processa os posts da query atual
+      for (const item of links) {
+        try {
+          const res = await axios.get(item.postUrl, axiosConfig);
+          const magnets = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
+          for (const r of magnets) {
             if (!seenInfoHashes.has(r.infoHash)) {
               seenInfoHashes.add(r.infoHash);
               allResults.push(r);
             }
           }
+        } catch {
+          // ignora erro no post
         }
       }
 
-      const tem4k = allResults.some(r => /\b(2160p|4k|uhd)\b/i.test(r.title));
-      if (tem4k) {
-        logger.debug(`HDR: 4K encontrado na query "${q}". Encerrando busca.`);
-        break;
-      }
+      // Para na primeira query que retornou links
+      break;
     }
 
     const duration = Date.now() - startTime;
-    logger.info(`HDR: ${allResults.length} magnets em ${duration}ms para "${query.substring(0,50)}"`);
+    logger.info(`HDR: ${allResults.length} magnets em ${duration}ms para "${query.substring(0, 50)}"`);
     return allResults;
   } catch (err: any) {
     logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });

@@ -226,6 +226,12 @@ export class WordPressScraper {
       for (const res of batchResults) {
         results.push(...res);
       }
+
+      // Parada precoce: se já encontramos resultados, não processa os próximos lotes
+      if (results.length > 0) {
+        logger.debug(`WP ${site.name}: resultados encontrados (${results.length}). Encerrando processamento de posts desta query.`);
+        break;
+      }
     }
 
     if (querySeason) {
