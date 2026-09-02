@@ -34,7 +34,7 @@ const axiosConfig = {
   },
 };
 
-function cleanSlug(slug: string): string {
+export function cleanSlug(slug: string): string {
   let decodificado = slug;
   try {
     decodificado = decodeURIComponent(slug);
@@ -65,7 +65,7 @@ function cleanSlug(slug: string): string {
   return semData.replace(/-/g, ' ');
 }
 
-function extrairTituloBaseDoSlug(slug: string): string {
+export function extrairTituloBaseDoSlug(slug: string): string {
   const limpo = cleanSlug(slug);
   const range = extrairRangeEpisodios(limpo);
   const normalizado = normalizarTexto(limpo);
@@ -88,7 +88,8 @@ interface SearchResultItem {
 async function searchStarckLinks(
   searchQuery: string,
   allQueries: string[],
-  targetSeason?: number
+  targetSeason?: number,
+  targetYear?: number
 ): Promise<SearchResultItem[]> {
   const searchUrl = `${STARCK_BASE}/?s=${encodeURIComponent(searchQuery)}`;
 
@@ -379,7 +380,8 @@ export async function searchStarck(
   query: string,
   type: 'movie' | 'series' = 'movie',
   targetSeason?: number,
-  searchQueries?: string[]
+  searchQueries?: string[],
+  targetYear?: number
 ): Promise<StarckTorrent[]> {
   const startTime = Date.now();
 
@@ -391,7 +393,7 @@ export async function searchStarck(
 
   for (const q of queriesParaBusca) {
     logger.debug(`Starck: tentando busca com query "${q}"`);
-    const links = await searchStarckLinks(q, allQueries, targetSeason);
+    const links = await searchStarckLinks(q, allQueries, targetSeason, targetYear);
     if (links.length === 0) continue;
 
     let processedPosts = 0;

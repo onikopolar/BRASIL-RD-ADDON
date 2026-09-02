@@ -269,10 +269,12 @@ export class AutoMagnetService {
       }
 
       if (magnetData.imdbSeason && magnetData.imdbEpisode !== undefined) {
+        const rangeMultiplo = imdbEpisodeStart !== null && imdbEpisodeEnd !== null && imdbEpisodeEnd > imdbEpisodeStart;
+
         if (magnetData.imdbEpisode === null) {
           imdbEpisodeStart = null;
           imdbEpisodeEnd = null;
-        } else {
+        } else if (!rangeMultiplo) {
           imdbEpisodeStart = magnetData.imdbEpisode;
           imdbEpisodeEnd = magnetData.imdbEpisode;
         }

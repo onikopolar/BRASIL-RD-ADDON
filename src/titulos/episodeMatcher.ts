@@ -54,6 +54,40 @@ export class EpisodeMatcher {
     return false;
   }
 
+  /**
+   * Seleciona arquivo de episódio usando títulos TMDB (PT/EN) quando disponíveis.
+   * Caso os títulos não sejam fornecidos ou não casem, usa a extração por padrões.
+   */
+  arquivoPertenceAoEpisodioComTitulos(
+    caminhoCompleto: string,
+    temporadaAlvo: number,
+    episodioAlvo: number,
+    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null
+  ): boolean {
+    if (!this.ehArquivoDeVideo(caminhoCompleto)) return false;
+
+    if (episodeTitles && episodeTitles.length > 0) {
+      const epData = episodeTitles.find(ep => ep.episodeNumber === episodioAlvo);
+      if (epData) {
+        const nomeArquivo = this.extrairNomeArquivo(caminhoCompleto)
+          .toLowerCase()
+          .replace(/\.[^.]+$/, '');
+        const nomesNormalizados = [epData.namePt, epData.nameEn]
+          .filter((n): n is string => !!n)
+          .map(n => normalizarTexto(n));
+        if (nomesNormalizados.some(nome => nomeArquivo.includes(nome) || nome.includes(nomeArquivo))) {
+          return true;
+        }
+        // Se temos títulos e não bateu, usa fallback numérico apenas com o nome do arquivo
+        const nomeArquivoSemPasta = this.extrairNomeArquivo(caminhoCompleto);
+        return this.arquivoPertenceAoEpisodio(nomeArquivoSemPasta, temporadaAlvo, episodioAlvo);
+      }
+    }
+
+    // fallback para a lógica antiga (quando não há títulos de episódios)
+    return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
+  }
+
   // ─── MÉTODOS PRIVADOS ───
 
   private ehArquivoDeVideo(caminho: string): boolean {
@@ -116,6 +150,8 @@ export class EpisodeMatcher {
       /\btemporada\s*\d{1,3}\b/,
       /\b\d{1,2}ª?\s*temporada\b/,
       /\b\d{1,2}x\d{1,3}\b/,
+      /\btodas as temporadas\b/,
+      /\btemporadas?\s*completas?\b/,
     ];
     return padroes.some(p => p.test(lower));
   }

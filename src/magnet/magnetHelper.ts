@@ -69,7 +69,11 @@ export async function gerarUrlResolve(
       ? `https://${process.env.RAILWAY_STATIC_URL}`
       : `http://localhost:${process.env.PORT || 7000}`);
 
-  let url = `${baseUrl}/resolve/torbox/${chaveApi}/${infoHash}/null/${indiceArquivo}/${arquivoCodificado}`;
+  const seasonEpisodePath = tipo === 'series' && temporada !== undefined && episodio !== undefined
+    ? `s${temporada}e${episodio}`
+    : (tipo === 'movie' ? 'movie' : 'null');
+
+  let url = `${baseUrl}/resolve/torbox/${chaveApi}/${infoHash}/${seasonEpisodePath}/${indiceArquivo}/${arquivoCodificado}`;
 
   const parametros = new URLSearchParams();
   if (tipo) parametros.append('type', tipo);
@@ -86,6 +90,7 @@ export async function gerarUrlResolve(
   parametros.append('magnet', magnet);
 
   const consulta = parametros.toString();
+  console.log('🔍 GERAR_URL_RESOLVE', { tipo, temporada, episodio, qualidade, imdbId, infoHash, consulta: consulta || 'SEM_QUERY' });
   if (consulta) url += `?${consulta}`;
 
   return url;

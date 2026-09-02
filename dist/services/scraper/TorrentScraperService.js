@@ -33,8 +33,8 @@ class TorrentScraperService {
             });
             const [wpResults, starckResults, hdrResults] = await Promise.all([
                 Promise.all([
-                    this.bludvScraper.search(query, type, targetSeason, searchQueries).catch(() => []),
-                    this.wpScraper.search(query, type, targetSeason, searchQueries).catch(() => []),
+                    this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
+                    this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
                 ]).then(([bludvResultados, wpResultados]) => {
                     const seen = new Set();
                     const combined = [...bludvResultados, ...wpResultados];
@@ -74,7 +74,7 @@ class TorrentScraperService {
                         .filter((r) => r !== null);
                 })
                     .catch(() => []),
-                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries, targetYear)
+                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries, targetYear, imdbId)
                     .then(results => {
                     const seen = new Set();
                     logger.debug(`📊 HDR: ${results.length} resultados brutos`);
@@ -196,6 +196,7 @@ class TorrentScraperService {
             originalTitle: params.originalTitle,
             year: params.year,
             canonicalName: params.canonicalName,
+            imdbConfirmed: params.imdbConfirmed,
         };
     }
     extractDnFromMagnet(magnet) {
@@ -212,13 +213,14 @@ class TorrentScraperService {
         const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
         return this.buildTorrentResult({
-            title: magnetName,
+            title: r.title,
             magnet: r.magnet,
             seeders: r.seeders,
             leechers: 0,
             size: r.size || 'N/A',
             quality: quality || 'HD',
             provider: 'HDR Torrent',
+            imdbConfirmed: r.imdbConfirmed,
             language,
             type,
             season,

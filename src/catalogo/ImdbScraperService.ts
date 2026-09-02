@@ -38,6 +38,7 @@ export interface ImdbTitles {
   year?: number;
   mediaType?: 'movie' | 'tv';
   portuguesePriority: boolean;
+  episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null;
 }
 
 interface GlobalCacheEntry {
@@ -70,6 +71,7 @@ export class ImdbScraperService {
 
   constructor() {
     this.tmdbApiKey = process.env.TMDB_API_KEY || '';
+    logger.debug('🔑 TMDB_API_KEY carregada?', { exists: !!this.tmdbApiKey, length: this.tmdbApiKey.length, cwd: process.cwd() });
 
     if (!this.tmdbApiKey) {
       logger.warn('TMDB_API_KEY não configurada! Metadados em português não estarão disponíveis. Obtenha uma key gratuita em: https://www.themoviedb.org/settings/api');
@@ -203,6 +205,9 @@ export class ImdbScraperService {
         year: resolved.year,
         mediaType,
         portuguesePriority,
+        episodeTitles: mediaType === 'tv' && season !== undefined && season > 0
+          ? await this.fetchEpisodeTitles(tmdbIdNum, season).catch(() => [])
+          : [],
       };
 
       ImdbScraperService.setCache(cacheKey, {
@@ -349,10 +354,10 @@ export class ImdbScraperService {
     }
   }
 
-  private async fetchSeasonFromTMDB(tmdbId: number, season: number): Promise<any> {
+  private async fetchSeasonFromTMDB(tmdbId: number, season: number, langOverride?: string): Promise<any> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/tv/${tmdbId}/season/${season}`, {
-        params: { api_key: this.tmdbApiKey, language: this.language },
+        params: { api_key: this.tmdbApiKey, language: langOverride || this.language },
         timeout: 10000,
       });
       return response.data;
@@ -360,6 +365,30 @@ export class ImdbScraperService {
       logger.debug('TMDB temporada falhou', { tmdbId, season, error: error instanceof Error ? error.message : 'Erro' });
       throw error;
     }
+  }
+
+  private async fetchEpisodeTitles(tmdbId: number, season: number): Promise<Array<{ episodeNumber: number; namePt?: string; nameEn?: string }>> {
+    const result: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> = [];
+    try {
+      const [ptData, enData] = await Promise.all([
+        this.fetchSeasonFromTMDB(tmdbId, season, 'pt-BR').catch(() => null),
+        this.fetchSeasonFromTMDB(tmdbId, season, 'en-US').catch(() => null),
+      ]);
+
+      const episodes = ptData?.episodes || enData?.episodes || [];
+      for (const ep of episodes) {
+        const episodeNumber = ep.episode_number;
+        if (!episodeNumber) continue;
+        const namePt = ptData?.episodes?.find((e: any) => e.episode_number === episodeNumber)?.name;
+        const nameEn = enData?.episodes?.find((e: any) => e.episode_number === episodeNumber)?.name;
+        if (namePt || nameEn) {
+          result.push({ episodeNumber, namePt, nameEn });
+        }
+      }
+    } catch (error) {
+      logger.warn('TMDB episódios falhou', { tmdbId, season, error: error instanceof Error ? error.message : 'Erro' });
+    }
+    return result;
   }
 
   // ═══════════════════════════════════════════════════════════════════

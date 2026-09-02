@@ -110,6 +110,10 @@ ImdbTitleCache.init({
         type: sequelize_1.DataTypes.INTEGER,
         allowNull: true
     },
+    episodeTitles: {
+        type: sequelize_1.DataTypes.TEXT,
+        allowNull: true
+    },
     updatedAt: {
         type: sequelize_1.DataTypes.DATE,
         allowNull: false,

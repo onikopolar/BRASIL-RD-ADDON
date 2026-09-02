@@ -139,6 +139,7 @@ interface ImdbTitleCacheAttributes {
   titlesPt: string;      // títulos em português, separados por vírgula
   titlesEn: string;      // títulos em inglês, separados por vírgula
   year?: number | null;
+  episodeTitles?: string | null; // JSON com títulos de episódios
   updatedAt: Date;
 }
 
@@ -149,6 +150,7 @@ class ImdbTitleCache extends Model<ImdbTitleCacheAttributes> implements ImdbTitl
   public titlesPt!: string;
   public titlesEn!: string;
   public year?: number | null;
+  public episodeTitles?: string | null;
   public updatedAt!: Date;
 }
 
@@ -177,6 +179,10 @@ ImdbTitleCache.init(
     },
     year: {
       type: DataTypes.INTEGER,
+      allowNull: true
+    },
+    episodeTitles: {
+      type: DataTypes.TEXT,
       allowNull: true
     },
     updatedAt: {

@@ -25,6 +25,7 @@ interface ScrapedTorrent {
   magnetInfoHash?: string;
   originalTitle?: string;
   year?: number;
+  years?: number[];
   magnet: string;
   seeders: number;
   leechers: number;
@@ -34,6 +35,7 @@ interface ScrapedTorrent {
   language: string;
   type: 'movie' | 'series';
   episode?: number;
+  imdbConfirmed?: boolean;
 }
 
 export interface TmdbSearchData {
@@ -337,6 +339,7 @@ export class CatalogProvider {
         const tituloParaValidar = t.originalTitle || t.title || '';
         const tituloParaIdioma = t.title || t.originalTitle || '';
         this.logger.debug(`🔍 Validando: "${tituloParaValidar?.substring(0, 50)}" | alvo S${season ?? '?'}E${episode ?? '?'}`);
+        this.logger.debug('TitleFilter campos', { title: t.title, originalTitle: t.originalTitle, canonicalName: t.canonicalName });
 
         const result = await this.titleFilter.titulosCombinam(
           tituloParaValidar,
@@ -347,7 +350,9 @@ export class CatalogProvider {
           t.year,
           imdbTitles,
           t.htmlTitle,
-          t.episode
+          t.episode,
+          t.imdbConfirmed,
+          t.years
         );
 
         return { torrent: t, result };
@@ -424,7 +429,7 @@ export class CatalogProvider {
           const episodeValue = isPackFallback ? null : episode;
           await this.autoMagnetService.autoAddMagnet(
             torrent.magnet,
-            torrent.canonicalName || torrent.title,
+            torrent.title || torrent.canonicalName || '',
             imdbId,
             request.type,
             torrent.seeders,

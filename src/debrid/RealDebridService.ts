@@ -278,10 +278,15 @@ export class TorboxService {
    * Prioriza a qualidade (targetQuality) na seleção do arquivo.
    */
   async getStreamLinkForTorrent(
-    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number, targetQuality?: string,
-    cachedInfo?: TorboxTorrentInfo, targetTitles?: string[]
+    torrentId: string,
+    apiKey: string,
+    targetSeason?: number,
+    targetEpisode?: number,
+    targetQuality?: string,
+    cachedInfo?: TorboxTorrentInfo,
+    targetTitles?: string[],
+    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null
   ): Promise<string | null> {
-    this.validateTorrentId(torrentId);
 
     try {
       const info = cachedInfo || await this.getTorrentInfo(torrentId, apiKey);
@@ -304,8 +309,10 @@ export class TorboxService {
       );
 
       if (targetSeason !== undefined && targetEpisode !== undefined) {
+        const epData = episodeTitles?.find(ep => ep.episodeNumber === targetEpisode);
+        this.logger.info(`Episódio alvo: ${targetSeason}x${targetEpisode}${epData ? ` | PT: ${epData.namePt} | EN: ${epData.nameEn}` : ''}`);
         const episodeFiles = candidateFiles.filter(f =>
-          this.episodeMatcher.arquivoPertenceAoEpisodio(f.name, targetSeason, targetEpisode)
+          this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(f.name, targetSeason, targetEpisode, episodeTitles)
         );
 
         if (episodeFiles.length === 0) {
@@ -334,7 +341,7 @@ export class TorboxService {
       let bestFile: TorboxFile | null = null;
       let bestScore = 0;
 
-      this.logger.debug(`Iniciando seleção entre ${candidateFiles.length} vídeos (episódio ${targetSeason}x${targetEpisode})`);
+      this.logger.debug(`Selecionando arquivo (candidatos: ${candidateFiles.length}, episódio: ${targetSeason}x${targetEpisode})`);
 
       for (const f of candidateFiles) {
         let score = 0;

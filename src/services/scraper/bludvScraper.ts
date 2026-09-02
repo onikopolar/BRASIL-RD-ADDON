@@ -8,7 +8,14 @@ import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { allowedQualities } from './scraperConfigs.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+
+const LEGENDADO_REGEX = new RegExp(
+  '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
+    .filter(w => /^leg/i.test(w))
+    .join('|') + ')\\b',
+  'i'
+);
 
 const logger = new Logger('BludvScraper');
 
@@ -64,11 +71,10 @@ export class BludvScraper {
     query: string,
     type: 'movie' | 'series',
     targetSeason?: number,
-    searchQueries?: string[]
+    searchQueries?: string[],
+    imdbId?: string
   ): Promise<TorrentResult[]> {
     try {
-      // Usa diretamente a lista de queries fornecida pelo serviço principal.
-      // Se não houver, usa a query original.
       const queriesParaBusca = searchQueries && searchQueries.length > 0
         ? searchQueries
         : [query];
@@ -80,7 +86,6 @@ export class BludvScraper {
         logger.debug(`BLUDV: tentando busca com query "${q}"`);
         const posts = await this.searchPosts(q, targetSeason, searchQueries);
 
-        // Adiciona apenas posts ainda não coletados
         for (const post of posts) {
           if (!seenUrls.has(post.url)) {
             seenUrls.add(post.url);
@@ -88,7 +93,6 @@ export class BludvScraper {
           }
         }
 
-        // Se já encontrou posts, para de tentar outras queries
         if (allPosts.length > 0) {
           logger.debug(`BLUDV: query "${q}" retornou ${posts.length} posts. Encerrando busca.`);
           break;
@@ -104,7 +108,7 @@ export class BludvScraper {
 
       const postResults = await Promise.all(
         allPosts.map(item =>
-          this.scrapePost(item.url, type, targetSeason).catch(() => [] as TorrentResult[])
+          this.scrapePost(item.url, type, targetSeason, imdbId).catch(() => [] as TorrentResult[])
         )
       );
       return postResults.flat();
@@ -142,41 +146,53 @@ export class BludvScraper {
       }
     });
 
-    if (targetSeason !== undefined) {
-      // Monta todas as frases possíveis a partir das queries oficiais
-      const allQueries = new Set<string>([query, ...(searchQueries || [])]);
-      const frases = new Set<string>();
+    const allQueries = new Set<string>([query, ...(searchQueries || [])]);
+    const frases = new Set<string>();
 
-      for (const q of allQueries) {
-        const phrase = normalizarTexto(
-          q
-            .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
-            .replace(/\btemporada\s*\d+\b/gi, '')
-            .replace(/\bseason\s*\d+\b/gi, '')
-            .replace(/\b\d{4}\b/g, '')
-        );
-        if (phrase) frases.add(phrase);
-      }
-
-      logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
-
-      const filtered = items.filter(item => {
-        const range = extrairRangeEpisodios(item.title);
-        if (range && range.season !== targetSeason) return false;
-
-        const titleNormalizado = normalizarTexto(item.title);
-        return [...frases].some(frase => titleNormalizado.includes(frase));
-      });
-
-      return filtered.slice(0, 5);
+    for (const q of allQueries) {
+      const phrase = normalizarTexto(
+        q
+          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+          .replace(/\btemporada\s*\d+\b/gi, '')
+          .replace(/\bseason\s*\d+\b/gi, '')
+          .replace(/\b\d{4}\b/g, '')
+      );
+      if (phrase) frases.add(phrase);
     }
 
-    return items.slice(0, 5);
-  }
+    logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
 
-  // ═══════════════════════════════════════════════════════════════
-  //  EXTRAÇÃO DE QUALIDADE (prioridade: dn → linkText → contexto amplo → post)
-  // ═══════════════════════════════════════════════════════════════
+    const relevantPosts = items.filter(item => {
+      const lowerTitle = item.title.toLowerCase();
+
+      if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
+        logger.debug(`[BLUDV] post legendado ignorado: "${item.title.substring(0, 50)}"`);
+        return false;
+      }
+
+      if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
+
+      if (targetSeason !== undefined) {
+        const range = extrairRangeEpisodios(item.title);
+        if (range && range.season !== targetSeason) return false;
+      }
+
+      const titleNormalizado = normalizarTexto(item.title);
+      const match = [...frases].some(frase => titleNormalizado.includes(frase));
+
+      const baseTitle = normalizarTexto(query.replace(/\b\d+$/, '').trim());
+      const isCollection = isCollectionTitle(titleNormalizado) && (baseTitle ? titleNormalizado.includes(baseTitle) : true);
+
+      if (!match && !isCollection) {
+        logger.debug(`[BLUDV] post ignorado (frase não encontrada): "${item.title.substring(0, 50)}"`);
+        return false;
+      }
+
+      return true;
+    }).slice(0, 5);
+
+    return relevantPosts;
+  }
 
   private extractQualityFromText(text: string): string | null {
     const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
@@ -195,10 +211,6 @@ export class BludvScraper {
     return $el.parent().text().trim();
   }
 
-  /**
-   * Limpa o título HTML combinando o episódio do contexto com a qualidade exata do link.
-   * Se `qualityOverride` for fornecida, ela é usada diretamente.
-   */
   private cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {
     const epPatterns = [
       /EPIS[OÓ]DIO\s+\d{1,3}\s+AO?\s+\d{1,3}/i,
@@ -226,17 +238,23 @@ export class BludvScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  //  SCRAPING DO POST
-  // ═══════════════════════════════════════════════════════════════
-
   private async scrapePost(
     postUrl: string,
     type: 'movie' | 'series',
-    targetSeason?: number
+    targetSeason?: number,
+    imdbId?: string
   ): Promise<TorrentResult[]> {
     const res = await axios.get(postUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
+
+    let imdbConfirmed = false;
+    if (imdbId) {
+      const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+      if (imdbIdDoPost) {
+        if (imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
+        imdbConfirmed = true;
+      }
+    }
 
     const contentHtml = $('.content').html() || $('body').html() || '';
     if (!contentHtml) return [];
@@ -321,9 +339,30 @@ export class BludvScraper {
       }
 
       let episode: number | undefined;
-      const contextForEpisode = link.fullContextText || link.linkText;
-      const epMatch = contextForEpisode.match(/EPISÓDIO\s*(\d+)/i);
-      if (epMatch) episode = parseInt(epMatch[1], 10);
+      let episodeRangeText: string | undefined;
+
+      if (canonicalName) {
+        const rangeCanonical = extrairRangeEpisodios(canonicalName);
+        if (rangeCanonical && rangeCanonical.episodeStart > 0) {
+          episode = rangeCanonical.episodeStart;
+          episodeRangeText = "Episódio " + rangeCanonical.episodeStart + (rangeCanonical.episodeEnd > rangeCanonical.episodeStart ? "-" + rangeCanonical.episodeEnd : "");
+        }
+      }
+
+      if (!episodeRangeText) {
+        const contextForEpisode = link.fullContextText || link.linkText;
+        const rangeContext = extrairRangeEpisodios(contextForEpisode);
+        if (rangeContext && rangeContext.episodeStart > 0) {
+          episode = rangeContext.episodeStart;
+          episodeRangeText = "Episódio " + rangeContext.episodeStart + (rangeContext.episodeEnd > rangeContext.episodeStart ? "-" + rangeContext.episodeEnd : "");
+        } else {
+          const epMatch = contextForEpisode.match(/EPISÓDIO\s*(\d+)/i);
+          if (epMatch) {
+            episode = parseInt(epMatch[1], 10);
+            episodeRangeText = "Episódio " + episode;
+          }
+        }
+      }
 
       let title: string;
       if (canonicalName) {
@@ -343,11 +382,9 @@ export class BludvScraper {
       const size = metadata.size || 'Desconhecido';
       const language = metadata.language || 'Desconhecido';
 
-      const cleanedHtmlTitle = this.cleanHtmlTitle(
-        link.fullContextText || link.linkText,
-        link.linkText,
-        dnQuality || linkQuality || contextQuality
-      );
+      const cleanedHtmlTitle = episodeRangeText
+        ? episodeRangeText + ": " + (dnQuality || linkQuality || contextQuality || "HD")
+        : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, dnQuality || linkQuality || contextQuality);
 
       results.push({
         title: this.cleanTitle(title),
@@ -368,16 +405,14 @@ export class BludvScraper {
         confidence: 0.9,
         originalTitle: metadata.originalTitle,
         year: metadata.year,
+        years: metadata.years,
         canonicalName,
+        imdbConfirmed,
       });
     }
 
     return results;
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  //  LINKS DO PROTETOR (com contexto amplo)
-  // ═══════════════════════════════════════════════════════════════
 
   private extractDualSectionProtectorLinks(
     $: any,
@@ -429,10 +464,6 @@ export class BludvScraper {
     }
     return result;
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  //  MAGNETS DIRETOS (fallback)
-  // ═══════════════════════════════════════════════════════════════
 
   private extractDirectMagnets(
     $: any,
@@ -487,10 +518,6 @@ export class BludvScraper {
     return result;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  //  HELPERS
-  // ═══════════════════════════════════════════════════════════════
-
   private async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     try {
       const res = await axios.get(protectorUrl, {
@@ -513,6 +540,7 @@ export class BludvScraper {
     language?: string;
     originalTitle?: string;
     year?: number;
+    years?: number[];
   } {
     const getMetaValue = (fieldName: string): string | undefined => {
       const em = $('em')
@@ -527,24 +555,29 @@ export class BludvScraper {
     };
 
     const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
-    const originalTitle =
-      originalTitleRaw && originalTitleRaw.length >= 3
-        ? originalTitleRaw.replace(/\(\d{4}\)$/, '').trim()
-        : undefined;
+    let originalTitle: string | undefined;
+
+    if (originalTitleRaw && originalTitleRaw.length >= 3) {
+      originalTitle = originalTitleRaw
+        .split('|')[0]
+        .replace(/\(\d{4}\)$/, '')
+        .trim();
+    }
+
+    const yearRaw = getMetaValue('Lançamento:');
+    let years: number[] = [];
+    if (yearRaw) {
+      years = yearRaw.match(/\b(19|20)\d{2}\b/g)?.map(y => parseInt(y)) || [];
+    }
 
     return {
       quality: getMetaValue('Qualidade:'),
       size: getMetaValue('Tamanho:'),
       language: getMetaValue('Áudio:'),
       originalTitle,
-      year: this.parseYear(getMetaValue('Lançamento:')),
+      year: years.length > 0 ? years[0] : undefined,
+      years,
     };
-  }
-
-  private parseYear(value: string | undefined): number | undefined {
-    if (!value) return undefined;
-    const m = value.match(/\b(19|20)\d{2}\b/);
-    return m ? parseInt(m[0]) : undefined;
   }
 
   private cleanTitle(title: string): string {

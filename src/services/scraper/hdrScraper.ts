@@ -20,6 +20,7 @@ export interface HdrTorrent {
   originalTitle?: string;
   year?: number;
   canonicalName?: string;
+  imdbConfirmed?: boolean;
   season?: number;
   episode?: number;
 }
@@ -308,13 +309,13 @@ export async function extractMagnetsFromPost(
         episode,
       });
 
-      logger.debug(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | quality=${qualityMatch || 'N/A'}`);
+      logger.info(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | quality=${qualityMatch || 'N/A'}`);
     } catch (err) {
       logger.warn(`HDR extractMagnetsFromPost | erro ao processar magnet | magnet=${raw.href.substring(0, 60)} | error=${(err as Error).message}`);
     }
   }
 
-  logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
+  logger.info(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
   return results;
 }
 
@@ -323,7 +324,8 @@ export async function searchHdr(
   type: 'movie' | 'series' = 'movie',
   targetSeason?: number,
   searchQueries?: string[],
-  targetYear?: number
+  targetYear?: number,
+  imdbId?: string
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
@@ -338,7 +340,21 @@ export async function searchHdr(
     if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
   }
 
-  const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
+    // Para séries: adiciona também o título sem temporada (pacotes multi-temporada)
+  for (const q of queriesBase) {
+    if (type === 'series') {
+      const tituloSemTemporada = q
+        .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+        .replace(/\btemporada\s*\d+\b/gi, '')
+        .replace(/\bseason\s*\d+\b/gi, '')
+        .trim();
+      if (tituloSemTemporada && !queriesParaBusca.includes(tituloSemTemporada)) {
+        queriesParaBusca.push(tituloSemTemporada);
+      }
+    }
+  }
+
+const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
 
   try {
     const allResults: HdrTorrent[] = [];
@@ -354,13 +370,11 @@ export async function searchHdr(
       }
 
       // Filtro local: mantém apenas links cujo título contenha alguma frase válida
+      // Filtro local: mantém apenas links cujo título contenha alguma frase válida
       const filtrados = links.filter(link => {
         const tituloNorm = normalizarTexto(link.title);
         const contemFrase = frasesValidas.some(frase => tituloNorm.includes(frase));
-        if (!contemFrase) return false;
-
-        if (targetYear && !tituloNorm.includes(String(targetYear))) return false;
-        return true;
+        return contemFrase;
       });
 
       logger.debug(`HDR: ${links.length} links → ${filtrados.length} após filtro local para query "${q}"`);
@@ -368,12 +382,20 @@ export async function searchHdr(
       if (filtrados.length === 0) continue;
 
       // Processa no máximo 5 posts filtrados
-      const limite = 5;
-      for (const item of filtrados.slice(0, limite)) {
+      for (const item of filtrados) {
         try {
           const res = await axios.get(item.postUrl, axiosConfig);
+          let imdbConfirmed = false;
+          if (imdbId) {
+            const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+            if (imdbIdDoPost) {
+              if (imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) continue;
+              imdbConfirmed = true;
+            }
+          }
           const magnets = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
           for (const r of magnets) {
+            if (imdbConfirmed) r.imdbConfirmed = true;
             if (!seenInfoHashes.has(r.infoHash)) {
               seenInfoHashes.add(r.infoHash);
               allResults.push(r);

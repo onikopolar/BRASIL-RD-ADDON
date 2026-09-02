@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SimilarityCalculator } from './SimilarityCalculator.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
-import { extrairRangeEpisodios } from './TechnicalWords.js';
+import { extrairRangeEpisodios, isCollectionTitle } from './TechnicalWords.js';
 import { TitleMatchResult, SeriesMetadata } from './interfaces.js';
 import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
 
@@ -79,14 +79,22 @@ export class TitleFilter {
     anoDoScraper?: number,
     imdbTitles?: ImdbTitles | null,
     htmlTitle?: string,
-    episodioTorrent?: number
+    episodioTorrent?: number,
+    imdbConfirmed?: boolean,
+    years?: number[],
   ): Promise<TitleMatchResult> {
     try {
       const metadados = this.extrairMetadados(tituloTorrent);
       const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
       // ── 1.5 VALIDAÇÃO DE ANO (tolerância de ±1 ano para lançamentos regionais) ──
+      const isCollection = isCollectionTitle(tituloTorrent) || isCollectionTitle(tituloParaIdioma || '');
+      const isYearInCollection = years && imdbTitles?.year !== undefined && years.includes(imdbTitles.year);
+      this.logger.debug('TitleFilter: validação de ano', { tituloTorrent, anoTorrent, imdbAno: imdbTitles?.year, isCollection, years, isYearInCollection });
       if (
+        !imdbConfirmed &&
+        !isCollection &&
+        !isYearInCollection &&
         anoTorrent !== undefined &&
         imdbTitles?.year !== undefined &&
         Math.abs(anoTorrent - imdbTitles.year) > 1
@@ -96,6 +104,17 @@ export class TitleFilter {
           similarity: 0,
           torrentMetadata: metadados,
           reason: `Ano divergente: ${anoTorrent} vs ${imdbTitles.year}`
+        };
+      }
+
+      // ── 1.6 COLEÇÃO/FRANQUIA: aceita se o ano alvo estiver na faixa de anos ──
+      if (isCollection && isYearInCollection) {
+        this.logger.info('Coleção/franquia aceita por faixa de anos', { tituloTorrent, imdbAno: imdbTitles?.year, years });
+        return {
+          matches: true,
+          similarity: 0.8,
+          torrentMetadata: metadados,
+          reason: 'Coleção/franquia com ano na faixa'
         };
       }
 
@@ -110,11 +129,20 @@ export class TitleFilter {
         range = extrairRangeEpisodios(tituloParaIdioma);
       }
 
-      // ── 2. VALIDAÇÃO DE EPISÓDIO (com prioridade para episódio exato) ──
+      // ── 2. VALIDAÇÃO DE EPISÓDIO (prioriza range do título; depois episódio exato) ──
       if (episodioAlvo !== undefined) {
-        const episodioExato = episodioTorrent !== undefined && episodioTorrent > 0;
+        const temRange = range && range.episodeStart > 0 && range.episodeEnd > 0;
 
-        if (episodioExato) {
+        if (temRange) {
+          if (episodioAlvo < range!.episodeStart || episodioAlvo > range!.episodeEnd) {
+            return {
+              matches: false,
+              similarity: 0,
+              torrentMetadata: metadados,
+              reason: `Episódio fora do range: E${episodioAlvo} vs E${range!.episodeStart}-E${range!.episodeEnd}`
+            };
+          }
+        } else if (episodioTorrent !== undefined && episodioTorrent > 0) {
           if (episodioTorrent !== episodioAlvo) {
             return {
               matches: false,
@@ -127,15 +155,6 @@ export class TitleFilter {
           const isSeasonPack = range && range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0;
           if (isSeasonPack && temporadaAlvo !== undefined && range!.season === temporadaAlvo) {
             // Pack de temporada: aceita como fallback
-          } else if (range && range.episodeStart > 0 && range.episodeEnd > 0) {
-            if (episodioAlvo < range.episodeStart || episodioAlvo > range.episodeEnd) {
-              return {
-                matches: false,
-                similarity: 0,
-                torrentMetadata: metadados,
-                reason: `Episódio fora do range: E${episodioAlvo} vs E${range.episodeStart}-E${range.episodeEnd}`
-              };
-            }
           }
         }
       }

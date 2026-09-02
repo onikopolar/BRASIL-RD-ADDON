@@ -143,13 +143,14 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
   'turg', 'Turg', 'TURG', 'fitgirl', 'FitGirl', 'steamrip',
   'g4ris', 'rartv', 'ntb', 'bone', 'BONE', 'ION10', '10bit', 'CM', 'RDNYB', 'DCPRiP',
+  'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
 
 // ─── FUNCOES ───
 
 const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
-  'coletanea', 'franquia', 'duologia', 'saga',
+  'coletanea', 'franquia', 'duologia', 'saga', 'todas as temporadas', 'temporada completa', 'season pack', 'pack completo',
 ]);
 
 export function isCollectionTitle(title: string): boolean {
@@ -296,16 +297,6 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .trim();
-
-  // ═══ Padrão 0: SxxEyy-Ezz (range simples com hífen) ═══
-  const sxxExxRange = t.match(/s(\d{1,2})\s*e(\d{1,3})\s*-\s*(\d{1,3})\b/i);
-  if (sxxExxRange) {
-    return {
-      season: parseInt(sxxExxRange[1]),
-      episodeStart: parseInt(sxxExxRange[2]),
-      episodeEnd: parseInt(sxxExxRange[3]),
-    };
-  }
 
   // ═══ Padrão 1: SxxExx (S02E04, S02E01-02-03, S02E01-10) ═══
   const sxxExx = t.match(/s(\d{1,2})\s*e(\d{1,3})/i);

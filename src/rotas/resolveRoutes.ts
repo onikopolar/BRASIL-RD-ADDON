@@ -27,6 +27,7 @@ const emVoo = new Map<string, Promise<any>>();
 
 // Cache local de títulos por infoHash
 const titlesCache = new Map<string, string[]>();
+const episodeTitlesCache = new Map<string, Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null>();
 
 // Cache de torrents em processamento (evita re-chamadas ao Torbox)
 const pendingTorrentCache = new Map<string, { timestamp: number; status: string; torrentId?: string }>();
@@ -117,11 +118,12 @@ async function getEnrichedTitlesForHash(
     infoHash: string,
     externalImdbId?: string,
     externalSeason?: number
-): Promise<string[] | undefined> {
+): Promise<{ titles: string[] | undefined; episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null }> {
     const cached = titlesCache.get(infoHash);
     if (cached !== undefined) {
-        resolveLogger.info('💾 TÍTULOS DO CACHE LOCAL (memória)', { infoHash, titles: cached.join(', ') });
-        return cached.length > 0 ? cached : undefined;
+        const cachedEpisodes = episodeTitlesCache.get(infoHash);
+        resolveLogger.info('💾 TÍTULOS DO CACHE LOCAL (memória)', { infoHash, titles: cached.join(', '), episodeTitles: cachedEpisodes?.length || 0 });
+        return { titles: cached.length > 0 ? cached : undefined, episodeTitles: cachedEpisodes };
     }
 
     try {
@@ -140,7 +142,8 @@ async function getEnrichedTitlesForHash(
                 resolveLogger.info('📋 imdbId obtido do banco Torrent', { infoHash, imdbId, season });
             } else {
                 titlesCache.set(infoHash, []);
-                return undefined;
+        episodeTitlesCache.set(infoHash, null);
+                return { titles: undefined, episodeTitles: undefined };
             }
         } else {
             resolveLogger.info('🎯 imdbId recebido da URL de resolução', { infoHash, imdbId, season });
@@ -148,19 +151,23 @@ async function getEnrichedTitlesForHash(
 
         const cachedTitle = await ImdbTitleCache.findOne({
             where: { imdbId, season: season ?? null },
-            attributes: ['titlesPt', 'titlesEn', 'year', 'updatedAt'],
+            attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'updatedAt'],
             raw: true
         });
 
         if (cachedTitle) {
             const ageMs = Date.now() - new Date(cachedTitle.updatedAt).getTime();
-            if (ageMs < DB_TITLE_CACHE_TTL_MS) {
+            const needsEpisodeTitles = season !== undefined;
+            const hasEpisodeTitles = cachedTitle.episodeTitles ? true : false;
+            if (ageMs < DB_TITLE_CACHE_TTL_MS && (!needsEpisodeTitles || hasEpisodeTitles)) {
                 const titlesPtArr = cachedTitle.titlesPt.split(',').map(s => s.trim()).filter(Boolean);
                 const titlesEnArr = cachedTitle.titlesEn.split(',').map(s => s.trim()).filter(Boolean);
                 const year = cachedTitle.year;
                 const allTitles = [...titlesPtArr, ...titlesEnArr];
                 const enriched = year ? allTitles.map(t => `${t} ${year}`) : allTitles;
                 titlesCache.set(infoHash, enriched);
+                const episodeTitlesCached = cachedTitle.episodeTitles ? JSON.parse(cachedTitle.episodeTitles) : null;
+                episodeTitlesCache.set(infoHash, episodeTitlesCached);
                 resolveLogger.info('🗄️ TÍTULOS DO BANCO (cache DB)', {
                     infoHash,
                     imdbId,
@@ -168,7 +175,7 @@ async function getEnrichedTitlesForHash(
                     titles: enriched.join(', '),
                     age: `${Math.round(ageMs / 3600000)}h`
                 });
-                return enriched.length > 0 ? enriched : undefined;
+                return { titles: enriched.length > 0 ? enriched : undefined, episodeTitles: episodeTitlesCached };
             } else {
                 resolveLogger.info('⏳ Cache DB expirado, atualizando da API...', { imdbId, season });
             }
@@ -179,6 +186,7 @@ async function getEnrichedTitlesForHash(
 
         const titles = tmdbData.imdbTitles?.allTitles || [];
         const year = tmdbData.imdbTitles?.year;
+        resolveLogger.debug('🔎 EPISODE_TITLES_FLOW', { imdbId, season, episodeTitles: tmdbData.imdbTitles?.episodeTitles, hasEpisodes: !!tmdbData.imdbTitles?.episodeTitles });
 
         if (titles.length === 0) {
             await ImdbTitleCache.upsert({
@@ -190,7 +198,7 @@ async function getEnrichedTitlesForHash(
                 updatedAt: new Date()
             });
             titlesCache.set(infoHash, []);
-            return undefined;
+            return { titles: undefined, episodeTitles: undefined };
         }
 
         const allTitlesStr = titles.join(',');
@@ -204,21 +212,31 @@ async function getEnrichedTitlesForHash(
         });
 
         const enriched = year ? titles.map(t => `${t} ${year}`) : titles;
+        const episodeTitles = tmdbData.imdbTitles?.episodeTitles || null;
         titlesCache.set(infoHash, enriched);
+        await ImdbTitleCache.upsert({
+            imdbId,
+            season: season ?? null,
+            titlesPt: allTitlesStr,
+            titlesEn: allTitlesStr,
+            year: year ?? null,
+            episodeTitles: episodeTitles ? JSON.stringify(episodeTitles) : null,
+            updatedAt: new Date()
+        });
         resolveLogger.info('🌐 TÍTULOS DA API (TMDB) salvos no banco', {
             infoHash,
             imdbId,
             season,
             titles: enriched.join(', ')
         });
-        return enriched;
+        return { titles: enriched, episodeTitles };
     } catch (error) {
         resolveLogger.error('❌ Erro ao obter títulos enriquecidos', {
             infoHash,
             error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         titlesCache.set(infoHash, []);
-        return undefined;
+        return { titles: undefined, episodeTitles: undefined };
     }
 }
 
@@ -226,7 +244,8 @@ async function getEnrichedTitlesForHash(
 async function processMagnetWithTorbox(
     magnet: string, apiKey: string, infoHash: string,
     season?: number, episode?: number, type: string = 'movie', quality?: string,
-    titles?: string[]
+    titles?: string[],
+    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null
 ): Promise<{ success: boolean; streamLink?: string; status: string; message?: string; torrentId?: string }> {
     try {
         const hashKey = infoHash.toLowerCase();
@@ -288,7 +307,7 @@ async function processMagnetWithTorbox(
 
         if (titles && titles.length > 0) {
             const link = await torboxService.getStreamLinkForTorrent(
-                torrentId, apiKey, season, episode, quality, info, titles
+                torrentId, apiKey, season, episode, quality, info, titles, episodeTitles
             );
             streamLink = link || undefined;
         } else {
@@ -321,13 +340,29 @@ async function processMagnetWithTorbox(
 }
 
 export const setupResolveRoutes = (app: any) => {
-    app.get('/resolve/torbox/:apiKey/:infoHash/null/:fileIndex/:filename', async (req: any, res: any) => {
+    app.get('/resolve/torbox/:apiKey/:infoHash/:seasonEpisode/:fileIndex/:filename', async (req: any, res: any) => {
         const apiKey = req.params.apiKey;
         const infoHash = req.params.infoHash;
         const fileIndex = parseInt(req.params.fileIndex) || 0;
         const filename = decodeURIComponent(req.params.filename);
-        const season = req.query.season ? parseInt(req.query.season as string) : undefined;
-        const episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
+        let season: number | undefined;
+        let episode: number | undefined;
+
+        const seasonEpisodeParam = req.params.seasonEpisode as string;
+        if (seasonEpisodeParam && seasonEpisodeParam !== 'null' && seasonEpisodeParam !== 'movie') {
+          const match = seasonEpisodeParam.match(/^s(\d+)e(\d+)$/i);
+          if (match) {
+            season = parseInt(match[1]);
+            episode = parseInt(match[2]);
+          }
+        }
+
+        if (season === undefined) {
+          season = req.query.season ? parseInt(req.query.season as string) : undefined;
+        }
+        if (episode === undefined) {
+          episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
+        }
         const quality = req.query.quality as string | undefined;
         const type = req.query.type as string || (season !== undefined ? 'series' : 'movie');
         const imdbId = req.query.imdbId as string | undefined;
@@ -374,7 +409,9 @@ export const setupResolveRoutes = (app: any) => {
                     // Usa o magnet completo da URL, se disponível; senão reconstrói com o infoHash
                     const magnetLink = magnetFromUrl || `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
 
-                    const titles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
+                    const enrichedTitles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
+                    const titles = enrichedTitles.titles;
+                    const episodeTitles = enrichedTitles.episodeTitles;
                     if (titles) {
                         resolveLogger.info('🔤 Títulos obtidos para seleção de arquivo', {
                             infoHash,
@@ -382,7 +419,7 @@ export const setupResolveRoutes = (app: any) => {
                         });
                     }
 
-                    return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles);
+                    return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles, episodeTitles);
                 } finally {
                     emVoo.delete(dedupKey);
                 }
@@ -452,8 +489,10 @@ export const setupResolveRoutes = (app: any) => {
             const magnetHash = await extrairInfoHashDoMagnet(magnet);
             if (!magnetHash) throw new Error('Magnet inválido');
 
-            const titles = await getEnrichedTitlesForHash(magnetHash, imdbId, season);
-            const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type, undefined, titles);
+            const enrichedTitles = await getEnrichedTitlesForHash(magnetHash, imdbId, season);
+            const titles = enrichedTitles.titles;
+            const episodeTitles = enrichedTitles.episodeTitles;
+            const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type, undefined, titles, episodeTitles);
 
             if (tbResult.success && tbResult.streamLink) {
                 res.setHeader('Access-Control-Allow-Origin', '*');

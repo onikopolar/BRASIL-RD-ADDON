@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { normalizarTexto } from './TechnicalWords.js';
+import { normalizarTexto, isCollectionTitle } from './TechnicalWords.js';
 
 export class SimilarityCalculator {
   private readonly logger: Logger;
@@ -221,6 +221,17 @@ export class SimilarityCalculator {
     _titulosValidos: string[],
     anoTorrent: number | null
   ): SmartTitleMatch {
+    // Aceita coleções/franquias quando há pelo menos uma palavra da franquia
+    if (isCollectionTitle(tituloTorrent) && melhor.encontradas > 0) {
+      this.logger.info(`✅ "${tituloTorrent.substring(0, 60)}" | Coleção/franquia aceita (${melhor.encontradas}/${melhor.totalTmdb} palavras)`);
+      return {
+        matches: true,
+        similarity: 0.8,
+        reason: `Coleção/franquia aceita: ${melhor.encontradas}/${melhor.totalTmdb} palavras`,
+        mediaType: movieInfo.mediaType,
+      };
+    }
+
     const anoTmdb = movieInfo.year;
     const condicaoA = this.validarPalavrasMinimas(melhor);
     const condicaoF = this.validarOrdemPalavras(palavrasTorrent, melhor.palavrasTmdb);
