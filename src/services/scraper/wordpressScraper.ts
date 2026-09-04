@@ -53,7 +53,7 @@ export function criarLookup() {
 }
 export const lookupCustomizado = criarLookup();
 
-interface WordPressSite {
+export interface WordPressSite {
   name: string;
   baseUrl: string;
   priority: number;
@@ -71,7 +71,7 @@ function createProxyAgent(proxyUrl: string): any {
   return tunnel.httpsOverHttp({ proxy: { host, port } });
 }
 
-const WP_SITES: WordPressSite[] = [
+export const WP_SITES: WordPressSite[] = [
   {
     name: 'Comando Torrents',
     baseUrl: 'https://comando1.com',
@@ -80,7 +80,7 @@ const WP_SITES: WordPressSite[] = [
   },
 ];
 
-const jsonAxiosConfig = {
+export const jsonAxiosConfig = {
   timeout: 15000,
   httpsAgent: dnsAgent,
   lookup: lookupCustomizado,
@@ -92,10 +92,10 @@ const jsonAxiosConfig = {
 };
 
 export class WordPressScraper {
-  private readonly qualityDetector: QualityDetector;
-  private readonly magnetCache = new Map<string, { nome: string | null; infoHash: string }>();
-  private readonly POST_BATCH_SIZE = 3;
-  private readonly PROTECTOR_BATCH_SIZE = 5;
+  public readonly qualityDetector: QualityDetector;
+  public readonly magnetCache = new Map<string, { nome: string | null; infoHash: string }>();
+  public readonly POST_BATCH_SIZE = 3;
+  public readonly PROTECTOR_BATCH_SIZE = 5;
 
   constructor() {
     this.qualityDetector = new QualityDetector();
@@ -181,6 +181,16 @@ export class WordPressScraper {
 
     logger.debug(`WP ${site.name}: frases possíveis: [${[...frases].join(' | ')}]`);
 
+    // Gera títulos base a partir de todas as frases para detecção de coleção
+    const baseTitles = [...frases].map(frase => {
+      return normalizarTexto(
+        frase
+          .replace(/\b\d+\b/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      );
+    }).filter(Boolean);
+
     const relevantPosts = postItems.filter(post => {
       const lowerTitle = post.title.toLowerCase();
       if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
@@ -199,9 +209,9 @@ export class WordPressScraper {
       const titleNormalizado = normalizarTexto(post.title);
       const match = [...frases].some(frase => titleNormalizado.includes(frase));
 
-      // Permite coleções/franquias do título base (ex.: "Coleção Shrek")
-      const baseTitle = normalizarTexto(searchQuery.replace(/\b\d+$/, '').trim());
-      const isCollection = isCollectionTitle(titleNormalizado) && (baseTitle ? titleNormalizado.includes(baseTitle) : true);
+      // Detecção de coleção: título é coleção E contém algum título base (sem números)
+      const isCollection = isCollectionTitle(titleNormalizado) &&
+        baseTitles.some(base => titleNormalizado.includes(base));
 
       if (!match && !isCollection) {
         logger.debug(`WP ${site.name}: post ignorado (frase não encontrada): "${post.title.substring(0, 50)}"`);
@@ -233,7 +243,6 @@ export class WordPressScraper {
       for (const res of batchResults) {
         results.push(...res);
       }
-
     }
 
     if (querySeason) {
@@ -247,12 +256,12 @@ export class WordPressScraper {
     return results;
   }
 
-  private extractQualityFromText(text: string): string | null {
+  public extractQualityFromText(text: string): string | null {
     const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
     return match ? match[1].toLowerCase() : null;
   }
 
-  private getFullContextText($el: any): string {
+  public getFullContextText($el: any): string {
     let current = $el.parent();
     for (let depth = 0; depth < 4; depth++) {
       const text = current.text().trim();
@@ -264,7 +273,7 @@ export class WordPressScraper {
     return $el.parent().text().trim();
   }
 
-  private cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
+  public cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
     if (!parentText) return '';
 
     const epPatterns = [
@@ -294,7 +303,7 @@ export class WordPressScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
-  private async scrapePostApi(
+  public async scrapePostApi(
     postId: number,
     postTitle: string,
     provider: string,
@@ -313,15 +322,20 @@ export class WordPressScraper {
       return [];
     }
 
-
     let imdbConfirmed = false;
     if (imdbId) {
       const imdbIdDoPost = contentHtml.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
-        if (imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
-        imdbConfirmed = true;
+        const isCollection = isCollectionTitle(titleRendered);
+        if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+          return [];
+        }
+        if (!isCollection) {
+          imdbConfirmed = true;
+        }
       }
     }
+
     const $ = cheerio.load(contentHtml);
     const html = contentHtml;
 
@@ -362,7 +376,7 @@ export class WordPressScraper {
     return all;
   }
 
-  private async processDirectMagnets(
+  public async processDirectMagnets(
     $: any,
     content: string,
     dualIndex: number | null,
@@ -412,7 +426,7 @@ export class WordPressScraper {
     return results;
   }
 
-  private async processProtectorLinks(
+  public async processProtectorLinks(
     $: any,
     content: string,
     dualIndex: number | null,
@@ -469,7 +483,7 @@ export class WordPressScraper {
     return results;
   }
 
-  private async processMagnetItem(
+  public async processMagnetItem(
     magnet: string,
     parentText: string,
     linkText: string,
@@ -545,12 +559,12 @@ export class WordPressScraper {
     };
   }
 
-  private extractOriginalTitleFromContext(contextText: string): string | null {
+  public extractOriginalTitleFromContext(contextText: string): string | null {
     const match = contextText.match(/T[ií]tulo\s+Original:\s*([^\n]+)/i);
     return match?.[1]?.trim() || null;
   }
 
-  private extractInfoBlock($: any, html: string): {
+  public extractInfoBlock($: any, html: string): {
     originalTitle?: string;
     translatedTitle?: string;
     year?: number;
@@ -560,7 +574,6 @@ export class WordPressScraper {
     const articleText = $.root().text() || html;
     const titleText = articleText;
 
-    // Corrigido para aceitar "Titulo Original" sem acento
     const originalMatch = articleText.match(/T[ií]tulo\s+Original\s*:\s*([^\n]+)/i);
     const translatedMatch = articleText.match(/T[ií]tulo\s+Traduzido\s*:\s*([^\n]+)/i);
 
@@ -588,7 +601,7 @@ export class WordPressScraper {
     };
   }
 
-  private async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
+  public async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     const maxAttempts = 2;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -618,7 +631,7 @@ export class WordPressScraper {
     return null;
   }
 
-  private detectQuality(parentText: string, postTitle: string, fullHtml: string, magnet?: string): string {
+  public detectQuality(parentText: string, postTitle: string, fullHtml: string, magnet?: string): string {
     if (magnet) {
       const canonicalName = this.extractCanonicalNameSync(magnet);
       if (canonicalName) {
@@ -632,7 +645,7 @@ export class WordPressScraper {
     return quality || 'HD';
   }
 
-  private extractCanonicalNameSync(magnet: string): string | null {
+  public extractCanonicalNameSync(magnet: string): string | null {
     const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
     if (dnMatch) {
       try {
@@ -644,12 +657,12 @@ export class WordPressScraper {
     return null;
   }
 
-  private extractSize(text: string): string {
+  public extractSize(text: string): string {
     const m = text.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
     return m ? `${m[1]} ${m[2]}` : 'Desconhecido';
   }
 
-  private extractLanguage(title: string): string {
+  public extractLanguage(title: string): string {
     const lower = title.toLowerCase();
     if (lower.includes('nacional')) return 'Nacional';
     if (lower.includes('dual')) return 'Dual';
@@ -658,16 +671,16 @@ export class WordPressScraper {
     return 'Desconhecido';
   }
 
-  private cleanTitle(title: string): string {
+  public cleanTitle(title: string): string {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  private estimateSeeders(provider: string): number {
+  public estimateSeeders(provider: string): number {
     const base: Record<string, number> = { 'BLUDV Filmes': 50, default: 20 };
     return Math.floor((base[provider] || base.default) * (0.6 + Math.random() * 0.8));
   }
 
-  private parseSize(sizeStr: string): number {
+  public parseSize(sizeStr: string): number {
     if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;
     const match = sizeStr.match(/([\d,.]+)\s*(GB|MB|KB)/i);
     if (!match) return 0;
@@ -679,7 +692,7 @@ export class WordPressScraper {
     return 0;
   }
 
-  private detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
+  public detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
     const t = text.toLowerCase();
     const hasNacional = /\bnacional\b/.test(t);
     const hasDual = /\bdual\b/.test(t) && (/\báudio\b|\baudio\b|\bdublado\b|\bdublagem\b/.test(t));
@@ -691,7 +704,7 @@ export class WordPressScraper {
     return 'OUTRO';
   }
 
-  private findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
+  public findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
     const selectors = ['strong', 'b'];
     let dualIndex: number | null = null;
     let legendadoIndex: number | null = null;
@@ -721,7 +734,7 @@ export class WordPressScraper {
     return { dualIndex, legendadoIndex };
   }
 
-  private extractEpisodeFromText(text: string): number | undefined {
+  public extractEpisodeFromText(text: string): number | undefined {
     if (!text) return undefined;
     const match = text.match(/epis[oó]dio\s*(\d+)/i);
     if (match) return parseInt(match[1], 10);

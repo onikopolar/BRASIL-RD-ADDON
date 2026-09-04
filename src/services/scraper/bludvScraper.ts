@@ -118,7 +118,7 @@ export class BludvScraper {
     }
   }
 
-  private async searchPosts(
+  async searchPosts(
     query: string,
     targetSeason?: number,
     searchQueries?: string[]
@@ -162,6 +162,15 @@ export class BludvScraper {
 
     logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
 
+    const baseTitles = [...frases].map(frase => {
+      return normalizarTexto(
+        frase
+          .replace(/\b\d+\b/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+      );
+    }).filter(Boolean);
+
     const relevantPosts = items.filter(item => {
       const lowerTitle = item.title.toLowerCase();
 
@@ -178,10 +187,11 @@ export class BludvScraper {
       }
 
       const titleNormalizado = normalizarTexto(item.title);
+
       const match = [...frases].some(frase => titleNormalizado.includes(frase));
 
-      const baseTitle = normalizarTexto(query.replace(/\b\d+$/, '').trim());
-      const isCollection = isCollectionTitle(titleNormalizado) && (baseTitle ? titleNormalizado.includes(baseTitle) : true);
+      const isCollection = isCollectionTitle(titleNormalizado) &&
+        baseTitles.some(base => titleNormalizado.includes(base));
 
       if (!match && !isCollection) {
         logger.debug(`[BLUDV] post ignorado (frase não encontrada): "${item.title.substring(0, 50)}"`);
@@ -194,51 +204,7 @@ export class BludvScraper {
     return relevantPosts;
   }
 
-  private extractQualityFromText(text: string): string | null {
-    const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
-    return match ? match[1].toLowerCase() : null;
-  }
-
-  private getFullContextText($el: any): string {
-    let current = $el.parent();
-    for (let depth = 0; depth < 4; depth++) {
-      const text = current.text().trim();
-      if (text.length > 10 && /\b\d{3,4}p\b/i.test(text)) {
-        return text;
-      }
-      current = current.parent();
-    }
-    return $el.parent().text().trim();
-  }
-
-  private cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {
-    const epPatterns = [
-      /EPIS[OÓ]DIO\s+\d{1,3}\s+AO?\s+\d{1,3}/i,
-      /EPIS[OÓ]DIO\s+\d{1,3}/i,
-      /\bS\d{1,2}\s*E\d{1,3}/i,
-      /\bE\d{1,3}/i
-    ];
-
-    let episode = '';
-    for (const pattern of epPatterns) {
-      const match = contextText.match(pattern);
-      if (match) {
-        episode = match[0];
-        break;
-      }
-    }
-
-    if (!episode) return '';
-
-    let quality = qualityOverride || null;
-    if (!quality) {
-      quality = this.extractQualityFromText(linkText) || this.extractQualityFromText(contextText);
-    }
-
-    return quality ? `${episode}: ${quality}` : episode;
-  }
-
-  private async scrapePost(
+  async scrapePost(
     postUrl: string,
     type: 'movie' | 'series',
     targetSeason?: number,
@@ -247,21 +213,26 @@ export class BludvScraper {
     const res = await axios.get(postUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
-    let imdbConfirmed = false;
-    if (imdbId) {
-      const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
-      if (imdbIdDoPost) {
-        if (imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
-        imdbConfirmed = true;
-      }
-    }
-
     const contentHtml = $('.content').html() || $('body').html() || '';
     if (!contentHtml) return [];
 
     const postTitle =
       $('h1').first().text().trim() ||
       $('title').first().text().trim().replace(/\s*[-–]\s*BLUDV FILMES.*$/, '');
+
+    let imdbConfirmed = false;
+    if (imdbId) {
+      const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+      if (imdbIdDoPost) {
+        const isCollection = isCollectionTitle(postTitle);
+        if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+          return [];
+        }
+        if (!isCollection) {
+          imdbConfirmed = true;
+        }
+      }
+    }
 
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(postTitle);
@@ -414,7 +385,53 @@ export class BludvScraper {
     return results;
   }
 
-  private extractDualSectionProtectorLinks(
+  extractPostMetadata($: any, _content: string): {
+    quality?: string;
+    size?: string;
+    language?: string;
+    originalTitle?: string;
+    year?: number;
+    years?: number[];
+  } {
+    const getMetaValue = (fieldName: string): string | undefined => {
+      const em = $('em')
+        .toArray()
+        .find((el: any) => $(el).text().trim().toLowerCase() === fieldName.toLowerCase());
+      if (!em) return undefined;
+      const parentSpan = $(em).closest('span');
+      if (!parentSpan.length) return undefined;
+      const fullText = parentSpan.text().trim();
+      const prefix = $(em).text().trim();
+      return fullText.substring(fullText.indexOf(prefix) + prefix.length).trim() || undefined;
+    };
+
+    const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
+    let originalTitle: string | undefined;
+
+    if (originalTitleRaw && originalTitleRaw.length >= 3) {
+      originalTitle = originalTitleRaw
+        .split('|')[0]
+        .replace(/\(\d{4}\)$/, '')
+        .trim();
+    }
+
+    const yearRaw = getMetaValue('Lançamento:');
+    let years: number[] = [];
+    if (yearRaw) {
+      years = yearRaw.match(/\b(19|20)\d{2}\b/g)?.map(y => parseInt(y)) || [];
+    }
+
+    return {
+      quality: getMetaValue('Qualidade:'),
+      size: getMetaValue('Tamanho:'),
+      language: getMetaValue('Áudio:'),
+      originalTitle,
+      year: years.length > 0 ? years[0] : undefined,
+      years,
+    };
+  }
+
+  extractDualSectionProtectorLinks(
     $: any,
     contentHtml: string
   ): { url: string; linkText: string; parentText: string; fullContextText: string }[] {
@@ -465,7 +482,7 @@ export class BludvScraper {
     return result;
   }
 
-  private extractDirectMagnets(
+  extractDirectMagnets(
     $: any,
     contentHtml: string
   ): { magnet: string; linkText: string; parentText: string; fullContextText: string }[] {
@@ -518,7 +535,7 @@ export class BludvScraper {
     return result;
   }
 
-  private async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
+  async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     try {
       const res = await axios.get(protectorUrl, {
         ...AXIOS_OPTS,
@@ -534,61 +551,59 @@ export class BludvScraper {
     }
   }
 
-  private extractPostMetadata($: any, _content: string): {
-    quality?: string;
-    size?: string;
-    language?: string;
-    originalTitle?: string;
-    year?: number;
-    years?: number[];
-  } {
-    const getMetaValue = (fieldName: string): string | undefined => {
-      const em = $('em')
-        .toArray()
-        .find((el: any) => $(el).text().trim().toLowerCase() === fieldName.toLowerCase());
-      if (!em) return undefined;
-      const parentSpan = $(em).closest('span');
-      if (!parentSpan.length) return undefined;
-      const fullText = parentSpan.text().trim();
-      const prefix = $(em).text().trim();
-      return fullText.substring(fullText.indexOf(prefix) + prefix.length).trim() || undefined;
-    };
-
-    const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
-    let originalTitle: string | undefined;
-
-    if (originalTitleRaw && originalTitleRaw.length >= 3) {
-      originalTitle = originalTitleRaw
-        .split('|')[0]
-        .replace(/\(\d{4}\)$/, '')
-        .trim();
-    }
-
-    const yearRaw = getMetaValue('Lançamento:');
-    let years: number[] = [];
-    if (yearRaw) {
-      years = yearRaw.match(/\b(19|20)\d{2}\b/g)?.map(y => parseInt(y)) || [];
-    }
-
-    return {
-      quality: getMetaValue('Qualidade:'),
-      size: getMetaValue('Tamanho:'),
-      language: getMetaValue('Áudio:'),
-      originalTitle,
-      year: years.length > 0 ? years[0] : undefined,
-      years,
-    };
+  extractQualityFromText(text: string): string | null {
+    const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
+    return match ? match[1].toLowerCase() : null;
   }
 
-  private cleanTitle(title: string): string {
+  getFullContextText($el: any): string {
+    let current = $el.parent();
+    for (let depth = 0; depth < 4; depth++) {
+      const text = current.text().trim();
+      if (text.length > 10 && /\b\d{3,4}p\b/i.test(text)) {
+        return text;
+      }
+      current = current.parent();
+    }
+    return $el.parent().text().trim();
+  }
+
+  cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {
+    const epPatterns = [
+      /EPIS[OÓ]DIO\s+\d{1,3}\s+AO?\s+\d{1,3}/i,
+      /EPIS[OÓ]DIO\s+\d{1,3}/i,
+      /\bS\d{1,2}\s*E\d{1,3}/i,
+      /\bE\d{1,3}/i
+    ];
+
+    let episode = '';
+    for (const pattern of epPatterns) {
+      const match = contextText.match(pattern);
+      if (match) {
+        episode = match[0];
+        break;
+      }
+    }
+
+    if (!episode) return '';
+
+    let quality = qualityOverride || null;
+    if (!quality) {
+      quality = this.extractQualityFromText(linkText) || this.extractQualityFromText(contextText);
+    }
+
+    return quality ? `${episode}: ${quality}` : episode;
+  }
+
+  cleanTitle(title: string): string {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  private estimateSeeders(): number {
+  estimateSeeders(): number {
     return Math.floor(30 + Math.random() * 60);
   }
 
-  private parseSize(sizeStr: string): number {
+  parseSize(sizeStr: string): number {
     if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;
     const match = sizeStr.match(/([\d,.]+)\s*(GB|MB|KB)/i);
     if (!match) return 0;

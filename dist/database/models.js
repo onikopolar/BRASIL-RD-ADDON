@@ -30,8 +30,7 @@ const sequelizeConfig = {
         acquire: 30000,
         idle: 10000,
         evict: 10000
-    },
-    retry: { max: 3, timeout: 10000 }
+    }
 };
 if (DATABASE_URL?.includes('postgres')) {
     sequelizeConfig.dialectOptions = {
@@ -57,6 +56,7 @@ Torrent.init({
     size: { type: sequelize_1.DataTypes.BIGINT },
     type: { type: sequelize_1.DataTypes.STRING(10) },
     imdbId: { type: sequelize_1.DataTypes.STRING(32) },
+    imdbIds: { type: sequelize_1.DataTypes.JSONB, allowNull: true, defaultValue: [] },
     imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
     imdbEpisodeStart: { type: sequelize_1.DataTypes.INTEGER },
     imdbEpisodeEnd: { type: sequelize_1.DataTypes.INTEGER },
@@ -78,7 +78,8 @@ Torrent.init({
         { fields: ['idioma'] },
         { fields: ['provider'] },
         { fields: ['uploadDate'] },
-        { fields: ['imdbId', 'type'] }
+        { fields: ['imdbId', 'type'] },
+        { fields: ['imdbIds'], using: 'gin' }
     ]
 });
 class ImdbTitleCache extends sequelize_1.Model {
@@ -96,22 +97,25 @@ ImdbTitleCache.init({
     },
     season: {
         type: sequelize_1.DataTypes.INTEGER,
-        allowNull: true
+        allowNull: false,
+        defaultValue: 0
     },
     titlesPt: {
-        type: sequelize_1.DataTypes.TEXT,
-        allowNull: false
+        type: sequelize_1.DataTypes.JSONB,
+        allowNull: false,
+        defaultValue: []
     },
     titlesEn: {
-        type: sequelize_1.DataTypes.TEXT,
-        allowNull: false
+        type: sequelize_1.DataTypes.JSONB,
+        allowNull: false,
+        defaultValue: []
     },
     year: {
         type: sequelize_1.DataTypes.INTEGER,
         allowNull: true
     },
     episodeTitles: {
-        type: sequelize_1.DataTypes.TEXT,
+        type: sequelize_1.DataTypes.JSONB,
         allowNull: true
     },
     updatedAt: {

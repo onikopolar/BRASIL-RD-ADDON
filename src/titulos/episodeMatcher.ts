@@ -69,9 +69,11 @@ export class EpisodeMatcher {
     if (episodeTitles && episodeTitles.length > 0) {
       const epData = episodeTitles.find(ep => ep.episodeNumber === episodioAlvo);
       if (epData) {
-        const nomeArquivo = this.extrairNomeArquivo(caminhoCompleto)
-          .toLowerCase()
-          .replace(/\.[^.]+$/, '');
+        const nomeArquivo = normalizarTexto(
+          this.extrairNomeArquivo(caminhoCompleto)
+            .toLowerCase()
+            .replace(/\.[^.]+$/, '')
+        );
         const nomesNormalizados = [epData.namePt, epData.nameEn]
           .filter((n): n is string => !!n)
           .map(n => normalizarTexto(n));

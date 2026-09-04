@@ -1,4 +1,3 @@
-import { CuratedMagnetService } from '../catalogo/CuratedMagnetService.js';
 import { QualityDetector } from '../lib/qualityDetector.js';
 import { StreamFormatter } from '../stream/streamFormatter.js';
 import { Stream } from '../types/index.js';
@@ -73,7 +72,7 @@ export class CatalogProvider {
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 min
 
-  constructor(private readonly magnetService: CuratedMagnetService) {
+  constructor() {
     this.logger = new Logger('CatalogProvider');
     this.qualityDetector = QualityDetector.getInstance();
     this.streamFormatter = StreamFormatter.getInstance();
@@ -177,53 +176,53 @@ export class CatalogProvider {
   //  STREAMS
   // ═══════════════════════════════════════════════════════════════════
 
-  async getStreamsFromCatalog(request: any): Promise<Stream[]> {
-    const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
-    const cacheKey = this.generateCacheKey(request, season, episode);
+async getStreamsFromCatalog(request: any): Promise<Stream[]> {
+  const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
+  const cacheKey = this.generateCacheKey(request, season, episode);
 
-    const cached = this.getFromCache(cacheKey);
-    if (cached !== null) {
-      this.logger.debug('CATALOG_CACHE_HIT', { cacheKey, totalStreams: cached.length });
-      return this.streamFormatter.sortStreamsByQuality(cached);
-    }
-
-    this.logger.debug('CATALOG_START', {
-      cacheKey,
-      temCache: false,
-      request: { id: request.id, imdbId: request.imdbId, type: request.type }
-    });
-
-    let allStreams = await this.getStreamsFromJson(request, season, episode);
-    let uniqueStreams = this.removeDuplicatesByInfoHash(allStreams);
-
-    if (uniqueStreams.length === 0) {
-      const shouldScrape = await this.shouldAttemptScraping(request);
-      if (!shouldScrape) {
-        this.saveToCache(cacheKey, []);
-        return [];
-      }
-
-      this.markScrapingStart(request);
-      try {
-        const scraped = await this.performIntelligentScraping(request, season, episode);
-        uniqueStreams = this.removeDuplicatesByInfoHash(scraped);
-      } finally {
-        this.markScrapingEnd(request);
-      }
-    }
-
-    const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
-    sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
-    this.logger.info('📋 Catálogo', {
-      imdbId: request.imdbId || request.id,
-      season,
-      episode,
-      total: sorted.length,
-      qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
-    });
-    this.saveToCache(cacheKey, sorted);
-    return sorted;
+  const cached = this.getFromCache(cacheKey);
+  if (cached !== null) {
+    this.logger.debug('CATALOG_CACHE_HIT', { cacheKey, totalStreams: cached.length });
+    return this.streamFormatter.sortStreamsByQuality(cached);
   }
+
+  this.logger.debug('CATALOG_START', {
+    cacheKey,
+    temCache: false,
+    request: { id: request.id, imdbId: request.imdbId, type: request.type }
+  });
+
+  // Não há mais catálogo curado; começamos sem streams
+  let uniqueStreams: Stream[] = [];
+
+  if (uniqueStreams.length === 0) {
+    const shouldScrape = await this.shouldAttemptScraping(request);
+    if (!shouldScrape) {
+      this.saveToCache(cacheKey, []);
+      return [];
+    }
+
+    this.markScrapingStart(request);
+    try {
+      const scraped = await this.performIntelligentScraping(request, season, episode);
+      uniqueStreams = this.removeDuplicatesByInfoHash(scraped);
+    } finally {
+      this.markScrapingEnd(request);
+    }
+  }
+
+  const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
+  sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+  this.logger.info('📋 Catálogo', {
+    imdbId: request.imdbId || request.id,
+    season,
+    episode,
+    total: sorted.length,
+    qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
+  });
+  this.saveToCache(cacheKey, sorted);
+  return sorted;
+}
 
   private async performIntelligentScraping(request: any, season?: number, episode?: number): Promise<Stream[]> {
     const type = request.type;
@@ -469,11 +468,11 @@ export class CatalogProvider {
     torrents: ScrapedTorrent[], request: any, season?: number, episode?: number
   ): Promise<Stream[]> {
     if (torrents.length > 0) {
-  //    this.logger.debug('ANTES_STREAM_FORMATTER', {
-  //      magnet: torrents[0]?.magnet?.substring(0, 200),
-  //      tamanho: torrents[0]?.magnet?.length,
-  //      title: torrents[0]?.title || torrents[0]?.canonicalName
-  //    });
+      //    this.logger.debug('ANTES_STREAM_FORMATTER', {
+      //      magnet: torrents[0]?.magnet?.substring(0, 200),
+      //      tamanho: torrents[0]?.magnet?.length,
+      //      title: torrents[0]?.title || torrents[0]?.canonicalName
+      //    });
     }
 
     return this.processInBatches(
@@ -483,39 +482,6 @@ export class CatalogProvider {
           torrent, request, null,
           request.type === 'series' ? 'series' : 'movie',
           season, episode, false
-        );
-      }
-    );
-  }
-
-  private async getStreamsFromJson(request: any, season?: number, episode?: number): Promise<Stream[]> {
-    const curated = this.magnetService.searchMagnets(request);
-    if (!curated.length) return [];
-
-    this.logger.debug('JSON_RESULT', {
-      total: curated.length,
-      primeiroMagnet: curated[0]?.magnet?.substring(0, 200),
-      primeiroTitulo: curated[0]?.title
-    });
-
-    return this.processInBatches(
-      curated,
-      async (magnet: any) => {
-        const formatted = {
-          title: magnet.title,
-          magnet: magnet.magnet || '',
-          seeders: magnet.seeds || 0,
-          size: magnet.size || 'N/A',
-          quality: magnet.quality || 'HD',
-          language: magnet.language || 'PT-BR'
-        };
-        return await this.streamFormatter.createMultipleQualityStreams(
-          formatted, request, null,
-          request.type === 'series' ? 'series' : 'movie',
-          season ?? magnet.season,
-          episode ?? magnet.episode,
-          undefined,
-          0
         );
       }
     );

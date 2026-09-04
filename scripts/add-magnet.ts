@@ -16,7 +16,7 @@ import * as readline from 'readline';
 
 const imdbScraper = ImdbScraperService.getInstance();
 const qualityDetector = QualityDetector.getInstance();
-const torboxService = new TorboxService();
+const torboxService = TorboxService.getInstance();
 
 async function question(rl: readline.Interface, prompt: string): Promise<string> {
   return new Promise(resolve => rl.question(prompt, resolve));
@@ -72,7 +72,6 @@ async function main() {
 
   const is4k = qualidade.toLowerCase().includes('2160p') || qualidade.toLowerCase().includes('4k');
 
-  // Passo 1: Adicionar magnet ao Torbox do curador
   console.log('Adicionando magnet ao Torbox...');
   let torrentId: string;
   try {
@@ -84,12 +83,11 @@ async function main() {
     return;
   }
 
-  // Passo 2: Aguardar download concluir, mostrando progresso
   console.log('\nAguardando download...');
   let lastProgress = -1;
   let downloadDone = false;
   const startTime = Date.now();
-  const MAX_WAIT_MS = 30 * 60 * 1000; // 30 minutos
+  const MAX_WAIT_MS = 30 * 60 * 1000;
 
   while (!downloadDone) {
     if (Date.now() - startTime > MAX_WAIT_MS) {
@@ -103,32 +101,24 @@ async function main() {
       const progress = info.progress || 0;
       const pct = Math.round(progress * 100);
       const state = info.download_state || 'unknown';
-      const speed = info.download_speed
-        ? `${(info.download_speed / 1024 / 1024).toFixed(1)} MB/s`
-        : '--';
 
       if (pct !== lastProgress) {
         const filled = Math.floor(pct / 5);
         const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
-        process.stdout.write(`\r   [${bar}] ${pct}% | ${speed} | ${state}   `);
+        process.stdout.write(`\r   [${bar}] ${pct}% | ${state}   `);
         lastProgress = pct;
       }
 
       if (pct >= 100 || state === 'completed' || state === 'uploading' || state === 'cached') {
         downloadDone = true;
       }
-    } catch {
-      // tenta de novo
-    }
+    } catch { }
 
-    if (!downloadDone) {
-      await new Promise(r => setTimeout(r, 5000));
-    }
+    if (!downloadDone) await new Promise(r => setTimeout(r, 5000));
   }
 
   console.log('\n   ✅ Download concluído!');
 
-  // Passo 3: Ativar AirLock
   console.log('\nAtivando AirLock...');
   try {
     await torboxService.airlockTorrent(torrentId, curatorKey, !is4k);
@@ -140,43 +130,61 @@ async function main() {
     return;
   }
 
-  // Passo 4: Salvar no banco
   console.log('\nSalvando no banco...');
 
-  if (infoHash) {
-    const existentes = await getTorrent(infoHash);
-    if (existentes) {
-      if (tipo === 'series' && season !== null && existentes.imdbSeason !== season) {
-        await upsertTorrent(infoHash, {
-          imdbSeason: null, imdbEpisodeStart: null, imdbEpisodeEnd: null, lastSeen: new Date(),
-        });
-        console.log('[ATUALIZADO] Marcado como pack multi-temporada');
-      } else {
-        console.log('[AVISO] Ja existe no banco.');
-      }
-      rl.close();
-      return;
-    }
+  if (!infoHash) {
+    console.log('[ERRO] InfoHash inválido.');
+    rl.close();
+    return;
   }
 
-  await createTorrent({
-    infoHash: infoHash || 'manual-' + Date.now(),
-    provider: 'Curadoria',
-    title: dn,
-    size: 0,
-    type: tipo,
-    imdbId,
-    imdbSeason: season,
-    imdbEpisodeStart: null,
-    imdbEpisodeEnd: null,
-    seeders: 50,
-    idioma,
-    qualidade,
-    uploadDate: new Date(),
-    lastSeen: new Date(),
-  });
+  const existente = await getTorrent(infoHash);
+  if (existente) {
+    // Atualiza o registro existente adicionando o novo imdbId à lista
+    const imdbIdsAtuais: string[] = existente.imdbIds || [];
+    if (existente.imdbId && !imdbIdsAtuais.includes(existente.imdbId)) {
+      imdbIdsAtuais.unshift(existente.imdbId); // mantém o original se não estiver
+    }
+    if (!imdbIdsAtuais.includes(imdbId)) {
+      imdbIdsAtuais.push(imdbId);
+    }
 
-  console.log(`\nPRONTO! ${dn.substring(0, 70)}`);
+    await upsertTorrent(infoHash, {
+      imdbIds: imdbIdsAtuais,
+      lastSeen: new Date(),
+      qualidade,
+      idioma,
+    });
+
+    console.log(`[ATUALIZADO] IMDb ${imdbId} adicionado ao registro existente.`);
+  } else {
+    // Cria novo registro com imdbIds inicial
+    const novoRegistro: any = {
+      infoHash,
+      provider: 'Curadoria',
+      title: dn,
+      size: 0,
+      type: tipo,
+      imdbId,
+      imdbIds: [imdbId],
+      imdbSeason: season ?? undefined,
+      // imdbEpisodeStart e imdbEpisodeEnd serão omitidos se undefined
+      seeders: 50,
+      idioma,
+      qualidade,
+      uploadDate: new Date(),
+      lastSeen: new Date(),
+    };
+
+    // Remove propriedades com valor undefined para evitar conflitos com o Sequelize
+    if (novoRegistro.imdbSeason === undefined) delete novoRegistro.imdbSeason;
+    // Não inclui imdbEpisodeStart/End pois não se aplica (curadoria não lida com episódios específicos)
+
+    await createTorrent(novoRegistro);
+
+    console.log(`\nPRONTO! ${dn.substring(0, 70)}`);
+  }
+
   rl.close();
 }
 

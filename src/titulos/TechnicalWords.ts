@@ -96,15 +96,27 @@ export function normalizarTexto(texto: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/&#0*38;/g, '&')          // decodifica &#038; → &
-    .replace(/&#x26;/gi, '&')          // decodifica &#x26; → &
-    .replace(/&amp;/gi, '&')           // decodifica &amp; → &
+    // Decodifica entidades HTML comuns e numericas
+    .replace(/&#0*38;/g, '&')
+    .replace(/&#x26;/gi, '&')
+    .replace(/&amp;/gi, '&')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#0*39;/g, "'")
     .replace(/&apos;/gi, "'")
-    .replace(/[^\w\s]/g, ' ')          // remove caracteres não alfanuméricos (incluindo &)
+    .replace(/&#0*8211;|&ndash;/gi, '-')  // en dash
+    .replace(/&#0*8212;|&mdash;/gi, '-')  // em dash
+    .replace(/&#0*8220;|&ldquo;/gi, '"')  // aspas duplas esquerda
+    .replace(/&#0*8221;|&rdquo;/gi, '"')  // aspas duplas direita
+    .replace(/&#0*8216;|&lsquo;/gi, "'")  // aspas simples esquerda
+    .replace(/&#0*8217;|&rsquo;/gi, "'")  // aspas simples direita
+    .replace(/&#0*160;|&nbsp;/gi, ' ')    // espaço não separável
+    // Substitui underscores por espaço (para não grudar palavras)
+    .replace(/_/g, ' ')
+    // Remove caracteres não alfanuméricos (mantém letras, números e espaços)
+    .replace(/[^\w\s]/g, ' ')
+    // Colapsa espaços múltiplos e remove bordas
     .replace(/\s+/g, ' ')
     .trim();
 }
@@ -269,6 +281,32 @@ export function getPotentialSequelNumbers(title: string): number[] {
   return [...new Set(result)];
 }
 
+export function extrairAno(texto: string): number[] | undefined {
+  if (!texto) return undefined;
+
+  const textoLimpo = texto
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^0-9\s-]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  const candidatos = textoLimpo.match(/\b\d{4}\b/g) || [];
+
+  const resolucoes = new Set([1080, 2160, 1440, 4320, 720, 480]);
+
+  const anos = candidatos
+    .map(Number)
+    .filter(ano => {
+      if (ano < 1000 || ano > 9999) return false;
+      if (resolucoes.has(ano)) return false;
+      return true;
+    });
+
+  return anos.length > 0 ? anos : undefined;
+}
+
 function _isAudioChannelInOriginal(originalTitle: string, num: number): boolean {
   const audioSpecRe = /[.\-(\s](\d+)\s*\.\s*(\d+)\s*(?:ch)?/gi;
   let m;
@@ -282,9 +320,7 @@ function _isAudioChannelInOriginal(originalTitle: string, num: number): boolean 
   return false;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  EXTRAIR RANGE DE EPISÓDIOS — para filtro no banco de dados
-// ═══════════════════════════════════════════════════════════════════════
 
 export interface EpisodeRange {
   season: number;
@@ -442,8 +478,5 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
 // Log de inicialização enxuto (apenas para confirmar que o módulo foi carregado)
 console.log('[INFO] TechnicalWords carregado com extração de packs completos corrigida');
 
-// ═══════════════════════════════════════════════════════════════════════
-//  NORMALIZAÇÃO DE TÍTULOS — remove SÓ palavras técnicas
-// ═══════════════════════════════════════════════════════════════════════
 
 export const TECHNICAL_STRIP_WORDS: Set<string> = new Set();

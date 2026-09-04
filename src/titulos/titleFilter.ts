@@ -89,8 +89,20 @@ export class TitleFilter {
 
       // ── 1.5 VALIDAÇÃO DE ANO (tolerância de ±1 ano para lançamentos regionais) ──
       const isCollection = isCollectionTitle(tituloTorrent) || isCollectionTitle(tituloParaIdioma || '');
-      const isYearInCollection = years && imdbTitles?.year !== undefined && years.includes(imdbTitles.year);
+
+      let isYearInCollection = false;
+      if (years && imdbTitles?.year !== undefined) {
+        if (years.length > 1) {
+          const minYear = Math.min(...years);
+          const maxYear = Math.max(...years);
+          isYearInCollection = imdbTitles.year >= minYear && imdbTitles.year <= maxYear;
+        } else if (years.length === 1) {
+          isYearInCollection = Math.abs(years[0] - imdbTitles.year) <= 1;
+        }
+      }
+
       this.logger.debug('TitleFilter: validação de ano', { tituloTorrent, anoTorrent, imdbAno: imdbTitles?.year, isCollection, years, isYearInCollection });
+
       if (
         !imdbConfirmed &&
         !isCollection &&

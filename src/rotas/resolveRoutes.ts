@@ -142,15 +142,17 @@ async function getEnrichedTitlesForHash(
                 resolveLogger.info('📋 imdbId obtido do banco Torrent', { infoHash, imdbId, season });
             } else {
                 titlesCache.set(infoHash, []);
-        episodeTitlesCache.set(infoHash, null);
+                episodeTitlesCache.set(infoHash, null);
                 return { titles: undefined, episodeTitles: undefined };
             }
         } else {
             resolveLogger.info('🎯 imdbId recebido da URL de resolução', { infoHash, imdbId, season });
         }
 
+        const seasonKey = season ?? 0; // 0 para filmes
+
         const cachedTitle = await ImdbTitleCache.findOne({
-            where: { imdbId, season: season ?? null },
+            where: { imdbId, season: seasonKey },
             attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'updatedAt'],
             raw: true
         });
@@ -160,24 +162,24 @@ async function getEnrichedTitlesForHash(
             const needsEpisodeTitles = season !== undefined;
             const hasEpisodeTitles = cachedTitle.episodeTitles ? true : false;
             if (ageMs < DB_TITLE_CACHE_TTL_MS && (!needsEpisodeTitles || hasEpisodeTitles)) {
-                const titlesPtArr = cachedTitle.titlesPt.split(',').map(s => s.trim()).filter(Boolean);
-                const titlesEnArr = cachedTitle.titlesEn.split(',').map(s => s.trim()).filter(Boolean);
+                const titlesPtArr = Array.isArray(cachedTitle.titlesPt) ? cachedTitle.titlesPt : [];
+                const titlesEnArr = Array.isArray(cachedTitle.titlesEn) ? cachedTitle.titlesEn : [];
                 const year = cachedTitle.year;
                 const allTitles = [...titlesPtArr, ...titlesEnArr];
                 const enriched = year ? allTitles.map(t => `${t} ${year}`) : allTitles;
                 titlesCache.set(infoHash, enriched);
-                const episodeTitlesCached = cachedTitle.episodeTitles ? JSON.parse(cachedTitle.episodeTitles) : null;
+                const episodeTitlesCached = cachedTitle.episodeTitles; // já é array/objeto
                 episodeTitlesCache.set(infoHash, episodeTitlesCached);
                 resolveLogger.info('🗄️ TÍTULOS DO BANCO (cache DB)', {
                     infoHash,
                     imdbId,
-                    season,
+                    season: seasonKey,
                     titles: enriched.join(', '),
                     age: `${Math.round(ageMs / 3600000)}h`
                 });
                 return { titles: enriched.length > 0 ? enriched : undefined, episodeTitles: episodeTitlesCached };
             } else {
-                resolveLogger.info('⏳ Cache DB expirado, atualizando da API...', { imdbId, season });
+                resolveLogger.info('⏳ Cache DB expirado, atualizando da API...', { imdbId, season: seasonKey });
             }
         }
 
@@ -191,9 +193,9 @@ async function getEnrichedTitlesForHash(
         if (titles.length === 0) {
             await ImdbTitleCache.upsert({
                 imdbId,
-                season: season ?? null,
-                titlesPt: '',
-                titlesEn: '',
+                season: seasonKey,
+                titlesPt: [],
+                titlesEn: [],
                 year: year ?? null,
                 updatedAt: new Date()
             });
@@ -201,32 +203,25 @@ async function getEnrichedTitlesForHash(
             return { titles: undefined, episodeTitles: undefined };
         }
 
-        const allTitlesStr = titles.join(',');
-        await ImdbTitleCache.upsert({
-            imdbId,
-            season: season ?? null,
-            titlesPt: allTitlesStr,
-            titlesEn: allTitlesStr,
-            year: year ?? null,
-            updatedAt: new Date()
-        });
-
         const enriched = year ? titles.map(t => `${t} ${year}`) : titles;
         const episodeTitles = tmdbData.imdbTitles?.episodeTitles || null;
         titlesCache.set(infoHash, enriched);
+
         await ImdbTitleCache.upsert({
             imdbId,
-            season: season ?? null,
-            titlesPt: allTitlesStr,
-            titlesEn: allTitlesStr,
+            season: seasonKey,
+            titlesPt: titles,
+            titlesEn: titles,
             year: year ?? null,
-            episodeTitles: episodeTitles ? JSON.stringify(episodeTitles) : null,
+            episodeTitles: episodeTitles, // já JSONB
             updatedAt: new Date()
         });
+        episodeTitlesCache.set(infoHash, episodeTitles);
+
         resolveLogger.info('🌐 TÍTULOS DA API (TMDB) salvos no banco', {
             infoHash,
             imdbId,
-            season,
+            season: seasonKey,
             titles: enriched.join(', ')
         });
         return { titles: enriched, episodeTitles };
@@ -350,18 +345,18 @@ export const setupResolveRoutes = (app: any) => {
 
         const seasonEpisodeParam = req.params.seasonEpisode as string;
         if (seasonEpisodeParam && seasonEpisodeParam !== 'null' && seasonEpisodeParam !== 'movie') {
-          const match = seasonEpisodeParam.match(/^s(\d+)e(\d+)$/i);
-          if (match) {
-            season = parseInt(match[1]);
-            episode = parseInt(match[2]);
-          }
+            const match = seasonEpisodeParam.match(/^s(\d+)e(\d+)$/i);
+            if (match) {
+                season = parseInt(match[1]);
+                episode = parseInt(match[2]);
+            }
         }
 
         if (season === undefined) {
-          season = req.query.season ? parseInt(req.query.season as string) : undefined;
+            season = req.query.season ? parseInt(req.query.season as string) : undefined;
         }
         if (episode === undefined) {
-          episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
+            episode = req.query.episode ? parseInt(req.query.episode as string) : undefined;
         }
         const quality = req.query.quality as string | undefined;
         const type = req.query.type as string || (season !== undefined ? 'series' : 'movie');

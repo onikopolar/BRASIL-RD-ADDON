@@ -1,5 +1,4 @@
 import { TorboxService } from '../debrid/RealDebridService.js';
-import { CuratedMagnetService } from '../catalogo/CuratedMagnetService.js';
 import { CacheService } from '../debrid/CacheService.js';
 import { Logger } from '../utils/logger.js';
 import { Stream, StreamRequest, CuratedMagnet } from '../types/index.js';
@@ -29,7 +28,6 @@ interface DatabaseStreamResult {
 export class StreamHandler {
   private static instance: StreamHandler;
   private readonly torboxService: TorboxService;
-  private readonly magnetService: CuratedMagnetService;
   private readonly cacheService: CacheService;
   private readonly logger: Logger;
   private staticResponseService: StaticResponseService;
@@ -47,13 +45,12 @@ export class StreamHandler {
 
   private constructor(baseUrl?: string) {
     this.torboxService = TorboxService.getInstance(baseUrl);
-    this.magnetService = new CuratedMagnetService();
     this.cacheService = new CacheService();
     this.logger = new Logger('StreamHandler');
     this.staticResponseService = new StaticResponseService(baseUrl);
     this.qualityDetector = QualityDetector.getInstance();
     this.streamFormatter = StreamFormatter.getInstance();
-    this.catalogProvider = new CatalogProvider(this.magnetService);
+    this.catalogProvider = new CatalogProvider();
   }
 
   public static getInstance(baseUrl?: string): StreamHandler {
@@ -76,10 +73,6 @@ export class StreamHandler {
     return this.catalogProvider;
   }
 
-  public async initialize(): Promise<void> {
-    await this.magnetService.waitForInitialization();
-  }
-
   public setStaticResponseBaseUrl(baseUrl: string): void {
     this.staticResponseService.setBaseUrl(baseUrl);
     this.torboxService.setStaticResponseBaseUrl(baseUrl);
@@ -92,8 +85,6 @@ export class StreamHandler {
     if (!request.apiKey) return { streams: [] };
 
     try {
-      await this.magnetService.waitForInitialization();
-
       // Obtém títulos e ano do TMDB para o IMDb ID da requisição
       const imdbId = this.extractImdbIdFromRequest(request);
       let tmdbTitles: string[] | undefined;
@@ -163,8 +154,8 @@ export class StreamHandler {
   /** Registra os títulos TMDB (enriquecidos com o ano) no cache do TorboxService para cada stream com infoHash */
   private registerTitlesForStreams(streams: Stream[], titles?: string[], year?: number): void {
     if (!titles || titles.length === 0) return;
-    
-    const enrichedTitles = year 
+
+    const enrichedTitles = year
       ? titles.map(t => `${t} ${year}`)
       : titles;
 
@@ -220,17 +211,25 @@ export class StreamHandler {
       const imdbId = this.extractImdbIdFromRequest(request);
       if (!imdbId) return { success: false, streams: [], source: 'database', processingTime: Date.now() - startTime };
 
-      const where: any = { imdbId };
+      const where: any = {
+        [Op.or]: [
+          { imdbId },
+          { imdbIds: { [Op.contains]: imdbId } },
+        ],
+      };
+
       if (request.type === 'series') {
         const seasonMatch = request.id.match(/tt\d+:(\d+):(\d+)/);
         if (seasonMatch) {
           const season = parseInt(seasonMatch[1]);
           const episode = parseInt(seasonMatch[2]);
-          where[Op.or] = [
-            { imdbSeason: season },
-            { imdbSeason: null },
-          ];
           where[Op.and] = [
+            {
+              [Op.or]: [
+                { imdbSeason: season },
+                { imdbSeason: null },
+              ],
+            },
             {
               [Op.or]: [
                 { imdbEpisodeStart: null },
@@ -290,11 +289,13 @@ export class StreamHandler {
 
       // Usa o magnet completo salvo no banco, se existir; caso contrário, fallback para magnet mínimo.
       const magnetCompleto = torrent.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`;
-      
+
       const torrentWithMagnet = {
         ...torrent,
         magnet: magnetCompleto,
         magnet_link: magnetCompleto,
+        quality,
+        language: torrent.idioma || 'PT-BR',
       };
 
       const streams = await this.streamFormatter.createMultipleQualityStreams(
@@ -333,29 +334,9 @@ export class StreamHandler {
     return imdbMatch ? imdbMatch[1] : null;
   }
 
-  public addCuratedMagnet(magnet: CuratedMagnet): void {
-    this.magnetService.addMagnet(magnet);
-    this.invalidateRelatedCache(magnet.imdbId);
-  }
-
-  public removeCuratedMagnet(imdbId: string, magnetLink: string): boolean {
-    const removed = this.magnetService.removeMagnet(imdbId, magnetLink);
-    if (removed) this.invalidateRelatedCache(imdbId);
-    return removed;
-  }
-
   public clearCache(): void {
     this.cacheService.clear();
     this.catalogProvider.clearTmdbCache();
-  }
-
-  private invalidateRelatedCache(imdbId: string): void {
-    const cachePatterns = [
-      `streams:movie:${imdbId}`,
-      `streams:series:${imdbId}`,
-      `streams:series:${imdbId}:*`
-    ];
-    for (const pattern of cachePatterns) this.cacheService.delete(pattern);
   }
 
   public getStats() {

@@ -31,8 +31,8 @@ const sequelizeConfig: any = {
     acquire: 30000,
     idle: 10000,
     evict: 10000
-  },
-  retry: { max: 3, timeout: 10000 }
+  }
+  // Removida opção "retry" (não suportada diretamente)
 };
 
 if (DATABASE_URL?.includes('postgres')) {
@@ -62,6 +62,7 @@ interface TorrentAttributes {
   size?: number;
   type: string;
   imdbId?: string;
+  imdbIds?: string[]; // JSON com todos os IMDb IDs associados
   imdbSeason?: number;
   imdbEpisodeStart?: number;
   imdbEpisodeEnd?: number;
@@ -81,13 +82,14 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public size?: number;
   public type!: string;
   public imdbId?: string;
+  public imdbIds?: string[];
   public imdbSeason?: number;
   public imdbEpisodeStart?: number;
   public imdbEpisodeEnd?: number;
   public seeders?: number;
   public idioma?: string;
   public qualidade?: string;
-  public magnet?: string; // NOVO
+  public magnet?: string;
   public uploadDate!: Date;
   public lastSeen!: Date;
   public rescrapeAt?: Date | null;
@@ -101,13 +103,14 @@ Torrent.init(
     size:       { type: DataTypes.BIGINT },
     type:       { type: DataTypes.STRING(10) },
     imdbId:     { type: DataTypes.STRING(32) },
+    imdbIds: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
     imdbSeason: { type: DataTypes.INTEGER },
     imdbEpisodeStart: { type: DataTypes.INTEGER },
     imdbEpisodeEnd:   { type: DataTypes.INTEGER },
     seeders:    { type: DataTypes.INTEGER },
     idioma:     { type: DataTypes.STRING(50) },
     qualidade:  { type: DataTypes.STRING(10) },
-    magnet:     { type: DataTypes.TEXT }, // NOVO
+    magnet:     { type: DataTypes.TEXT },
     uploadDate: { type: DataTypes.DATE },
     lastSeen:   { type: DataTypes.DATE },
     rescrapeAt: { type: DataTypes.DATE, allowNull: true, defaultValue: null }
@@ -123,7 +126,9 @@ Torrent.init(
       { fields: ['idioma'] },
       { fields: ['provider'] },
       { fields: ['uploadDate'] },
-      { fields: ['imdbId', 'type'] }
+      { fields: ['imdbId', 'type'] },
+      // Índice GIN para buscas em imdbIds (Postgres)
+      { fields: ['imdbIds'], using: 'gin' }
     ]
   }
 );
@@ -136,10 +141,10 @@ interface ImdbTitleCacheAttributes {
   id?: number;
   imdbId: string;
   season?: number | null;
-  titlesPt: string;      // títulos em português, separados por vírgula
-  titlesEn: string;      // títulos em inglês, separados por vírgula
+  titlesPt: string[];      // agora array de strings
+  titlesEn: string[];      // array de strings
   year?: number | null;
-  episodeTitles?: string | null; // JSON com títulos de episódios
+  episodeTitles?: any | null; // JSON com títulos de episódios
   updatedAt: Date;
 }
 
@@ -147,10 +152,10 @@ class ImdbTitleCache extends Model<ImdbTitleCacheAttributes> implements ImdbTitl
   public id!: number;
   public imdbId!: string;
   public season?: number | null;
-  public titlesPt!: string;
-  public titlesEn!: string;
+  public titlesPt!: string[];
+  public titlesEn!: string[];
   public year?: number | null;
-  public episodeTitles?: string | null;
+  public episodeTitles?: any | null;
   public updatedAt!: Date;
 }
 
@@ -167,22 +172,25 @@ ImdbTitleCache.init(
     },
     season: {
       type: DataTypes.INTEGER,
-      allowNull: true
+      allowNull: false,
+      defaultValue: 0   // 0 = filme (sem temporada)
     },
     titlesPt: {
-      type: DataTypes.TEXT,
-      allowNull: false
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: []
     },
     titlesEn: {
-      type: DataTypes.TEXT,
-      allowNull: false
+      type: DataTypes.JSONB,
+      allowNull: false,
+      defaultValue: []
     },
     year: {
       type: DataTypes.INTEGER,
       allowNull: true
     },
     episodeTitles: {
-      type: DataTypes.TEXT,
+      type: DataTypes.JSONB,
       allowNull: true
     },
     updatedAt: {
