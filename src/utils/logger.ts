@@ -9,32 +9,33 @@ export class Logger {
 
   private shouldLog(level: string): boolean {
     const levels = ['error', 'warn', 'info', 'debug'];
-    const currentLevelIndex = levels.indexOf(this.logLevel);
-    const messageLevelIndex = levels.indexOf(level);
-    return messageLevelIndex <= currentLevelIndex;
+    const currentIndex = levels.indexOf(this.logLevel);
+    const messageIndex = levels.indexOf(level);
+    if (currentIndex === -1 || messageIndex === -1) return false;
+    return messageIndex <= currentIndex;
   }
 
-  info(message: string, meta?: any): void {
-    if (this.shouldLog('info')) {
-      console.log(`[INFO] [${this.context}] ${message}`, meta || '');
-    }
+  private log(level: 'error' | 'warn' | 'info' | 'debug', message: string, ...args: any[]): void {
+    if (!this.shouldLog(level)) return;
+    const timestamp = new Date().toISOString();
+    const prefix = `[${level.toUpperCase()}] [${this.context}] ${timestamp}`;
+    const consoleMethod = console[level] || console.log;
+    consoleMethod(prefix, message, ...args);
   }
 
-  error(message: string, error?: any): void {
-    if (this.shouldLog('error')) {
-      console.error(`[ERROR] [${this.context}] ${message}`, error || '');
-    }
+  info(message: string, ...args: any[]): void {
+    this.log('info', message, ...args);
   }
 
-  warn(message: string, meta?: any): void {
-    if (this.shouldLog('warn')) {
-      console.warn(`[WARN] [${this.context}] ${message}`, meta || '');
-    }
+  error(message: string, ...args: any[]): void {
+    this.log('error', message, ...args);
   }
 
-  debug(message: string, meta?: any): void {
-    if (this.shouldLog('debug')) {
-      console.debug(`[DEBUG] [${this.context}] ${message}`, meta || '');
-    }
+  warn(message: string, ...args: any[]): void {
+    this.log('warn', message, ...args);
+  }
+
+  debug(message: string, ...args: any[]): void {
+    this.log('debug', message, ...args);
   }
 }

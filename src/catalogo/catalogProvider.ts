@@ -83,9 +83,7 @@ export class CatalogProvider {
     this.startCacheCleanup();
   }
 
-  // ═══════════════════════════════════════════════════════════════════
   //  CACHE GENÉRICO (DRY)
-  // ═══════════════════════════════════════════════════════════════════
 
   private startCacheCleanup(): void {
     if (this.cleanupTimer) return;
@@ -137,9 +135,7 @@ export class CatalogProvider {
     map.set(key, { data, timestamp: Date.now() });
   }
 
-  // ═══════════════════════════════════════════════════════════════════
   //  TMDB SEARCH DATA
-  // ═══════════════════════════════════════════════════════════════════
 
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
     const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
@@ -172,9 +168,7 @@ export class CatalogProvider {
     return tmdb.seasonYear;
   }
 
-  // ═══════════════════════════════════════════════════════════════════
   //  STREAMS
-  // ═══════════════════════════════════════════════════════════════════
 
 async getStreamsFromCatalog(request: any): Promise<Stream[]> {
   const { season, episode } = this.extractSeasonEpisodeFromRequest(request);

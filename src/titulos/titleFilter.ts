@@ -2,20 +2,10 @@ import { Logger } from '../utils/logger.js';
 import { SimilarityCalculator } from './SimilarityCalculator.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
-import { extrairRangeEpisodios, isCollectionTitle } from './TechnicalWords.js';
+import { extrairRangeEpisodios, extrairAno, isCollectionTitle } from './TechnicalWords.js';
 import { TitleMatchResult, SeriesMetadata } from './interfaces.js';
 import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
 
-/**
- * TitleFilter — Orquestrador fino de validação de títulos.
- * 
- * SÓ valida similaridade de título (NÃO idioma).
- * Idioma é responsabilidade de quem chama (usar LanguageDetector direto).
- * Temporada/episódio é delegado ao EpisodeMatcher ou validado diretamente via parâmetro.
- * 
- * IMPORTANTE: O parâmetro `tituloTorrent` deve ser o **título original extraído dos metadados do scraper**,
- * nunca o canonicalName ou magnet. Os scrapers devem fornecer `originalTitle` (ex.: "The Drama").
- */
 export class TitleFilter {
   private readonly logger = new Logger('TitleFilter');
   private readonly similarityCalculator = SimilarityCalculator.getInstance();
@@ -29,14 +19,18 @@ export class TitleFilter {
     return TitleFilter.instance;
   }
 
-  // ═══ MÉTODOS PÚBLICOS (delegações) ═══
-
   extrairMetadados(titulo: string): SeriesMetadata {
     const range = extrairRangeEpisodios(titulo);
+
+    // Determina se é pack completo de temporada ou série completa
+    const isCompleteSeason = range
+      ? (range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0)
+      : this.episodeMatcher.ehPackTemporadaCompleta(titulo);
+
     return {
       season: range?.season ?? undefined,
       episode: range?.episodeStart ?? undefined,
-      isCompleteSeason: range ? (range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0) : false,
+      isCompleteSeason,
       hasEpisodeInfo: !!(range && (range.season > 0 || range.episodeStart > 0)),
       matchedPattern: undefined,
     };
@@ -50,26 +44,6 @@ export class TitleFilter {
     return this.languageDetector.verificarIdioma(titulo);
   }
 
-  extrairAno(titulo: string): number | undefined {
-    const m = titulo.match(/\b(19|20)\d{2}\b/);
-    return m ? parseInt(m[0]) : undefined;
-  }
-
-  // ═══ CORE: Validação de título ═══
-
-  /**
-   * Verifica se o título do torrent combina com o título TMDB do IMDB.
-   * 
-   * @param tituloTorrent   título principal do torrent (originalTitle dos metadados)
-   * @param imdbId          identificador IMDb
-   * @param temporadaAlvo   temporada alvo (opcional)
-   * @param episodioAlvo    episódio alvo (opcional)
-   * @param tituloParaIdioma título alternativo para checagem de idioma
-   * @param anoDoScraper    ano extraído do scraper (opcional)
-   * @param imdbTitles      dados TMDB pré‑carregados (evita nova chamada à API)
-   * @param htmlTitle       título bruto do HTML (opcional, para extração de S/E)
-   * @param episodioTorrent episódio extraído do torrent (opcional, validação direta)
-   */
   async titulosCombinam(
     tituloTorrent: string,
     imdbId: string,
@@ -85,9 +59,12 @@ export class TitleFilter {
   ): Promise<TitleMatchResult> {
     try {
       const metadados = this.extrairMetadados(tituloTorrent);
-      const anoTorrent: number | undefined = anoDoScraper || this.extrairAno(tituloTorrent) || (tituloParaIdioma ? this.extrairAno(tituloParaIdioma) : undefined);
 
-      // ── 1.5 VALIDAÇÃO DE ANO (tolerância de ±1 ano para lançamentos regionais) ──
+      // extrairAno retorna array, então pegamos o primeiro valor
+      const anoDoTitulo = extrairAno(tituloTorrent)?.[0];
+      const anoDoTituloParaIdioma = tituloParaIdioma ? extrairAno(tituloParaIdioma)?.[0] : undefined;
+      const anoTorrent: number | undefined = anoDoScraper || anoDoTitulo || anoDoTituloParaIdioma;
+
       const isCollection = isCollectionTitle(tituloTorrent) || isCollectionTitle(tituloParaIdioma || '');
 
       let isYearInCollection = false;
@@ -101,7 +78,14 @@ export class TitleFilter {
         }
       }
 
-      this.logger.debug('TitleFilter: validação de ano', { tituloTorrent, anoTorrent, imdbAno: imdbTitles?.year, isCollection, years, isYearInCollection });
+      this.logger.debug('TitleFilter: validação de ano', {
+        tituloTorrent,
+        anoTorrent,
+        imdbAno: imdbTitles?.year,
+        isCollection,
+        years,
+        isYearInCollection
+      });
 
       if (
         !imdbConfirmed &&
@@ -119,9 +103,12 @@ export class TitleFilter {
         };
       }
 
-      // ── 1.6 COLEÇÃO/FRANQUIA: aceita se o ano alvo estiver na faixa de anos ──
       if (isCollection && isYearInCollection) {
-        this.logger.info('Coleção/franquia aceita por faixa de anos', { tituloTorrent, imdbAno: imdbTitles?.year, years });
+        this.logger.info('Coleção/franquia aceita por faixa de anos', {
+          tituloTorrent,
+          imdbAno: imdbTitles?.year,
+          years
+        });
         return {
           matches: true,
           similarity: 0.8,
@@ -130,7 +117,6 @@ export class TitleFilter {
         };
       }
 
-      // ── 1. EXTRAI RANGE DE EPISÓDIOS (prioridade: título principal > htmlTitle > título alternativo) ──
       const tituloParaRange = tituloTorrent || htmlTitle || tituloParaIdioma;
       let range = tituloParaRange ? extrairRangeEpisodios(tituloParaRange) : null;
 
@@ -141,7 +127,6 @@ export class TitleFilter {
         range = extrairRangeEpisodios(tituloParaIdioma);
       }
 
-      // ── 2. VALIDAÇÃO DE EPISÓDIO (prioriza range do título; depois episódio exato) ──
       if (episodioAlvo !== undefined) {
         const temRange = range && range.episodeStart > 0 && range.episodeEnd > 0;
 
@@ -171,7 +156,6 @@ export class TitleFilter {
         }
       }
 
-      // ── 3. VALIDAÇÃO DE TEMPORADA ──
       if (range && temporadaAlvo !== undefined && range.season > 0 && range.season !== temporadaAlvo) {
         return {
           matches: false,
@@ -181,7 +165,6 @@ export class TitleFilter {
         };
       }
 
-      // ── 4. SIMILARIDADE ──
       const seasonParaSimilaridade = temporadaAlvo;
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent,
@@ -191,7 +174,6 @@ export class TitleFilter {
         imdbTitles ?? undefined
       );
 
-      // ── 5. FILTRO FINAL ──
       if (resultado.mediaType === 'movie' && this.episodeMatcher.temIndicadorTemporada(tituloTorrent)) {
         return {
           matches: false,
@@ -209,11 +191,13 @@ export class TitleFilter {
       };
     } catch (erro) {
       this.logger.error('Erro na comparação', {
-        tituloTorrent: tituloTorrent.substring(0, 60), imdbId,
+        tituloTorrent: tituloTorrent.substring(0, 60),
+        imdbId,
         erro: erro instanceof Error ? erro.message : 'Erro'
       });
       return {
-        matches: false, similarity: 0,
+        matches: false,
+        similarity: 0,
         torrentMetadata: this.extrairMetadados(tituloTorrent),
         reason: `Erro: ${erro instanceof Error ? erro.message : 'Erro'}`
       };

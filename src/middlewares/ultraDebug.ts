@@ -33,12 +33,32 @@ function maskSensitive(obj: any, depth: number = 0): any {
   return masked;
 }
 
-// Pega headers essenciais (apenas user-agent e IP)
-function getEssentialHeaders(req: Request): Record<string, string> {
-  const headers: Record<string, string> = {};
-  const userAgent = req.headers['user-agent'];
-  if (userAgent) headers['user-agent'] = String(userAgent).substring(0, 120);
-  return headers;
+// Extrai preview de corpo de resposta (string ou objeto)
+function getBodyPreview(body: any): string {
+  try {
+    const str = typeof body === 'string' ? body : JSON.stringify(body);
+    return str.length > 200 ? str.substring(0, 200) + '...' : str;
+  } catch {
+    return '';
+  }
+}
+
+// Calcula tamanho do corpo de resposta
+function getBodySize(body: any): number {
+  try {
+    return typeof body === 'string' ? body.length : JSON.stringify(body).length;
+  } catch {
+    return 0;
+  }
+}
+
+// Log centralizado para respostas JSON/SEND
+function logResponse(requestId: string, res: any, startTime: number, body: any, type: 'JSON' | 'SEND', shouldSkip: boolean): void {
+  if (shouldSkip) return;
+  const responseTime = Date.now() - startTime;
+  const preview = maskUrl(getBodyPreview(body));
+  const size = getBodySize(body);
+  logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) ${type}`, { size, preview });
 }
 
 function generateRequestId(): string {
@@ -67,33 +87,12 @@ export const ultraDebugMiddleware = () => {
     const originalRedirect = res.redirect.bind(res);
 
     res.json = function (body: any) {
-      const responseTime = Date.now() - startTime;
-      if (!shouldSkip) {
-        let bodyPreview = '';
-        try {
-          const bodyStr = JSON.stringify(body);
-          bodyPreview = bodyStr.length > 200 ? bodyStr.substring(0, 200) + '...' : bodyStr;
-        } catch {}
-        logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) JSON`, {
-          size: JSON.stringify(body).length,
-          preview: maskUrl(bodyPreview),
-        });
-      }
+      logResponse(requestId, res, startTime, body, 'JSON', shouldSkip);
       return originalJson(body);
     };
 
     res.send = function (body: any) {
-      const responseTime = Date.now() - startTime;
-      if (!shouldSkip) {
-        let preview = '';
-        try {
-          const str = typeof body === 'string' ? body : JSON.stringify(body);
-          preview = str.length > 200 ? str.substring(0, 200) + '...' : str;
-        } catch {}
-        logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) SEND`, {
-          preview: maskUrl(preview),
-        });
-      }
+      logResponse(requestId, res, startTime, body, 'SEND', shouldSkip);
       return originalSend(body);
     };
 

@@ -8,7 +8,7 @@ import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { extrairRangeEpisodios, INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
 import { LanguageDetector } from '../titulos/LanguageDetector.js';
-import { RescrapeService } from '../services/RescrapeService.js';
+import { RescrapeService } from '../services/scraper/RescrapeService.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -63,8 +63,162 @@ export class AutoMagnetService {
   private titleValidationCache = new Map<string, { result: TitleMatchResult; timestamp: number }>();
   private readonly titleCacheTTL = 60000;
 
+  constructor() { }
 
-  constructor() {}
+  // ─── VALIDAÇÃO DE TÍTULO ─────────────────────────────────────────
+
+  private async validateTitleWithCache(
+    torrentTitle: string,
+    imdbId: string,
+    season?: number,
+    episode?: number,
+    tituloParaIdioma?: string
+  ): Promise<TitleMatchResult> {
+    const cacheKey = `title_${imdbId}_${torrentTitle.substring(0, 100)}_${season}_${episode}_${tituloParaIdioma || ''}`;
+    const cached = this.titleValidationCache.get(cacheKey);
+    if (cached && Date.now() - cached.timestamp < this.titleCacheTTL) return cached.result;
+
+    const result = await titleFilter.titulosCombinam(
+      torrentTitle,
+      imdbId,
+      season,
+      episode,
+      tituloParaIdioma
+    );
+    this.titleValidationCache.set(cacheKey, { result, timestamp: Date.now() });
+    return result;
+  }
+
+  // ─── HELPERS ─────────────────────────────────────────────────────
+
+  private validateMagnetLink(magnet: string): boolean {
+    return magnet.startsWith('magnet:') && magnet.includes('xt=urn:btih:') && magnet.length > 50;
+  }
+
+  private detectLanguage(title: string): string {
+    const lower = title.toLowerCase();
+    if (lower.includes('dublado') || lower.includes('dublada') || lower.includes('dublagem')) return 'pt-BR';
+    if (lower.includes('dual audio') || lower.includes('dual áudio')) return 'pt-BR,en';
+    if (LEGENDADO_REGEX.test(lower)) return 'legendado';
+    if (lower.includes('nacional')) return 'pt-BR';
+    if (/\b(english|eng)\b/i.test(lower)) return 'en';
+    if (/\b(español|spanish|espanol)\b/i.test(lower)) return 'es';
+    if (/\b(french|francês|frances)\b/i.test(lower)) return 'fr';
+
+    const langResult = LanguageDetector.getInstance().verificarIdioma(title);
+    if (langResult.palavrasPt.length > 0) return 'pt-BR';
+    if (langResult.palavrasEn.length > 0) return 'en';
+    return 'unknown';
+  }
+
+  private parseSizeToBytes(size?: string): number {
+    if (!size) return 0;
+    const match = size.toLowerCase().trim().match(/^(\d+(?:\.\d+)?)\s*([kmgt]b?)?$/i);
+    if (!match) return 0;
+    const value = parseFloat(match[1]);
+    const unit = match[2] ? match[2].toLowerCase().charAt(0) : 'b';
+    const multipliers: Record<string, number> = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4 };
+    return Math.floor(value * (multipliers[unit] || 1));
+  }
+
+  private async extrairHashDoMagnet(magnet: string): Promise<string | null> {
+    const dados = await analisarMagnet(magnet);
+    return dados ? dados.infoHash : null;
+  }
+
+  // ─── SALVAR NO BANCO ─────────────────────────────────────────────
+
+  private async saveToDatabase(
+    magnetData: MagnetData,
+    titleMatchResult: TitleMatchResult,
+    infoHash?: string,
+    provider?: string,
+    htmlTitle?: string
+  ): Promise<boolean> {
+    try {
+      const magnetHash = infoHash || await this.extrairHashDoMagnet(magnetData.magnet);
+      if (!magnetHash) throw new Error('Não foi possível extrair infoHash');
+
+      const existingTorrent = await getTorrent(magnetHash);
+      if (existingTorrent) {
+        await upsertTorrent(magnetHash, {
+          seeders: magnetData.seeds || 0,
+          lastSeen: new Date()
+        });
+        return false;
+      }
+
+      if (!titleMatchResult.matches) return false;
+
+      const rangeSource = htmlTitle || magnetData.title;
+      const episodeRange = extrairRangeEpisodios(rangeSource);
+
+      let imdbSeason: number | null = magnetData.imdbSeason ?? null;
+      let imdbEpisodeStart: number | null = null;
+      let imdbEpisodeEnd: number | null = null;
+
+      if (magnetData.category === 'serie' && titleMatchResult.torrentMetadata.isCompleteSeason) {
+        imdbSeason = null;
+        imdbEpisodeStart = null;
+        imdbEpisodeEnd = null;
+      } else {
+        if (episodeRange && !(episodeRange.episodeStart === 0 && episodeRange.episodeEnd === 0)) {
+          imdbEpisodeStart = episodeRange.episodeStart;
+          imdbEpisodeEnd = episodeRange.episodeEnd;
+        }
+
+        if (magnetData.imdbSeason && magnetData.imdbEpisode !== undefined) {
+          const rangeMultiplo = imdbEpisodeStart !== null && imdbEpisodeEnd !== null && imdbEpisodeEnd > imdbEpisodeStart;
+
+          if (magnetData.imdbEpisode === null) {
+            imdbEpisodeStart = null;
+            imdbEpisodeEnd = null;
+          } else if (!rangeMultiplo) {
+            imdbEpisodeStart = magnetData.imdbEpisode;
+            imdbEpisodeEnd = magnetData.imdbEpisode;
+          }
+        }
+      }
+
+      logger.info('Salvando torrent no banco', {
+        infoHash: magnetHash,
+        imdbId: magnetData.imdbId,
+        imdbSeason,
+        imdbEpisodeStart,
+        imdbEpisodeEnd,
+        isCompleteSeason: titleMatchResult.torrentMetadata.isCompleteSeason,
+      });
+
+      await createTorrent({
+        infoHash: magnetHash,
+        provider,
+        title: magnetData.title,
+        size: this.parseSizeToBytes(magnetData.size) || 0,
+        type: magnetData.category === 'serie' ? 'series' : 'movie',
+        imdbId: magnetData.imdbId || null,
+        imdbSeason,
+        imdbEpisodeStart,
+        imdbEpisodeEnd,
+        seeders: magnetData.seeds || 0,
+        idioma: magnetData.language,
+        qualidade: magnetData.quality,
+        magnet: magnetData.magnet,
+        uploadDate: new Date(),
+        lastSeen: new Date(),
+        rescrapeAt: RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality)
+      });
+
+      return true;
+    } catch (error) {
+      logger.error('Erro ao salvar magnet', {
+        title: magnetData.title.substring(0, 60),
+        error: error instanceof Error ? error.message : 'Erro'
+      });
+      throw error;
+    }
+  }
+
+  // ─── ADICIONAR MAGNET AUTOMATICAMENTE ───────────────────────────
 
   async autoAddMagnet(
     magnetLink: string,
@@ -102,36 +256,37 @@ export class AutoMagnetService {
         return result;
       }
 
-      let titleMatchResult: TitleMatchResult;
-      if (originalTitle) {
-        titleMatchResult = {
-          matches: true,
-          similarity: 1,
-          matchedTitle: originalTitle,
-          torrentMetadata: titleFilter.extrairMetadados(torrentTitle),
-          reason: 'Pré-validado pelo CatalogProvider'
-        } as TitleMatchResult;
-      } else {
-        titleMatchResult = await this.validateTitleWithCache(torrentTitle, imdbId, imdbSeason, imdbEpisode !== null ? imdbEpisode : undefined);
-        if (!titleMatchResult.matches) {
-          const result: AutoMagnetResult = {
-            success: false,
-            magnetAdded: false,
-            message: 'Título não corresponde',
-            validation: { titleMatches: false, reason: titleMatchResult.reason || 'Título não corresponde' }
-          };
-          this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
-          return result;
-        }
+      const titleForValidation = originalTitle?.trim() ? originalTitle : torrentTitle;
+      const titleForLanguage = originalTitle?.trim() ? torrentTitle : undefined;
+
+      const titleMatchResult = await this.validateTitleWithCache(
+        titleForValidation,
+        imdbId,
+        imdbSeason,
+        imdbEpisode !== null ? imdbEpisode : undefined,
+        titleForLanguage
+      );
+
+      if (!titleMatchResult.matches) {
+        const result: AutoMagnetResult = {
+          success: false,
+          magnetAdded: false,
+          message: 'Título não corresponde',
+          validation: { titleMatches: false, reason: titleMatchResult.reason || 'Título não corresponde' }
+        };
+        this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+        return result;
       }
+
+      const effectiveTitle = titleForValidation;
 
       let torrentSeason = imdbSeason;
       let torrentEpisode = imdbEpisode;
 
       if (type === 'series') {
-        const torrentMetadata = titleFilter.extrairMetadados(torrentTitle);
-        const multiplos = episodeMatcher.temMultiplosEpisodios(torrentTitle);
-        const ehPack = episodeMatcher.ehPackTemporadaCompleta(torrentTitle);
+        const torrentMetadata = titleFilter.extrairMetadados(effectiveTitle);
+        const multiplos = episodeMatcher.temMultiplosEpisodios(effectiveTitle);
+        const ehPack = episodeMatcher.ehPackTemporadaCompleta(effectiveTitle);
 
         if (torrentSeason === undefined && torrentMetadata.season) torrentSeason = torrentMetadata.season;
         if (ehPack) torrentEpisode = null;
@@ -141,17 +296,16 @@ export class AutoMagnetService {
       }
 
       const category = type === 'series' ? 'serie' : 'filme';
-      const language = this.detectLanguage(torrentTitle);
-      
-      // Uso do QualityDetector centralizado (remove duplicação)
-      const allQualities = qualityDetector.extractAllQualities(torrentTitle);
+      const language = this.detectLanguage(effectiveTitle);
+
+      const allQualities = qualityDetector.extractAllQualities(effectiveTitle);
       const finalQuality = allQualities.length > 0
         ? allQualities[0]
-        : (quality || qualityDetector.extractQualityFromFilename(torrentTitle));
+        : (quality || qualityDetector.extractQualityFromFilename(effectiveTitle));
 
       const magnetData: MagnetData = {
         imdbId,
-        title: torrentTitle,
+        title: effectiveTitle,
         magnet: magnetLink,
         quality: finalQuality,
         seeds,
@@ -201,128 +355,7 @@ export class AutoMagnetService {
     }
   }
 
-  private async validateTitleWithCache(torrentTitle: string, imdbId: string, season?: number, episode?: number): Promise<TitleMatchResult> {
-    const cacheKey = `title_${imdbId}_${torrentTitle.substring(0, 100)}_${season}_${episode}`;
-    const cached = this.titleValidationCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.titleCacheTTL) return cached.result;
-
-    const result = await titleFilter.titulosCombinam(torrentTitle, imdbId, season, episode);
-    this.titleValidationCache.set(cacheKey, { result, timestamp: Date.now() });
-    return result;
-  }
-
-  private validateMagnetLink(magnet: string): boolean {
-    return magnet.startsWith('magnet:') && magnet.includes('xt=urn:btih:') && magnet.length > 50;
-  }
-
-  private detectLanguage(title: string): string {
-    const lower = title.toLowerCase();
-    if (lower.includes('dublado') || lower.includes('dublada') || lower.includes('dublagem')) return 'pt-BR';
-    if (lower.includes('dual audio') || lower.includes('dual áudio')) return 'pt-BR,en';
-    if (LEGENDADO_REGEX.test(lower)) return 'legendado';
-    if (lower.includes('nacional')) return 'pt-BR';
-    if (/\b(english|eng)\b/i.test(lower)) return 'en';
-    if (/\b(español|spanish|espanol)\b/i.test(lower)) return 'es';
-    if (/\b(french|francês|frances)\b/i.test(lower)) return 'fr';
-
-    const langResult = LanguageDetector.getInstance().verificarIdioma(title);
-    if (langResult.palavrasPt.length > 0) return 'pt-BR';
-    if (langResult.palavrasEn.length > 0) return 'en';
-    return 'unknown';
-  }
-
-  private async saveToDatabase(
-    magnetData: MagnetData,
-    titleMatchResult: TitleMatchResult,
-    infoHash?: string,
-    provider?: string,
-    htmlTitle?: string
-  ): Promise<boolean> {
-    try {
-      const magnetHash = infoHash || await this.extrairHashDoMagnet(magnetData.magnet);
-      if (!magnetHash) throw new Error('Não foi possível extrair infoHash');
-
-      const existingTorrent = await getTorrent(magnetHash);
-      if (existingTorrent) {
-        await upsertTorrent(magnetHash, {
-          seeders: magnetData.seeds || 0,
-          lastSeen: new Date()
-        });
-        return false;
-      }
-
-      if (!titleMatchResult.matches) return false;
-
-      const rangeSource = htmlTitle || magnetData.title;
-      const episodeRange = extrairRangeEpisodios(rangeSource);
-      let imdbEpisodeStart: number | null = null;
-      let imdbEpisodeEnd: number | null = null;
-
-      const isFullPack = episodeRange
-        ? (episodeRange.episodeStart === 0 && episodeRange.episodeEnd === 0) ||
-          /\b(?:temporada completa|complete season|season pack|pack completo)\b/i.test(rangeSource)
-        : false;
-
-      if (episodeRange && !isFullPack) {
-        imdbEpisodeStart = episodeRange.episodeStart;
-        imdbEpisodeEnd = episodeRange.episodeEnd;
-      }
-
-      if (magnetData.imdbSeason && magnetData.imdbEpisode !== undefined) {
-        const rangeMultiplo = imdbEpisodeStart !== null && imdbEpisodeEnd !== null && imdbEpisodeEnd > imdbEpisodeStart;
-
-        if (magnetData.imdbEpisode === null) {
-          imdbEpisodeStart = null;
-          imdbEpisodeEnd = null;
-        } else if (!rangeMultiplo) {
-          imdbEpisodeStart = magnetData.imdbEpisode;
-          imdbEpisodeEnd = magnetData.imdbEpisode;
-        }
-      }
-
-      await createTorrent({
-        infoHash: magnetHash,
-        provider,
-        title: magnetData.title,
-        size: this.parseSizeToBytes(magnetData.size) || 0,
-        type: magnetData.category === 'serie' ? 'series' : 'movie',
-        imdbId: magnetData.imdbId || null,
-        imdbSeason: magnetData.imdbSeason || null,
-        imdbEpisodeStart,
-        imdbEpisodeEnd,
-        seeders: magnetData.seeds || 0,
-        idioma: magnetData.language,
-        qualidade: magnetData.quality,
-        magnet: magnetData.magnet,
-        uploadDate: new Date(),
-        lastSeen: new Date(),
-        rescrapeAt: RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality)
-      });
-
-      return true;
-    } catch (error) {
-      logger.error('Erro ao salvar magnet', {
-        title: magnetData.title.substring(0, 60),
-        error: error instanceof Error ? error.message : 'Erro'
-      });
-      throw error;
-    }
-  }
-
-  private parseSizeToBytes(size?: string): number {
-    if (!size) return 0;
-    const match = size.toLowerCase().trim().match(/^(\d+(?:\.\d+)?)\s*([kmgt]b?)?$/i);
-    if (!match) return 0;
-    const value = parseFloat(match[1]);
-    const unit = match[2] ? match[2].toLowerCase().charAt(0) : 'b';
-    const multipliers: Record<string, number> = { b: 1, k: 1024, m: 1024 ** 2, g: 1024 ** 3, t: 1024 ** 4 };
-    return Math.floor(value * (multipliers[unit] || 1));
-  }
-
-  private async extrairHashDoMagnet(magnet: string): Promise<string | null> {
-    const dados = await analisarMagnet(magnet);
-    return dados ? dados.infoHash : null;
-  }
+  // ─── TORBOX ON CLICK ─────────────────────────────────────────────
 
   async processTorboxOnClick(magnetData: MagnetData, apiKey: string): Promise<{ success: boolean; streamLink?: string; status: string; message?: string }> {
     try {
@@ -388,6 +421,8 @@ export class AutoMagnetService {
     }
   }
 
+  // ─── CHECK EXISTING TORRENT ──────────────────────────────────────
+
   private async checkExistingTorrent(magnet: string, apiKey: string): Promise<{ found: boolean; torrentId?: string; status?: string; downloaded: boolean }> {
     try {
       const magnetHash = await this.extrairHashDoMagnet(magnet);
@@ -406,6 +441,8 @@ export class AutoMagnetService {
       return { found: false, downloaded: false };
     }
   }
+
+  // ─── CACHE CLEAR / STATS ─────────────────────────────────────────
 
   clearCache(): void {
     this.validationCache.clear();

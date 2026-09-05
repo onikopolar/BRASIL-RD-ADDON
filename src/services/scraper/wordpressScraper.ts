@@ -7,7 +7,6 @@ import tls from 'tls';
 import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
-import { allowedQualities } from './scraperConfigs.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, normalizarTexto, isCollectionTitle } from '../../titulos/TechnicalWords.js';
 
@@ -516,13 +515,18 @@ export class WordPressScraper {
       }
     }
 
-    const dnQuality = canonicalName ? this.extractQualityFromText(canonicalName) : null;
-    const linkQuality = this.extractQualityFromText(linkText);
-    const contextQuality = this.extractQualityFromText(fullContextText);
+    const getQualityOrNull = (text: string): string | null => {
+      const qualities = this.qualityDetector.extractAllQualities(text);
+      return qualities.length > 0 ? qualities[0] : null;
+    };
+
+    const dnQuality = canonicalName ? getQualityOrNull(canonicalName) : null;
+    const linkQuality = getQualityOrNull(linkText);
+    const contextQuality = getQualityOrNull(fullContextText);
 
     const quality = dnQuality || linkQuality || contextQuality || this.detectQuality(parentText, postTitle, html, magnet);
 
-    if (!allowedQualities.has(quality)) {
+    if (!this.qualityDetector.isValidQuality(quality)) {
       logger.warn(`WP ${provider}: qualidade "${quality}" NÃO permitida`);
       return null;
     }
@@ -635,13 +639,16 @@ export class WordPressScraper {
     if (magnet) {
       const canonicalName = this.extractCanonicalNameSync(magnet);
       if (canonicalName) {
-        const q = this.qualityDetector.extractQualityFromFilename(canonicalName);
-        if (q && q !== 'HD' && allowedQualities.has(q)) return q;
+        const q = this.qualityDetector.extractBestQuality(canonicalName);
+        if (q && q !== 'HD' && this.qualityDetector.isValidQuality(q)) {
+          return q;
+        }
       }
     }
-    let quality = this.qualityDetector.extractQualityFromFilename(parentText);
-    if (quality === 'HD') quality = this.qualityDetector.extractQualityFromFilename(postTitle);
-    if (quality === 'HD') quality = this.qualityDetector.extractQualityFromFilename(fullHtml);
+
+    let quality = this.qualityDetector.extractBestQuality(parentText);
+    if (quality === 'HD') quality = this.qualityDetector.extractBestQuality(postTitle);
+    if (quality === 'HD') quality = this.qualityDetector.extractBestQuality(fullHtml);
     return quality || 'HD';
   }
 

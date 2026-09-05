@@ -21,7 +21,7 @@ import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit
 import { metricsService } from './catalogo/MetricsService.js';
 import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug.js';
 import { etagMiddleware } from './middlewares/etag.js';
-import { RescrapeService } from './services/RescrapeService.js';
+import { RescrapeService } from './services/scraper/RescrapeService.js';
 
 const logger = new Logger('Main');
 const cacheService = new CacheService();

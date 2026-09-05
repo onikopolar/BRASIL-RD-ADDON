@@ -6,7 +6,6 @@ import tls from 'tls';
 import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
-import { allowedQualities } from './scraperConfigs.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
 
@@ -296,19 +295,26 @@ export class BludvScraper {
 
     const results: TorrentResult[] = [];
 
-    for (const { magnet, link, canonicalName } of analyzedMagnets) {
-      const dnQuality = canonicalName ? this.extractQualityFromText(canonicalName) : null;
-      const linkQuality = this.extractQualityFromText(link.linkText);
-      const contextQuality = this.extractQualityFromText(link.fullContextText);
+    const getQualityOrNull = (text: string): string | null => {
+      const qualities = this.qualityDetector.extractAllQualities(text);
+      return qualities.length > 0 ? qualities[0] : null;
+    };
 
-      let quality = dnQuality || linkQuality || contextQuality;
-      if (!quality || !allowedQualities.has(quality)) {
-        quality = this.qualityDetector.extractQualityFromFilename(postTitle);
-        if (!quality || !allowedQualities.has(quality)) {
+    for (const { magnet, link, canonicalName } of analyzedMagnets) {
+      const dnQuality = canonicalName ? getQualityOrNull(canonicalName) : null;
+      const linkQuality = getQualityOrNull(link.linkText);
+      const contextQuality = getQualityOrNull(link.fullContextText);
+      const parentQuality = getQualityOrNull(link.parentText);
+
+      let quality = dnQuality || linkQuality || contextQuality || parentQuality;
+      if (!quality || !this.qualityDetector.isValidQuality(quality)) {
+        quality = this.qualityDetector.extractBestQuality(postTitle);
+        if (!quality || !this.qualityDetector.isValidQuality(quality)) {
           quality = 'HD';
         }
       }
 
+      // EXTRAI EPISÓDIO
       let episode: number | undefined;
       let episodeRangeText: string | undefined;
 
@@ -486,53 +492,49 @@ export class BludvScraper {
     $: any,
     contentHtml: string
   ): { magnet: string; linkText: string; parentText: string; fullContextText: string }[] {
-    const allLinks = $('a[href^="magnet:"]').toArray();
-    if (!allLinks.length) return [];
+    const resultados: { magnet: string; linkText: string; parentText: string; fullContextText: string }[] = [];
 
-    const strongEls = $('.content strong, .content b').toArray();
-    let dualPos = -1;
-    let legendadoPos = contentHtml.length;
+    // Tenta processar por blocos <center>
+    const centers = $('center').toArray();
 
-    for (let i = 0; i < strongEls.length; i++) {
-      const text = $(strongEls[i]).text().trim();
-      if (dualPos === -1 && /\b(?:DUAL\s+[ÁA]UDIO|DUBLADO)\b/i.test(text)) {
-        const dualHtml = $(strongEls[i]).toString();
-        dualPos = contentHtml.indexOf(dualHtml);
-      }
-      if (dualPos !== -1 && /\b(?:LEGENDADO|LEGENDADA)\b/i.test(text)) {
-        const legendadoHtml = $(strongEls[i]).toString();
-        const pos = contentHtml.indexOf(legendadoHtml);
-        if (pos > dualPos) legendadoPos = pos;
-        break;
-      }
+    for (const centerEl of centers) {
+      const magnetLink = $(centerEl).find('a[href^="magnet:"]').first();
+      if (!magnetLink.length) continue;
+
+      const magnet = magnetLink.attr('href')?.trim();
+      if (!magnet) continue;
+
+      const linkText = magnetLink.text().trim();
+      const parentText = magnetLink.parent().text().trim();
+
+      // Extrai qualidade a partir do span dentro do center (texto do servidor)
+      const spanText = $(centerEl).find('span').first().text().trim();
+      const fullContextText = spanText || $(centerEl).text().trim();
+
+      resultados.push({
+        magnet,
+        linkText,
+        parentText,
+        fullContextText,
+      });
     }
 
-    const mapLink = (el: any) => ({
-      magnet: $(el).attr('href')?.trim(),
-      linkText: $(el).text().trim(),
-      parentText: $(el).parent().text().trim(),
-      fullContextText: this.getFullContextText($(el))
-    });
-
-    if (dualPos === -1) {
-      return allLinks.map(mapLink).filter((item: {
-        magnet: string;
-        linkText: string;
-        parentText: string;
-        fullContextText: string;
-      }) => item.magnet);
-    }
-
-    const result: { magnet: string; linkText: string; parentText: string; fullContextText: string }[] = [];
-    for (const el of allLinks) {
-      const linkHtml = $(el).toString();
-      const linkPos = contentHtml.indexOf(linkHtml);
-      if (linkPos > dualPos && linkPos < legendadoPos) {
-        const item = mapLink(el);
-        if (item.magnet) result.push(item);
+    // Fallback: se não encontrou nenhum center com magnet, usa método antigo
+    if (resultados.length === 0) {
+      const allLinks = $('a[href^="magnet:"]').toArray();
+      for (const el of allLinks) {
+        const magnet = $(el).attr('href')?.trim();
+        if (!magnet) continue;
+        resultados.push({
+          magnet,
+          linkText: $(el).text().trim(),
+          parentText: $(el).parent().text().trim(),
+          fullContextText: this.getFullContextText($(el)),
+        });
       }
     }
-    return result;
+
+    return resultados;
   }
 
   async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
@@ -557,15 +559,34 @@ export class BludvScraper {
   }
 
   getFullContextText($el: any): string {
+    // Log inicial
+    console.log('[DEBUG getFullContext] INÍCIO');
+
+    // Tenta o span anterior
+    const prevSpan = $el.parent().prev('span');
+    console.log('[DEBUG getFullContext] prevSpan length:', prevSpan.length);
+    if (prevSpan.length) {
+      const text = prevSpan.text().trim();
+      console.log('[DEBUG getFullContext] prevSpan text:', JSON.stringify(text));
+      if (text) return text;
+    }
+
     let current = $el.parent();
     for (let depth = 0; depth < 4; depth++) {
       const text = current.text().trim();
-      if (text.length > 10 && /\b\d{3,4}p\b/i.test(text)) {
-        return text;
+      console.log(`[DEBUG getFullContext] depth=${depth} tag=${current[0]?.name} text=${text.substring(0, 120)}`);
+      if (text.length > 10) {
+        const matches = text.match(/\b(2160p|1080p|720p|480p|4K|HD)\b/gi);
+        console.log(`[DEBUG getFullContext] matches:`, matches);
+        if (matches && matches.length === 1) {
+          return text;
+        }
       }
       current = current.parent();
     }
-    return $el.parent().text().trim();
+    const fallback = $el.parent().text().trim();
+    console.log('[DEBUG getFullContext] FALLBACK:', fallback);
+    return fallback;
   }
 
   cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {

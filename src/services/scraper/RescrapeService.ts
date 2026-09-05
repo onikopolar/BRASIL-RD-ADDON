@@ -1,8 +1,8 @@
-import { Torrent } from '../database/models.js';
-import { TorrentScraperService } from '../services/scraper/TorrentScraperService.js';
-import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
-import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
-import { Logger } from '../utils/logger.js';
+import { Torrent } from '../../database/models.js';
+import { TorrentScraperService } from './TorrentScraperService.js';
+import { ImdbScraperService, ImdbTitles } from '../../catalogo/ImdbScraperService.js';
+import { AutoMagnetService } from '../../debrid/AutoMagnetService.js';
+import { Logger } from '../../utils/logger.js';
 import { Op } from 'sequelize';
 
 const logger = new Logger('RescrapeService');

@@ -8,29 +8,31 @@ class Logger {
     }
     shouldLog(level) {
         const levels = ['error', 'warn', 'info', 'debug'];
-        const currentLevelIndex = levels.indexOf(this.logLevel);
-        const messageLevelIndex = levels.indexOf(level);
-        return messageLevelIndex <= currentLevelIndex;
+        const currentIndex = levels.indexOf(this.logLevel);
+        const messageIndex = levels.indexOf(level);
+        if (currentIndex === -1 || messageIndex === -1)
+            return false;
+        return messageIndex <= currentIndex;
     }
-    info(message, meta) {
-        if (this.shouldLog('info')) {
-            console.log(`[INFO] [${this.context}] ${message}`, meta || '');
-        }
+    log(level, message, ...args) {
+        if (!this.shouldLog(level))
+            return;
+        const timestamp = new Date().toISOString();
+        const prefix = `[${level.toUpperCase()}] [${this.context}] ${timestamp}`;
+        const consoleMethod = console[level] || console.log;
+        consoleMethod(prefix, message, ...args);
     }
-    error(message, error) {
-        if (this.shouldLog('error')) {
-            console.error(`[ERROR] [${this.context}] ${message}`, error || '');
-        }
+    info(message, ...args) {
+        this.log('info', message, ...args);
     }
-    warn(message, meta) {
-        if (this.shouldLog('warn')) {
-            console.warn(`[WARN] [${this.context}] ${message}`, meta || '');
-        }
+    error(message, ...args) {
+        this.log('error', message, ...args);
     }
-    debug(message, meta) {
-        if (this.shouldLog('debug')) {
-            console.debug(`[DEBUG] [${this.context}] ${message}`, meta || '');
-        }
+    warn(message, ...args) {
+        this.log('warn', message, ...args);
+    }
+    debug(message, ...args) {
+        this.log('debug', message, ...args);
     }
 }
 exports.Logger = Logger;
