@@ -278,10 +278,8 @@ export async function extractMagnetsFromPost(
         year = anoDoMagnet;
       }
 
-      // Se o canonicalName indicar claramente outro título, usa-o
-      if (canonicalName && canonicalName.length >= 3) {
-        originalTitle = canonicalName;
-      }
+      // Não sobrescreve originalTitle com canonicalName.
+      // canonicalName será usado apenas para exibição/qualidade, não para validação.
 
       const language = extractLanguage(raw.parentText) || metadata.language || extractLanguage(pageTitle);
       const seasonNumber =

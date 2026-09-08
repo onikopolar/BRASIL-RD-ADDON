@@ -413,7 +413,7 @@ export async function searchStarck(
 
           if (magnet.season === undefined && targetSeason) magnet.season = targetSeason;
           magnet.language = magnet.language || metadata.language;
-          magnet.originalTitle = metadata.originalTitle;
+          magnet.originalTitle = metadata.originalTitle || link.slugTitle;
           magnet.year = metadata.year;
           if (metadata.quality && !magnet.qualityHint) magnet.qualityHint = metadata.quality;
           if (!magnet.size && metadata.size) magnet.size = metadata.size;

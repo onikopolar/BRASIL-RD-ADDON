@@ -18,7 +18,15 @@
     "rebuild": "npm run clean && npm run build",
     "add-magnet": "npx tsx scripts/add-magnet.ts",
     "migrate": "node scripts/migrate-database.js",
-    "migrate:dev": "node scripts/migrate-database.js"
+    "migrate:dev": "node scripts/migrate-database.js",
+    "off-hdr": "node scripts/scraper-ligar-desligar.mjs hdr off",
+    "on-hdr": "node scripts/scraper-ligar-desligar.mjs hdr on",
+    "off-bludv": "node scripts/scraper-ligar-desligar.mjs bludv off",
+    "on-bludv": "node scripts/scraper-ligar-desligar.mjs bludv on",
+    "off-starck": "node scripts/scraper-ligar-desligar.mjs starck off",
+    "on-starck": "node scripts/scraper-ligar-desligar.mjs starck on",
+    "off-wordpress": "node scripts/scraper-ligar-desligar.mjs wordpress off",
+    "on-wordpress": "node scripts/scraper-ligar-desligar.mjs wordpress on"
   },
   "dependencies": {
     "@types/cors": "^2.8.19",

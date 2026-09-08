@@ -17,7 +17,6 @@ const basicRoutes_js_1 = require("./rotas/basicRoutes.js");
 const resolveRoutes_js_1 = require("./rotas/resolveRoutes.js");
 const staticRoutes_js_1 = require("./rotas/staticRoutes.js");
 const serverFunctions_js_1 = require("./rotas/serverFunctions.js");
-const CacheService_js_1 = require("./debrid/CacheService.js");
 const logger_js_1 = require("./utils/logger.js");
 const clientInfo_js_1 = require("./middlewares/clientInfo.js");
 const rateLimit_js_1 = require("./middlewares/rateLimit.js");
@@ -26,7 +25,6 @@ const ultraDebug_js_1 = require("./middlewares/ultraDebug.js");
 const etag_js_1 = require("./middlewares/etag.js");
 const RescrapeService_js_1 = require("./services/scraper/RescrapeService.js");
 const logger = new logger_js_1.Logger('Main');
-const cacheService = new CacheService_js_1.CacheService();
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
 app.use((0, cors_1.default)({
@@ -68,10 +66,9 @@ async function initializeDatabase() {
         }
     }
 }
-const cacheMaxAge = 300;
 app.use((req, res, next) => {
-    if (cacheMaxAge && !res.getHeader('Cache-Control')) {
-        res.setHeader('Cache-Control', `max-age=${cacheMaxAge}, public, must-revalidate`);
+    if (!res.getHeader('Cache-Control')) {
+        res.setHeader('Cache-Control', 'max-age=300, public, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
     }
     if (!res.getHeader('Access-Control-Allow-Origin')) {
@@ -86,24 +83,10 @@ app.use((0, etag_js_1.etagMiddleware)({
     excludePaths: ['/resolve'],
     defaultMaxAge: 300,
 }));
-app.get('/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_js_1.Logger('CONFIGURE');
-    ultraLogger.info(' Servindo página de configuração HTML', {
-        requestId: req._ultraDebugId,
-        manifestVersion: manifest_js_1.manifest.version,
-        manifestId: manifest_js_1.manifest.id,
-        host: req.get('host'),
-        protocol: req.protocol,
-    });
-    res.setHeader('Cache-Control', 'max-age=3600, public');
-    res.setHeader('content-type', 'text/html');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.end((0, configureTemplate_js_1.configureTemplate)(manifest_js_1.manifest));
-});
-app.get('/torbox=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0, ultraDebug_js_1.manifestDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_js_1.Logger('TORBOX-MANIFEST');
+function sendManifest(req, res, loggerName, extraLog = {}) {
+    const ultraLogger = new logger_js_1.Logger(loggerName);
     const apiKey = req.params.apiKey;
-    ultraLogger.info(' MANIFEST via TORBOX solicitado', {
+    ultraLogger.info('MANIFEST solicitado', {
         requestId: req._ultraDebugId,
         apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
         apiKeyLength: apiKey?.length || 0,
@@ -112,26 +95,49 @@ app.get('/torbox=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0
         host: req.get('host'),
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 80),
+        ...extraLog,
     });
     res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest_js_1.manifest);
+}
+function sendConfigure(req, res, loggerName, extraLog = {}) {
+    const ultraLogger = new logger_js_1.Logger(loggerName);
+    const apiKey = req.params.apiKey || '';
+    ultraLogger.info('CONFIGURE solicitado', {
+        requestId: req._ultraDebugId,
+        apiKeyPresent: !!apiKey,
+        apiKeyLength: apiKey?.length || 0,
+        manifestVersion: manifest_js_1.manifest.version,
+        manifestId: manifest_js_1.manifest.id,
+        host: req.get('host'),
+        protocol: req.protocol,
+        origin: req.get('origin'),
+        ...extraLog,
+    });
+    res.setHeader('Cache-Control', 'max-age=3600, public');
+    res.setHeader('content-type', 'text/html');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.end((0, configureTemplate_js_1.configureTemplate)(manifest_js_1.manifest, apiKey));
+}
+app.get('/manifest.json', (0, ultraDebug_js_1.manifestDebugMiddleware)(), (req, res) => {
+    sendManifest(req, res, 'SDK-MANIFEST');
+});
+app.get('/torbox=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0, ultraDebug_js_1.manifestDebugMiddleware)(), (req, res) => {
+    sendManifest(req, res, 'TORBOX-MANIFEST');
 });
 app.get('/realdebrid=:apiKey/manifest.json', rateLimit_js_1.torrentioRateLimiter, (0, ultraDebug_js_1.manifestDebugMiddleware)(), (req, res) => {
-    const ultraLogger = new logger_js_1.Logger('RD-MANIFEST');
-    const apiKey = req.params.apiKey;
-    ultraLogger.info(' MANIFEST via REALDEBRID solicitado', {
-        requestId: req._ultraDebugId,
-        apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
-        apiKeyLength: apiKey?.length || 0,
-        host: req.get('host'),
-        origin: req.get('origin'),
-    });
-    res.setHeader('Cache-Control', 'max-age=86400, public');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
-    res.json(manifest_js_1.manifest);
+    sendManifest(req, res, 'RD-MANIFEST');
+});
+app.get('/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res) => {
+    sendConfigure(req, res, 'SDK-CONFIGURE');
+});
+app.get('/torbox=:apiKey/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res) => {
+    sendConfigure(req, res, 'NUVIO-CONFIGURE');
+});
+app.get('/realdebrid=:apiKey/configure', (0, ultraDebug_js_1.configureDebugMiddleware)(), (req, res) => {
+    sendConfigure(req, res, 'NUVIO-CONFIGURE-RD');
 });
 app.get('/torbox=:apiKey/stream/:type/:id.json', rateLimit_js_1.torrentioRateLimiter, async (req, res) => {
     const ultraLogger = new logger_js_1.Logger('STREAM-TORBOX');
@@ -281,33 +287,6 @@ async function startServer() {
         (0, staticRoutes_js_1.setupStaticRoutes)(app);
         const builder = (0, streamHandlerBuilder_js_1.createStremioBuilder)(manifest_js_1.manifest);
         const stremioRouter = (0, streamHandlerBuilder_js_1.getStremioRouter)(builder);
-        app.use((req, res, next) => {
-            if (req.path === '/manifest.json' || req.path === '/manifest') {
-                const manifestLogger = new logger_js_1.Logger('MANIFEST-SDK');
-                manifestLogger.info('═══════════════════════════════════════', {});
-                manifestLogger.info(' STREMIO PEDIU MANIFEST (via SDK router)', {
-                    requestId: req._ultraDebugId,
-                    method: req.method,
-                    host: req.get('host'),
-                    origin: req.get('origin'),
-                    userAgent: req.get('user-agent')?.substring(0, 100),
-                    stremioAddonCollection: req.get('stremio-addon-collection'),
-                    protocol: req.protocol,
-                    fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
-                });
-                manifestLogger.info(' Respondendo com manifest:', {
-                    id: manifest_js_1.manifest.id,
-                    version: manifest_js_1.manifest.version,
-                    name: manifest_js_1.manifest.name,
-                    configurationRequired: manifest_js_1.manifest.behaviorHints?.configurationRequired,
-                    configurable: manifest_js_1.manifest.behaviorHints?.configurable,
-                    resources: manifest_js_1.manifest.resources,
-                    types: manifest_js_1.manifest.types,
-                });
-                manifestLogger.info('═══════════════════════════════════════', {});
-            }
-            next();
-        });
         app.use(stremioRouter);
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_js_1.createServer)(app, port);

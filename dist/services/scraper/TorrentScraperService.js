@@ -1,6 +1,11 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.TorrentScraperService = void 0;
+const fs_1 = require("fs");
+const path_1 = __importDefault(require("path"));
 const logger_js_1 = require("../../utils/logger.js");
 const qualityDetector_js_1 = require("../../lib/qualityDetector.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
@@ -10,6 +15,19 @@ const starckScraper_js_1 = require("./starckScraper.js");
 const hdrScraper_js_1 = require("./hdrScraper.js");
 const TechnicalWords_js_1 = require("../../titulos/TechnicalWords.js");
 const logger = new logger_js_1.Logger('TorrentScraperService');
+function isScraperAtivo(nome) {
+    const arquivo = path_1.default.join(process.cwd(), 'scrapers-state.json');
+    if (!(0, fs_1.existsSync)(arquivo))
+        return true;
+    try {
+        const estado = JSON.parse((0, fs_1.readFileSync)(arquivo, 'utf8'));
+        const chave = nome.toLowerCase();
+        return estado[chave] !== false;
+    }
+    catch {
+        return true;
+    }
+}
 class TorrentScraperService {
     constructor(tmdbScraper) {
         this.version = '6.5.4';
@@ -31,10 +49,14 @@ class TorrentScraperService {
                 queries: searchQueries.slice(0, 10),
                 total: searchQueries.length,
             });
+            const bludvAtivo = isScraperAtivo('bludv');
+            const wordpressAtivo = isScraperAtivo('wordpress');
+            const starckAtivo = isScraperAtivo('starck');
+            const hdrAtivo = isScraperAtivo('hdr');
             const [wpResults, starckResults, hdrResults] = await Promise.all([
                 Promise.all([
-                    this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
-                    this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
+                    bludvAtivo ? this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []) : Promise.resolve([]),
+                    wordpressAtivo ? this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []) : Promise.resolve([]),
                 ]).then(([bludvResultados, wpResultados]) => {
                     const seen = new Set();
                     const combined = [...bludvResultados, ...wpResultados];
@@ -52,39 +74,43 @@ class TorrentScraperService {
                         return true;
                     });
                 }).catch(() => []),
-                (0, starckScraper_js_1.searchStarck)(query, type, targetSeason, searchQueries)
-                    .then(results => {
-                    const seen = new Set();
-                    logger.debug(`📊 Starck: ${results.length} resultados brutos`);
-                    return results
-                        .filter(t => { if (seen.has(t.infoHash))
-                        return false; seen.add(t.infoHash); return true; })
-                        .map(r => {
-                        logger.debug('STARCK_RESULT_BRUTO', {
-                            magnetInicio: r.magnet?.substring(0, 80),
-                            canonicalName: r.canonicalName,
-                            episode: r.episode,
-                            season: r.season,
-                            qualityHint: r.qualityHint,
-                            originalTitle: r.originalTitle,
-                            year: r.year,
-                        });
-                        return this.mapStarckResult(r, type);
+                starckAtivo
+                    ? (0, starckScraper_js_1.searchStarck)(query, type, targetSeason, searchQueries)
+                        .then(results => {
+                        const seen = new Set();
+                        logger.debug(`📊 Starck: ${results.length} resultados brutos`);
+                        return results
+                            .filter(t => { if (seen.has(t.infoHash))
+                            return false; seen.add(t.infoHash); return true; })
+                            .map(r => {
+                            logger.debug('STARCK_RESULT_BRUTO', {
+                                magnetInicio: r.magnet?.substring(0, 80),
+                                canonicalName: r.canonicalName,
+                                episode: r.episode,
+                                season: r.season,
+                                qualityHint: r.qualityHint,
+                                originalTitle: r.originalTitle,
+                                year: r.year,
+                            });
+                            return this.mapStarckResult(r, type);
+                        })
+                            .filter((r) => r !== null);
                     })
-                        .filter((r) => r !== null);
-                })
-                    .catch(() => []),
-                (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries, targetYear, imdbId)
-                    .then(results => {
-                    const seen = new Set();
-                    logger.debug(`📊 HDR: ${results.length} resultados brutos`);
-                    return results
-                        .filter(t => { if (seen.has(t.infoHash))
-                        return false; seen.add(t.infoHash); return true; })
-                        .map(r => this.mapHdrResult(r, type))
-                        .filter((r) => r !== null);
-                })
-                    .catch(() => []),
+                        .catch(() => [])
+                    : [],
+                hdrAtivo
+                    ? (0, hdrScraper_js_1.searchHdr)(query, type, targetSeason, searchQueries, targetYear, imdbId)
+                        .then(results => {
+                        const seen = new Set();
+                        logger.debug(`📊 HDR: ${results.length} resultados brutos`);
+                        return results
+                            .filter(t => { if (seen.has(t.infoHash))
+                            return false; seen.add(t.infoHash); return true; })
+                            .map(r => this.mapHdrResult(r, type))
+                            .filter((r) => r !== null);
+                    })
+                        .catch(() => [])
+                    : [],
             ]);
             const allResults = [...wpResults, ...starckResults, ...hdrResults];
             logger.debug(`📊 Total consolidado: ${allResults.length} torrents (WP+BLUDV: ${wpResults.length}, Starck: ${starckResults.length}, HDR: ${hdrResults.length})`);

@@ -14,7 +14,6 @@ import { setupBasicRoutes } from './rotas/basicRoutes.js';
 import { setupResolveRoutes } from './rotas/resolveRoutes.js';
 import { setupStaticRoutes } from './rotas/staticRoutes.js';
 import { createServer } from './rotas/serverFunctions.js';
-import { CacheService } from './debrid/CacheService.js';
 import { Logger } from './utils/logger.js';
 import { clientInfoMiddleware } from './middlewares/clientInfo.js';
 import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit.js';
@@ -24,7 +23,6 @@ import { etagMiddleware } from './middlewares/etag.js';
 import { RescrapeService } from './services/scraper/RescrapeService.js';
 
 const logger = new Logger('Main');
-const cacheService = new CacheService();
 const app = express();
 
 app.set('trust proxy', 1);
@@ -74,11 +72,10 @@ async function initializeDatabase() {
     }
 }
 
-// Cache + ETag middleware
-const cacheMaxAge = 300;
+// Cache + CORS básicos
 app.use((req: any, res: any, next: any) => {
-    if (cacheMaxAge && !res.getHeader('Cache-Control')) {
-        res.setHeader('Cache-Control', `max-age=${cacheMaxAge}, public, must-revalidate`);
+    if (!res.getHeader('Cache-Control')) {
+        res.setHeader('Cache-Control', 'max-age=300, public, must-revalidate');
         res.setHeader('Pragma', 'no-cache');
     }
     if (!res.getHeader('Access-Control-Allow-Origin')) {
@@ -95,27 +92,12 @@ app.use(etagMiddleware({
     defaultMaxAge: 300,
 }));
 
-// Configure
-app.get('/configure', configureDebugMiddleware(), (req: any, res: any) => {
-    const ultraLogger = new Logger('CONFIGURE');
-    ultraLogger.info(' Servindo página de configuração HTML', {
-        requestId: req._ultraDebugId,
-        manifestVersion: manifest.version,
-        manifestId: manifest.id,
-        host: req.get('host'),
-        protocol: req.protocol,
-    });
-    res.setHeader('Cache-Control', 'max-age=3600, public');
-    res.setHeader('content-type', 'text/html');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.end(configureTemplate(manifest));
-});
+// ─── Helpers de resposta para manifest e configure ───
 
-// ROTA TORRENTIO 1: /torbox=APIKEY/manifest.json
-app.get('/torbox=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMiddleware(), (req: any, res: any) => {
-    const ultraLogger = new Logger('TORBOX-MANIFEST');
+function sendManifest(req: any, res: any, loggerName: string, extraLog: Record<string, any> = {}) {
+    const ultraLogger = new Logger(loggerName);
     const apiKey = req.params.apiKey;
-    ultraLogger.info(' MANIFEST via TORBOX solicitado', {
+    ultraLogger.info('MANIFEST solicitado', {
         requestId: req._ultraDebugId,
         apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
         apiKeyLength: apiKey?.length || 0,
@@ -124,38 +106,76 @@ app.get('/torbox=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMidd
         host: req.get('host'),
         origin: req.get('origin'),
         userAgent: req.get('user-agent')?.substring(0, 80),
+        ...extraLog,
     });
+
     res.setHeader('Cache-Control', 'max-age=86400, public');
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
     res.json(manifest);
+}
+
+function sendConfigure(req: any, res: any, loggerName: string, extraLog: Record<string, any> = {}) {
+  const ultraLogger = new Logger(loggerName);
+  const apiKey = req.params.apiKey || '';
+  ultraLogger.info('CONFIGURE solicitado', {
+    requestId: req._ultraDebugId,
+    apiKeyPresent: !!apiKey,
+    apiKeyLength: apiKey?.length || 0,
+    manifestVersion: manifest.version,
+    manifestId: manifest.id,
+    host: req.get('host'),
+    protocol: req.protocol,
+    origin: req.get('origin'),
+    ...extraLog,
+  });
+
+  res.setHeader('Cache-Control', 'max-age=3600, public');
+  res.setHeader('content-type', 'text/html');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.end(configureTemplate(manifest, apiKey));
+}
+
+// ─── Rotas de manifest e configure (compatíveis com Stremio e Nuvio) ───
+
+// Manifest padrão (usado pelo Stremio SDK)
+app.get('/manifest.json', manifestDebugMiddleware(), (req: any, res: any) => {
+    sendManifest(req, res, 'SDK-MANIFEST');
 });
 
-// Compatibilidade: /realdebrid=APIKEY/manifest.json
+// Manifest via Torbox (formato Torrentio, usado por Stremio e Nuvio)
+app.get('/torbox=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMiddleware(), (req: any, res: any) => {
+    sendManifest(req, res, 'TORBOX-MANIFEST');
+});
+
+// Compatibilidade: Manifest via RealDebrid
 app.get('/realdebrid=:apiKey/manifest.json', torrentioRateLimiter, manifestDebugMiddleware(), (req: any, res: any) => {
-    const ultraLogger = new Logger('RD-MANIFEST');
-    const apiKey = req.params.apiKey;
-    ultraLogger.info(' MANIFEST via REALDEBRID solicitado', {
-        requestId: req._ultraDebugId,
-        apiKeyPreview: apiKey ? (apiKey.substring(0, 4) + '...' + apiKey.substring(apiKey.length - 4)) : 'NONE',
-        apiKeyLength: apiKey?.length || 0,
-        host: req.get('host'),
-        origin: req.get('origin'),
-    });
-    res.setHeader('Cache-Control', 'max-age=86400, public');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Expose-Headers', 'Content-Length, X-Request-ID, ETag');
-    res.json(manifest);
+    sendManifest(req, res, 'RD-MANIFEST');
 });
 
-// ROTA TORRENTIO 2: /torbox=APIKEY/stream/:type/:id.json
+// Configure padrão (Stremio SDK)
+app.get('/configure', configureDebugMiddleware(), (req: any, res: any) => {
+    sendConfigure(req, res, 'SDK-CONFIGURE');
+});
+
+// Configure via Torbox (Nuvio gera automaticamente /configure a partir da URL base)
+app.get('/torbox=:apiKey/configure', configureDebugMiddleware(), (req: any, res: any) => {
+    sendConfigure(req, res, 'NUVIO-CONFIGURE');
+});
+
+// Compatibilidade: Configure via RealDebrid
+app.get('/realdebrid=:apiKey/configure', configureDebugMiddleware(), (req: any, res: any) => {
+    sendConfigure(req, res, 'NUVIO-CONFIGURE-RD');
+});
+
+// ─── Rota de stream (Torrentio) ───
+
 app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (req: any, res: any) => {
     const ultraLogger = new Logger('STREAM-TORBOX');
     const { apiKey, type, id } = req.params;
     const decodedId = decodeURIComponent(id);
     const requestId = req._ultraDebugId || 'no-id';
 
-    // Dados TMDB para log (título original, ano, etc.)
     let tmdbInfo: any = null;
     const imdbMatch = decodedId.match(/^(tt\d+)/);
     const imdbId = imdbMatch ? imdbMatch[1] : null;
@@ -213,7 +233,6 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
         const { StreamHandler } = await import('./stream/StreamHandler.js');
         const streamHandler = StreamHandler.getInstance();
 
-        // Define URL base a partir do host da requisicao
         const protocol = req.get('x-forwarded-proto') || 'https';
         const host = req.get('host');
         if (host) {
@@ -238,10 +257,10 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
             requestId,
             totalStreams: result.streams?.length || 0,
             resumo: result.streams?.slice(0, 8).map((s: any) => {
-              const provider = (s.title || '').match(/⚙️\s*([^\n]+)/)?.[1] || '?';
-              const quality = s.behaviorHints?.streamQuality || '?';
-              const name = (s.title || '').split('\n')[0].substring(0, 50);
-              return `${provider} ${quality} | ${name}`;
+                const provider = (s.title || '').match(/⚙️\s*([^\n]+)/)?.[1] || '?';
+                const quality = s.behaviorHints?.streamQuality || '?';
+                const name = (s.title || '').split('\n')[0].substring(0, 50);
+                return `${provider} ${quality} | ${name}`;
             }),
         });
 
@@ -272,7 +291,8 @@ app.get('/torbox=:apiKey/stream/:type/:id.json', torrentioRateLimiter, async (re
     }
 });
 
-// Pula Stremio Router se rota já tratada
+// ─── Stremio SDK Router (para rotas não cobertas acima) ───
+
 app.use((req: any, res: any, next: any) => {
     if (req._torrentioHandled) {
         return next('route');
@@ -280,10 +300,8 @@ app.use((req: any, res: any, next: any) => {
     next();
 });
 
-// LOGGER para rotas do Stremio SDK
 app.use((req: any, res: any, next: any) => {
     const sdkLogger = new Logger('SDK-Router');
-    // Só loga rotas que o SDK vai processar (manifest, stream, configure)
     const sdkPaths = ['/manifest.json', '/stream/', '/configure'];
     const isSdkPath = sdkPaths.some(p => req.path === p || req.path.startsWith(p));
     if (isSdkPath) {
@@ -312,35 +330,6 @@ async function startServer() {
 
         const builder = createStremioBuilder(manifest);
         const stremioRouter = getStremioRouter(builder);
-
-        // INTERCEPTOR para /manifest.json do SDK
-        app.use((req: any, res: any, next: any) => {
-            if (req.path === '/manifest.json' || req.path === '/manifest') {
-                const manifestLogger = new Logger('MANIFEST-SDK');
-                manifestLogger.info('═══════════════════════════════════════', {});
-                manifestLogger.info(' STREMIO PEDIU MANIFEST (via SDK router)', {
-                    requestId: req._ultraDebugId,
-                    method: req.method,
-                    host: req.get('host'),
-                    origin: req.get('origin'),
-                    userAgent: req.get('user-agent')?.substring(0, 100),
-                    stremioAddonCollection: req.get('stremio-addon-collection'),
-                    protocol: req.protocol,
-                    fullUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`,
-                });
-                manifestLogger.info(' Respondendo com manifest:', {
-                    id: manifest.id,
-                    version: manifest.version,
-                    name: manifest.name,
-                    configurationRequired: manifest.behaviorHints?.configurationRequired,
-                    configurable: manifest.behaviorHints?.configurable,
-                    resources: manifest.resources,
-                    types: manifest.types,
-                });
-                manifestLogger.info('═══════════════════════════════════════', {});
-            }
-            next();
-        });
 
         app.use(stremioRouter);
 

@@ -256,8 +256,15 @@ export class AutoMagnetService {
         return result;
       }
 
-      const titleForValidation = originalTitle?.trim() ? originalTitle : torrentTitle;
-      const titleForLanguage = originalTitle?.trim() ? torrentTitle : undefined;
+      // Para séries, usamos o título completo do torrent (contém temporada/episódio)
+      // Para filmes, priorizamos o título original (mais limpo)
+      const titleForValidation = type === 'series'
+        ? (torrentTitle?.trim() || originalTitle?.trim() || '')
+        : (originalTitle?.trim() || torrentTitle?.trim() || '');
+
+      const titleForLanguage = type === 'series'
+        ? (originalTitle?.trim() || undefined)
+        : (torrentTitle?.trim() || undefined);
 
       const titleMatchResult = await this.validateTitleWithCache(
         titleForValidation,
@@ -278,6 +285,7 @@ export class AutoMagnetService {
         return result;
       }
 
+      // Título que será salvo no banco
       const effectiveTitle = titleForValidation;
 
       let torrentSeason = imdbSeason;

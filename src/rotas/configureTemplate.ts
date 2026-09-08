@@ -2,10 +2,12 @@ import { Logger } from '../utils/logger.js';
 
 const logger = new Logger('ConfigureTemplate');
 
-export const configureTemplate = (manifest: any) => {
+export const configureTemplate = (manifest: any, apiKey?: string) => {
     const background = manifest.background || 'https://dl.strem.io/addon-background.jpg';
     const logo = manifest.logo || 'https://dl.strem.io/addon-logo.png';
-    
+    const configKey = manifest.config?.[0]?.key || 'apiKey';
+    const initialApiKey = apiKey?.trim() || '';
+
     return `<!DOCTYPE html>
     <html style="background-image: url(${background});">
     <head>
@@ -72,6 +74,24 @@ export const configureTemplate = (manifest: any) => {
             
             .warning-text strong { color: #fce729ff; }
 
+            /* Botões lado a lado */
+            .install-buttons {
+                display: none; /* Inicialmente oculto */
+                gap: 1.5vh;
+                justify-content: center;
+                width: 100%;
+            }
+            .install-buttons.visible {
+                display: flex;
+            }
+            .install-buttons a {
+                flex: 1;
+                text-decoration: none;
+            }
+            .install-buttons button {
+                width: 100%;
+            }
+
             /* Mobile */
             @media (max-width: 768px) {
                 body { padding: 2.5vh 2vh; }
@@ -80,7 +100,7 @@ export const configureTemplate = (manifest: any) => {
                 h2, h3 { font-size: 2.2vh; }
                 p, ul, .info-text { font-size: 1.8vh; }
                 .warning-text { font-size: 1.7vh; }
-                button { width: 100%; padding: 1.6vh; font-size: 2.2vh; }
+                button { width: 100%; padding: 1.6vh; font-size: 2vh; }
                 input[type="text"] { padding: 1.3vh; font-size: 2vh; }
                 .logo { height: 11vh; width: 11vh; }
                 .separator { margin-bottom: 2.5vh; }
@@ -89,7 +109,7 @@ export const configureTemplate = (manifest: any) => {
             @media (max-width: 375px) {
                 h1 { font-size: 3.6vh; }
                 h2, h3 { font-size: 2vh; }
-                button { font-size: 2vh; padding: 1.3vh; }
+                button { font-size: 1.8vh; padding: 1.3vh; }
                 .logo { height: 9vh; width: 9vh; }
             }
         </style>
@@ -127,12 +147,13 @@ export const configureTemplate = (manifest: any) => {
                     </div>
                     
                     <input type="text" 
-                           id="${manifest.config[0].key}" 
-                           name="${manifest.config[0].key}" 
+                           id="${configKey}" 
+                           name="${configKey}" 
                            class="full-width" 
                            required 
                            placeholder="Cole sua chave de API do Torbox"
-                           autocomplete="off" />
+                           autocomplete="off"
+                           value="${initialApiKey}" />
                     
                     <div class="info-text">
                         Documentação completa: 
@@ -150,11 +171,14 @@ export const configureTemplate = (manifest: any) => {
             
             <div class="separator"></div>
             
-            <a id="installLink" class="install-link" href="#">
-                <button name="Install">INSTALL</button>
-            </a>
-            
-            <div class="separator"></div>
+            <div id="installButtons" class="install-buttons">
+                <a id="installStremioLink" class="install-link" href="#">
+                    <button name="Install">STREMIO</button>
+                </a>
+                <a id="installNuvioLink" class="install-link" href="#">
+                    <button name="InstallNuvio">NUVIO</button>
+                </a>
+            </div>
             
             <div id="directUrlSection" class="form-element" style="display: none;">
                 <div class="label-to-top" style="margin-bottom: 0.5vh;">
@@ -167,44 +191,60 @@ export const configureTemplate = (manifest: any) => {
         </div>
         
         <script>
-            
-            const apiKeyInput = document.getElementById('${manifest.config[0].key}');
-            const installLink = document.getElementById('installLink');
-            const directUrl = document.getElementById('directUrl');
-            const directUrlSection = document.getElementById('directUrlSection');
-            const mainForm = document.getElementById('mainForm');
-            
-            function updateLink() {
-                const apiKey = apiKeyInput.value.trim();
-                const baseUrl = window.location.protocol + '//' + window.location.host;
+            (function() {
+                const apiKeyInput = document.getElementById('${configKey}');
+                const installButtons = document.getElementById('installButtons');
+                const installStremioLink = document.getElementById('installStremioLink');
+                const installNuvioLink = document.getElementById('installNuvioLink');
+                const directUrl = document.getElementById('directUrl');
+                const directUrlSection = document.getElementById('directUrlSection');
+                const mainForm = document.getElementById('mainForm');
+
+                function getBaseUrl() {
+                    return window.location.protocol + '//' + window.location.host;
+                }
+
+                function updateLinks() {
+                    const apiKey = apiKeyInput.value.trim();
+                    const baseUrl = getBaseUrl();
+
+                    if (apiKey) {
+                        const manifestUrl = baseUrl + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
+                        directUrl.value = manifestUrl;
+                        directUrlSection.style.display = 'block';
+                        installButtons.classList.add('visible');
+
+                        // Stremio: usa protocolo stremio://
+                        installStremioLink.href = 'stremio://' + window.location.host + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
+
+                        // Nuvio: usa deep link nuvio://
+                        installNuvioLink.href = 'nuvio://' + window.location.host + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
+                    } else {
+                        installButtons.classList.remove('visible');
+                        directUrl.value = '';
+                        directUrlSection.style.display = 'none';
+                        installStremioLink.href = '#';
+                        installNuvioLink.href = '#';
+                    }
+                }
+
+                apiKeyInput.oninput = updateLinks;
+                apiKeyInput.onpaste = () => setTimeout(updateLinks, 100);
+                mainForm.onsubmit = (e) => e.preventDefault();
                 
-                if (apiKey) {
-                    installLink.href = 'stremio://' + window.location.hostname + ':' + window.location.port + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
-                    directUrl.value = baseUrl + '/torbox=' + encodeURIComponent(apiKey) + '/manifest.json';
-                    directUrlSection.style.display = 'block';
-                } else {
-                    installLink.href = '#';
-                    directUrl.value = '';
-                    directUrlSection.style.display = 'none';
-                }
-            }
-            
-            apiKeyInput.oninput = updateLink;
-            apiKeyInput.onpaste = () => setTimeout(updateLink, 100);
-            mainForm.onsubmit = (e) => e.preventDefault();
-            
-            installLink.onclick = () => {
-                if (!mainForm.reportValidity()) {
-                    alert('Por favor, insira sua API Key do Torbox.');
-                    return false;
-                }
-                return true;
-            };
-            
-            updateLink();
+                installStremioLink.onclick = () => {
+                    if (!mainForm.reportValidity()) {
+                        alert('Por favor, insira sua API Key do Torbox.');
+                        return false;
+                    }
+                    return true;
+                };
+
+                updateLinks();
+            })();
         </script>
     </body>
     </html>`;
 };
 
-logger.info('ConfigureTemplate v2.3.0 carregado - Sistema Torrentio-style (torbox=API_KEY)');
+logger.info('ConfigureTemplate v2.7.0 carregado - Suporte a Stremio e Nuvio com deep link');

@@ -536,11 +536,17 @@ export class WordPressScraper {
     const episode = this.extractEpisodeFromText(parentText);
     const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, dnQuality || linkQuality);
 
-    const individualOriginalTitle = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle;
-    const title = canonicalName || postTitle;
+    // Extrai um título limpo do post (remove ruído)
+    const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
+
+    // Usa o título original do contexto ou do post limpo
+    const originalTitleFinal = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle || cleanTitleFromPost;
+
+    // O título de exibição pode ser o canonicalName (dn), mas o originalTitle deve ser limpo
+    const displayTitle = cleanTitleFromPost || canonicalName || postTitle;
 
     return {
-      title: this.cleanTitle(title),
+      title: this.cleanTitle(displayTitle),
       htmlTitle: cleanedHtmlTitle || undefined,
       magnet,
       seeders: this.estimateSeeders(provider),
@@ -556,11 +562,20 @@ export class WordPressScraper {
       episode,
       lastUpdated: new Date(),
       confidence: 0.85,
-      originalTitle: individualOriginalTitle,
+      originalTitle: originalTitleFinal ?? undefined,
       year,
       years: years ?? (year ? [year] : undefined),
       canonicalName: canonicalName ?? undefined,
     };
+  }
+
+  private extractTitleFromPostTitle(postTitle: string): string | null {
+    if (!postTitle) return null;
+    return postTitle
+      .replace(/\bTorrent\b.*$/i, '')
+      .replace(/\s*[–|-]\s*.*$/, '')
+      .replace(/\b(720p|1080p|2160p|4K|BluRay|WEB-DL|DUAL|Dublado|Legendado)\b.*$/i, '')
+      .trim() || null;
   }
 
   public extractOriginalTitleFromContext(contextText: string): string | null {

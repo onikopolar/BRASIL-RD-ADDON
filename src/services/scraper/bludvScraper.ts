@@ -300,6 +300,9 @@ export class BludvScraper {
       return qualities.length > 0 ? qualities[0] : null;
     };
 
+    // Extrai título limpo do post para validação
+    const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
+
     for (const { magnet, link, canonicalName } of analyzedMagnets) {
       const dnQuality = canonicalName ? getQualityOrNull(canonicalName) : null;
       const linkQuality = getQualityOrNull(link.linkText);
@@ -314,7 +317,6 @@ export class BludvScraper {
         }
       }
 
-      // EXTRAI EPISÓDIO
       let episode: number | undefined;
       let episodeRangeText: string | undefined;
 
@@ -341,20 +343,11 @@ export class BludvScraper {
         }
       }
 
-      let title: string;
-      if (canonicalName) {
-        title = canonicalName;
-      } else {
-        const cleanBase = postTitle
-          .replace(/\s*[|]\s*(?:\d{3,4}p|4K|FULLHD|HD)\s*/gi, '')
-          .replace(/\s{2,}/g, ' ')
-          .trim();
-        if (episode) {
-          title = `${cleanBase} - Episódio ${episode} (${quality})`;
-        } else {
-          title = `${cleanBase} (${quality})`;
-        }
-      }
+      // Título para validação: prefere metadata.originalTitle, depois título limpo do post
+      const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
+
+      // Título de exibição: pode manter canonicalName, mas título principal deve ser limpo
+      const displayTitle = originalTitleFinal || canonicalName || postTitle;
 
       const size = metadata.size || 'Desconhecido';
       const language = metadata.language || 'Desconhecido';
@@ -364,7 +357,7 @@ export class BludvScraper {
         : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, dnQuality || linkQuality || contextQuality);
 
       results.push({
-        title: this.cleanTitle(title),
+        title: this.cleanTitle(displayTitle),
         htmlTitle: cleanedHtmlTitle || undefined,
         magnet,
         seeders: this.estimateSeeders(),
@@ -380,7 +373,7 @@ export class BludvScraper {
         episode,
         lastUpdated: new Date(),
         confidence: 0.9,
-        originalTitle: metadata.originalTitle,
+        originalTitle: originalTitleFinal ?? undefined,
         year: metadata.year,
         years: metadata.years,
         canonicalName,
@@ -389,6 +382,15 @@ export class BludvScraper {
     }
 
     return results;
+  }
+
+  private extractTitleFromPostTitle(postTitle: string): string | null {
+    if (!postTitle) return null;
+    return postTitle
+      .replace(/\bTorrent\b.*$/i, '')
+      .replace(/\s*[–|-]\s*.*$/, '')
+      .replace(/\b(720p|1080p|2160p|4K|BluRay|WEB-DL|DUAL|Dublado|Legendado)\b.*$/i, '')
+      .trim() || null;
   }
 
   extractPostMetadata($: any, _content: string): {

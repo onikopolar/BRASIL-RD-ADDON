@@ -14,20 +14,13 @@ export class EpisodeMatcher {
     return EpisodeMatcher.instance;
   }
 
-  // ─── CONSTANTES ───
-
-  /** Extensões de arquivo de vídeo conhecidas */
   private readonly extensoesVideo: ReadonlySet<string> = new Set([
     '.mkv', '.mp4', '.avi', '.webm', '.mov', '.wmv', '.flv', '.ts', '.m4v',
   ]);
 
-  // ═══════════════════════════════════════════
-  // PERGUNTA BINÁRIA (V2 — genérica)
-  // ═══════════════════════════════════════════
-
   /**
-   * Pergunta binária: este arquivo (path completo do Torbox) pertence
-   * ao episódio alvo?
+   * Verifica se o caminho completo do arquivo pertence ao episódio alvo.
+   * Toda a lógica de parsing fica em `extrairRangeEpisodios`.
    */
   arquivoPertenceAoEpisodio(
     caminhoCompleto: string,
@@ -36,27 +29,18 @@ export class EpisodeMatcher {
   ): boolean {
     if (!this.ehArquivoDeVideo(caminhoCompleto)) return false;
 
-    const normalizado = normalizarTexto(caminhoCompleto);
-
-    const range = extrairRangeEpisodios(normalizado);
-    if (range && range.season > 0 && range.episodeStart > 0) {
-      return range.season === temporadaAlvo && range.episodeStart === episodioAlvo;
-    }
-
-    const sinal = normalizado;
-    const numeros = sinal.match(/\d+/g);
-    if (numeros && numeros.length >= 2) {
-      const s = parseInt(numeros[0]);
-      const e = parseInt(numeros[1]);
-      return s === temporadaAlvo && e === episodioAlvo;
-    }
-
-    return false;
+    const range = extrairRangeEpisodios(caminhoCompleto);
+    return (
+      range !== null &&
+      range.season === temporadaAlvo &&
+      range.episodeStart === episodioAlvo &&
+      range.episodeEnd === episodioAlvo
+    );
   }
 
   /**
-   * Seleciona arquivo de episódio usando títulos TMDB (PT/EN) quando disponíveis.
-   * Caso os títulos não sejam fornecidos ou não casem, usa a extração por padrões.
+   * Versão que tenta usar títulos de episódios (TMDB) quando disponíveis.
+   * Se não casar por título, cai no fallback numérico/padrões com caminho completo.
    */
   arquivoPertenceAoEpisodioComTitulos(
     caminhoCompleto: string,
@@ -77,90 +61,68 @@ export class EpisodeMatcher {
         const nomesNormalizados = [epData.namePt, epData.nameEn]
           .filter((n): n is string => !!n)
           .map(n => normalizarTexto(n));
+
         if (nomesNormalizados.some(nome => nomeArquivo.includes(nome) || nome.includes(nomeArquivo))) {
           return true;
         }
-        // Se temos títulos e não bateu, usa fallback numérico apenas com o nome do arquivo
-        const nomeArquivoSemPasta = this.extrairNomeArquivo(caminhoCompleto);
-        return this.arquivoPertenceAoEpisodio(nomeArquivoSemPasta, temporadaAlvo, episodioAlvo);
+
+        // Fallback com o caminho completo (preserva temporada da pasta)
+        return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
       }
     }
 
-    // fallback para a lógica antiga (quando não há títulos de episódios)
     return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
   }
 
-  // ─── MÉTODOS PRIVADOS ───
-
-  private ehArquivoDeVideo(caminho: string): boolean {
-    const lower = caminho.toLowerCase();
-    for (const ext of this.extensoesVideo) {
-      if (lower.endsWith(ext)) return true;
-    }
-    return false;
-  }
-
-  // ═══════════════════════════════════════════
-  // EXTRAÇÃO LEGADA (mantida por compatibilidade)
-  // ═══════════════════════════════════════════
-
+  /**
+   * Extrai informações de episódio de um nome de arquivo ou caminho.
+   * Mantido por compatibilidade, mas agora usa apenas `extrairRangeEpisodios`.
+   */
   extractEpisodeInfo(filename: string): EpisodeInfo {
-    const nomeArquivo = this.extrairNomeArquivo(filename);
-    const normalizado = normalizarTexto(nomeArquivo);
+    const range = extrairRangeEpisodios(filename);
 
-    const range = extrairRangeEpisodios(normalizado);
     if (range && range.season > 0 && range.episodeStart > 0) {
       return {
         season: range.season,
         episode: range.episodeStart,
-        rawMatch: `S${String(range.season).padStart(2, '0')}E${String(range.episodeStart).padStart(2, '0')}`
+        rawMatch: `S${String(range.season).padStart(2, '0')}E${String(range.episodeStart).padStart(2, '0')}`,
       };
     }
 
-    const numeros = normalizado.match(/\d+/g);
-    if (numeros && numeros.length >= 2) {
-      return {
-        season: parseInt(numeros[0]),
-        episode: parseInt(numeros[1]),
-        rawMatch: numeros.slice(0, 2).join(' ')
-      };
-    }
-
-    const fallbackMatch = nomeArquivo.match(/\d+/);
+    // Fallback simples: primeiro número encontrado como episódio, temporada 1
+    const fallbackMatch = filename.match(/\d+/);
     const fallbackNumber = fallbackMatch ? parseInt(fallbackMatch[0]) : 0;
-    return { season: 1, episode: fallbackNumber, rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown' };
+    return {
+      season: 1,
+      episode: fallbackNumber,
+      rawMatch: fallbackMatch ? fallbackMatch[0] : 'unknown',
+    };
   }
 
+  /**
+   * Extrai apenas a temporada de um título.
+   */
   extractSeasonFromTitle(title: string): number | null {
     const range = extrairRangeEpisodios(title);
-    if (range && range.season > 0) {
-      return range.season;
-    }
-    return null;
+    return range && range.season > 0 ? range.season : null;
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // INDICADORES E VALIDAÇÃO (usados por outros módulos)
-  // ═══════════════════════════════════════════════════════════════
+  // ─── INDICADORES RÁPIDOS (agora usam `extrairRangeEpisodios` para evitar regex duplicados) ───
 
   temIndicadorTemporada(titulo: string): boolean {
-    const lower = titulo.toLowerCase();
-    const padroes = [
-      /\bs\d{1,3}\b/,
-      /\bseason\s*\d{1,3}\b/,
-      /\bt\d{1,3}\b/,
-      /\btemporada\s*\d{1,3}\b/,
-      /\b\d{1,2}ª?\s*temporada\b/,
-      /\b\d{1,2}x\d{1,3}\b/,
-      /\btodas as temporadas\b/,
-      /\btemporadas?\s*completas?\b/,
-    ];
-    return padroes.some(p => p.test(lower));
+    const range = extrairRangeEpisodios(titulo);
+    if (range && range.season > 0) return true;
+
+    const lower = normalizarTexto(titulo);
+    return /temporada|season|\btemp\b|\btodas as temporadas\b/i.test(lower);
   }
 
   temIndicadorEpisodio(titulo: string): boolean {
-    const lower = titulo.toLowerCase();
-    return /s\d+e\d+/i.test(lower) || /episode\s+\d+/i.test(lower) || /\be\d{1,3}\b/i.test(lower);
+    const range = extrairRangeEpisodios(titulo);
+    if (range && range.episodeStart > 0) return true;
+
+    const lower = normalizarTexto(titulo);
+    return /epis[oó]dio|\be\d{1,3}\b|episode/i.test(lower);
   }
 
   ehPackTemporadaCompleta(titulo: string): boolean {
@@ -207,7 +169,15 @@ export class EpisodeMatcher {
     return { compativel: false, motivo: `Episódio diferente: Torrent E${episodioTorrent} vs E${episodioAlvo}` };
   }
 
-  // ─── MÉTODO AUXILIAR ───
+  // ─── AUXILIARES ───
+
+  private ehArquivoDeVideo(caminho: string): boolean {
+    const lower = caminho.toLowerCase();
+    for (const ext of this.extensoesVideo) {
+      if (lower.endsWith(ext)) return true;
+    }
+    return false;
+  }
 
   private extrairNomeArquivo(path: string): string {
     return path.includes('/')

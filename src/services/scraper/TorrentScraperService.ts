@@ -1,3 +1,5 @@
+import { existsSync, readFileSync } from 'fs';
+import path from 'path';
 import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
@@ -29,6 +31,19 @@ interface CommonTorrentParams {
   confidence?: number;
   relevanceScore?: number;
   sizeInBytes?: number;
+}
+
+function isScraperAtivo(nome: string): boolean {
+  const arquivo = path.join(process.cwd(), 'scrapers-state.json');
+  if (!existsSync(arquivo)) return true;
+
+  try {
+    const estado = JSON.parse(readFileSync(arquivo, 'utf8'));
+    const chave = nome.toLowerCase();
+    return estado[chave] !== false;
+  } catch {
+    return true;
+  }
 }
 
 export class TorrentScraperService {
@@ -68,10 +83,15 @@ export class TorrentScraperService {
         total: searchQueries.length,
       });
 
+      const bludvAtivo = isScraperAtivo('bludv');
+      const wordpressAtivo = isScraperAtivo('wordpress');
+      const starckAtivo = isScraperAtivo('starck');
+      const hdrAtivo = isScraperAtivo('hdr');
+
       const [wpResults, starckResults, hdrResults] = await Promise.all([
         Promise.all([
-          this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
-          this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []),
+          bludvAtivo ? this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []) : Promise.resolve([]),
+          wordpressAtivo ? this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId).catch(() => []) : Promise.resolve([]),
         ]).then(([bludvResultados, wpResultados]) => {
           const seen = new Set<string>();
           const combined = [...bludvResultados, ...wpResultados];
@@ -92,38 +112,42 @@ export class TorrentScraperService {
           });
         }).catch(() => []),
 
-        searchStarck(query, type, targetSeason, searchQueries)
-          .then(results => {
-            const seen = new Set<string>();
-            logger.debug(`📊 Starck: ${results.length} resultados brutos`);
-            return results
-              .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
-              .map(r => {
-                logger.debug('STARCK_RESULT_BRUTO', {
-                  magnetInicio: r.magnet?.substring(0, 80),
-                  canonicalName: r.canonicalName,
-                  episode: r.episode,
-                  season: r.season,
-                  qualityHint: r.qualityHint,
-                  originalTitle: r.originalTitle,
-                  year: r.year,
-                });
-                return this.mapStarckResult(r, type);
+        starckAtivo
+          ? searchStarck(query, type, targetSeason, searchQueries)
+              .then(results => {
+                const seen = new Set<string>();
+                logger.debug(`📊 Starck: ${results.length} resultados brutos`);
+                return results
+                  .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
+                  .map(r => {
+                    logger.debug('STARCK_RESULT_BRUTO', {
+                      magnetInicio: r.magnet?.substring(0, 80),
+                      canonicalName: r.canonicalName,
+                      episode: r.episode,
+                      season: r.season,
+                      qualityHint: r.qualityHint,
+                      originalTitle: r.originalTitle,
+                      year: r.year,
+                    });
+                    return this.mapStarckResult(r, type);
+                  })
+                  .filter((r): r is TorrentResult => r !== null);
               })
-              .filter((r): r is TorrentResult => r !== null);
-          })
-          .catch(() => []),
+              .catch(() => [])
+          : [],
 
-        searchHdr(query, type, targetSeason, searchQueries, targetYear, imdbId)
-          .then(results => {
-            const seen = new Set<string>();
-            logger.debug(`📊 HDR: ${results.length} resultados brutos`);
-            return results
-              .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
-              .map(r => this.mapHdrResult(r, type))
-              .filter((r): r is TorrentResult => r !== null);
-          })
-          .catch(() => []),
+        hdrAtivo
+          ? searchHdr(query, type, targetSeason, searchQueries, targetYear, imdbId)
+              .then(results => {
+                const seen = new Set<string>();
+                logger.debug(`📊 HDR: ${results.length} resultados brutos`);
+                return results
+                  .filter(t => { if (seen.has(t.infoHash)) return false; seen.add(t.infoHash); return true; })
+                  .map(r => this.mapHdrResult(r, type))
+                  .filter((r): r is TorrentResult => r !== null);
+              })
+              .catch(() => [])
+          : [],
       ]);
 
       const allResults = [...wpResults, ...starckResults, ...hdrResults];
@@ -170,7 +194,6 @@ export class TorrentScraperService {
   ): string[] {
     const queries: string[] = [];
 
-    // ============ SÉRIES ============
     if (type === 'series' && targetSeason !== undefined && tmdbData?.allTitles?.length > 0) {
       const titulosUnicos: string[] = [];
 
@@ -206,11 +229,9 @@ export class TorrentScraperService {
       return queries;
     }
 
-    // ============ FILMES ============
     if (tmdbData?.originalTitle) {
       const yearToUse = targetYear || tmdbData.year;
 
-      // Prioriza original e português, únicos, máximo 2
       const titulosBase = [
         tmdbData.originalTitle,
         tmdbData.portugueseTitle,
@@ -223,12 +244,10 @@ export class TorrentScraperService {
         .filter((t, i, arr) => arr.findIndex(x => x.toLowerCase() === t.toLowerCase()) === i)
         .slice(0, 2);
 
-      // 1º: sem ano (original + português)
       for (const titulo of titulosUnicos) {
         queries.push(titulo);
       }
 
-      // 2º: com ano (original + português) — fallback
       for (const titulo of titulosUnicos) {
         if (yearToUse) {
           queries.push(`${titulo} ${yearToUse}`);
@@ -236,7 +255,6 @@ export class TorrentScraperService {
       }
     }
 
-    // Fallback final
     if (queries.length === 0) {
       queries.push(query);
       if (targetYear) {
@@ -244,7 +262,6 @@ export class TorrentScraperService {
       }
     }
 
-    // Remove duplicatas e vazias
     return [...new Set(queries.filter(q => q && q.trim().length > 3))];
   }
 

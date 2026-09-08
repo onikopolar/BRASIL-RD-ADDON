@@ -2,7 +2,6 @@
 // Palavras técnicas otimizadas para filtragem de títulos de torrents
 // Exporta constantes para uso no SimilarityCalculator
 
-// Palavras técnicas completas para remoção durante normalização
 export const TECHNICAL_ACRONYMS = [
   'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
   '5.1', '7.1', '2.0', '5.1ch', '7.1ch', '2ch', '1ch', 'hd', 'uhd', 'fhd', 'qhd', 'whd',
@@ -17,33 +16,25 @@ export const TECHNICAL_ACRONYMS = [
   'iso', 'm2ts', 'mkv', 'mp4', 'avi', 'mov', 'wmv', 'flv',
   'gb', 'mb', 'kb', 'tb', 'pb', 'eb', 'zb', 'yb',
   'fps', 'hz', 'khz', 'mhz', 'ghz', 'bps', 'kbps', 'mbps', 'gbps',
-  // Formatos 3D e variantes
   'hsbs', 'sbs', 'half-sbs', 'h-sbs', 'hou', 'half-ou', '3d',
   'rgb', 'yuv', 'ycbcr', 'hsv', 'hsl', 'cmyk',
   'ntsc', 'pal', 'secam', 'atsc', 'dvb', 'isdb',
   'ip', 'tcp', 'udp', 'http', 'https', 'ftp', 'sftp',
   'url', 'uri', 'urn', 'uuid', 'guid', 'hash', 'md5', 'sha1', 'sha256',
-  // Qualidades e formatos de torrent
   '1080p', '720p', '2160p', '480p', '4k', '8k', 'fullhd', 'full-hd',
   'bluray', 'blu-ray', 'bdrip', 'brrip', 'webrip', 'web-dl', 'webdl',
   'hdtv', 'dvdrip', 'dvd', 'bd', 'remux', 'brrip', 'web',
-  // Formatos de vídeo / encoding
   'matte', 'imax',
-  // Idioma
   'dublado', 'dublada', 'dual', 'legendado', 'legendada', 'nacional',
   'portugues', 'português', 'pt-br', 'ptbr', 'brazilian',
-  // Sufixos de arquivo / sites / tags comuns de torrent
   'www', 'com', 'org', 'net', 'tv', 'br', 'bludv', 'comando', 'comandotorrents',
   'torrents', 'filmes', 'hd', 'full', 'sf', 'dl', 'rip', 'xvid', 'divx',
   'mp3', 'aac', 'ac3', 'dts', 'eac3', 'ddp', 'dd', 'dolby',
   'h264', 'h265', 'x264', 'x265', 'avc', 'hevc', 'vp9', 'av1',
-  // Resoluções numéricas "cruas"
   '480', '720', '1080', '2160',
-  // Palavras de ação comuns em posts que não são títulos
   'download', 'baixar', 'assistir', 'online',
 ];
 
-// Lista específica de grupos de release internacionais conhecidos
 export const INTERNATIONAL_RELEASE_GROUPS = [
   'skgtv', 'rartv', 'ettv', 'eztv', 'vtv', 'yts', 'yify', 'rarbg',
   'turbo', 'cakes', 'galaxyrg', 'ctrlhd', 'framestor', 'tayto', 'ntb',
@@ -57,7 +48,6 @@ export const INTERNATIONAL_RELEASE_GROUPS = [
   'ben', 'benth',
 ];
 
-// Lista específica de trackers internacionais conhecidos
 export const INTERNATIONAL_TRACKERS = [
   '1337x', 'torrentday', 'iptorrents', 'filelist', 'torrentleech',
   'demonoid', 'kickasstorrents', 'kat', 'thepiratebay', 'tpb',
@@ -65,7 +55,6 @@ export const INTERNATIONAL_TRACKERS = [
   'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub', 'rartv', 'bone', 'BONE'
 ];
 
-// Lista específica de grupos de release brasileiros conhecidos
 export const BRAZILIAN_RELEASE_GROUPS = [
   'bludv', 'blu-dv', 'mkvplus', 'mkv+', 'comando', 'comando1', 'cmdtv', 'cmdb',
   'dhg', 'divulgahd', 'legiahd', 'baixar', 'download', 'brasil',
@@ -73,12 +62,10 @@ export const BRAZILIAN_RELEASE_GROUPS = [
   'webdlbr', 'torrentbr', 'starck', 'starckfilmes',
   'lapumia', 'comoeubaixo', 'bludv', 'BLUDV', 'WWW.BLUDV.COM',
   'luanharper', 'SiGLA', 'SF', 'WEB-DL', 'web-dl', 'AZTORRENTS',
-  // Coleções / packs
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia', 'coletanea',
   'franquia', 'saga', 'duologia',
 ];
 
-// Cache interno: junta todas as palavras "não-título" (técnicas + grupos + trackers)
 const _ALL_NON_TITLE_WORDS = new Set<string>([
   ...TECHNICAL_ACRONYMS,
   ...BRAZILIAN_RELEASE_GROUPS,
@@ -87,8 +74,7 @@ const _ALL_NON_TITLE_WORDS = new Set<string>([
 ].map(w => w.toLowerCase()));
 
 export function isTechnicalWord(word: string): boolean {
-  const lower = word.toLowerCase();
-  return _ALL_NON_TITLE_WORDS.has(lower) || (typeof TECHNICAL_STRIP_WORDS !== 'undefined' && TECHNICAL_STRIP_WORDS.has(lower));
+  return _ALL_NON_TITLE_WORDS.has(word.toLowerCase());
 }
 
 export function normalizarTexto(texto: string): string {
@@ -96,7 +82,6 @@ export function normalizarTexto(texto: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    // Decodifica entidades HTML comuns e numericas
     .replace(/&#0*38;/g, '&')
     .replace(/&#x26;/gi, '&')
     .replace(/&amp;/gi, '&')
@@ -105,38 +90,31 @@ export function normalizarTexto(texto: string): string {
     .replace(/&quot;/gi, '"')
     .replace(/&#0*39;/g, "'")
     .replace(/&apos;/gi, "'")
-    .replace(/&#0*8211;|&ndash;/gi, '-')  // en dash
-    .replace(/&#0*8212;|&mdash;/gi, '-')  // em dash
-    .replace(/&#0*8220;|&ldquo;/gi, '"')  // aspas duplas esquerda
-    .replace(/&#0*8221;|&rdquo;/gi, '"')  // aspas duplas direita
-    .replace(/&#0*8216;|&lsquo;/gi, "'")  // aspas simples esquerda
-    .replace(/&#0*8217;|&rsquo;/gi, "'")  // aspas simples direita
-    .replace(/&#0*160;|&nbsp;/gi, ' ')    // espaço não separável
-    // Substitui underscores por espaço (para não grudar palavras)
+    .replace(/&#0*8211;|&ndash;/gi, '-')
+    .replace(/&#0*8212;|&mdash;/gi, '-')
+    .replace(/&#0*8220;|&ldquo;/gi, '"')
+    .replace(/&#0*8221;|&rdquo;/gi, '"')
+    .replace(/&#0*8216;|&lsquo;/gi, "'")
+    .replace(/&#0*8217;|&rsquo;/gi, "'")
+    .replace(/&#0*160;|&nbsp;/gi, ' ')
     .replace(/_/g, ' ')
-    // Remove caracteres não alfanuméricos (mantém letras, números e espaços)
     .replace(/[^\w\s]/g, ' ')
-    // Colapsa espaços múltiplos e remove bordas
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 export function isInternationalReleaseGroup(word: string): boolean {
-  const lowerWord = word.toLowerCase();
-  return INTERNATIONAL_RELEASE_GROUPS.includes(lowerWord);
+  return INTERNATIONAL_RELEASE_GROUPS.includes(word.toLowerCase());
 }
 
 export function isInternationalTracker(word: string): boolean {
-  const lowerWord = word.toLowerCase();
-  return INTERNATIONAL_TRACKERS.includes(lowerWord);
+  return INTERNATIONAL_TRACKERS.includes(word.toLowerCase());
 }
 
 export function isBrazilianReleaseGroup(word: string): boolean {
-  const lowerWord = word.toLowerCase();
-  return BRAZILIAN_RELEASE_GROUPS.includes(lowerWord);
+  return BRAZILIAN_RELEASE_GROUPS.includes(word.toLowerCase());
 }
 
-// ─── INDICADORES DE IDIOMA PARA TORRENTS ───
 export const INDICADORES_BRASIL_TORRENTS = [
   'dublado', 'dublada', 'dublagem',
   'dual', 'dual audio',
@@ -157,8 +135,6 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'g4ris', 'rartv', 'ntb', 'bone', 'BONE', 'ION10', '10bit', 'CM', 'RDNYB', 'DCPRiP',
   'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
-
-// ─── FUNCOES ───
 
 const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
@@ -320,8 +296,6 @@ function _isAudioChannelInOriginal(originalTitle: string, num: number): boolean 
   return false;
 }
 
-//  EXTRAIR RANGE DE EPISÓDIOS — para filtro no banco de dados
-
 export interface EpisodeRange {
   season: number;
   episodeStart: number;
@@ -334,7 +308,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .trim();
 
-  // ═══ Padrão 1: SxxExx (S02E04, S02E01-02-03, S02E01-10) ═══
+  // ═══ Padrão 1: SxxExx ═══
   const sxxExx = t.match(/s(\d{1,2})\s*e(\d{1,3})/i);
   if (sxxExx) {
     const season = parseInt(sxxExx[1]);
@@ -371,7 +345,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     return { season, episodeStart: unique[0], episodeEnd: unique[unique.length - 1] };
   }
 
-  // ═══ Padrão 2: 2x04 (Season x Episode) ═══
+  // ═══ Padrão 1b: Sxx (yy) ═══
+  const sComEpParenteses = t.match(/\bs(\d{1,2})\s*\((\d{1,3})\)/i);
+  if (sComEpParenteses) {
+    const season = parseInt(sComEpParenteses[1]);
+    const episode = parseInt(sComEpParenteses[2]);
+    if (![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
+      return { season, episodeStart: episode, episodeEnd: episode };
+    }
+  }
+
+  // ═══ Padrão 2: 2x04 ═══
   const seasonXEp = t.match(/\b(\d{1,2})x(\d{1,3})\b/i);
   if (seasonXEp) {
     return {
@@ -381,7 +365,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 3: Season 2 Episode 4, Temporada 2 Episódio 4 ═══
+  // ═══ Padrão 3: Season 2 Episode 4 ═══
   const seasonEpText = t.match(/\b(?:season|temporada)\s*(\d{1,2})\s*(?:episode|epis[oó]dio|ep|e)\s*(\d{1,3})\b/i);
   if (seasonEpText) {
     return {
@@ -391,7 +375,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4a: "Episódio 06 ao 10", "Episódios 01 a 05", "Episódio 1 até 5" ═══
+  // ═══ Padrão 3b: Temporada/Season/Temp 2 (6) ═══
+  const tempComEpParenteses = t.match(/\b(?:temporada|season|temp)\s*(\d{1,2})\s*\((\d{1,3})\)/i);
+  if (tempComEpParenteses) {
+    const season = parseInt(tempComEpParenteses[1]);
+    const episode = parseInt(tempComEpParenteses[2]);
+    if (![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
+      return { season, episodeStart: episode, episodeEnd: episode };
+    }
+  }
+
+  // ═══ Padrão 4a ═══
   const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e)\s*(\d{1,3})\b/i);
   if (episodioRangeWords) {
     return {
@@ -401,7 +395,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4b: "Episódio 06-10", "Episódios 1-5" ═══
+  // ═══ Padrão 4b ═══
   const episodioRangeHyphen = t.match(/\bepis[oó]dios?\s*(\d{1,3})\s*-\s*(\d{1,3})\b/i);
   if (episodioRangeHyphen) {
     return {
@@ -411,7 +405,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4c: "01º E 02º EPISÓDIO" (range português com ordinal) ═══
+  // ═══ Padrão 4c ═══
   const ptRangeComOrdinal = t.match(/(\d{1,3})\s*º\s*e\s*(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptRangeComOrdinal) {
     return {
@@ -421,21 +415,21 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 5b: "01º EPISÓDIO" (episódio único com ordinal) ═══
+  // ═══ Padrão 5b ═══
   const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptSingleComOrdinal) {
     const ep = parseInt(ptSingleComOrdinal[1]);
     return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
-  // ═══ Padrão 5: "Episódio 02" (episódio único, sem temporada) ═══
+  // ═══ Padrão 5 ═══
   const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
   if (episodioOnly) {
     const ep = parseInt(episodioOnly[1]);
     return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
-  // ═══ Padrão 6: S6, S06, season6, 6x (temporada avulsa, sem episódio) ═══
+  // ═══ Padrão 6 ═══
   const sOnly = t.match(/^s(\d{1,2})$/i);
   if (sOnly) return { season: parseInt(sOnly[1]), episodeStart: 0, episodeEnd: 0 };
   const seasonOnly = t.match(/^season(\d{1,2})$/i);
@@ -443,17 +437,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const xOnly = t.match(/^(\d{1,2})x$/i);
   if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 7: "5° Temporada", "1ª Temporada", "2 Temporada" (pack sem episódio) ═══
+  // ═══ Padrão 7 ═══
   const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
   if (tempPack) {
     return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 8: "Season 5", "Temporada 5" (avulso, sem episódio) ═══
+  // ═══ Padrão 8 ═══
   const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
   if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 9: "Temporada Completa", "Complete Season" etc. ═══
+  // ═══ Padrão 9 ═══
   const fullSeasonPattern = /\b(\d{1,2})\s*[ªº°]?\s*temporada\s*completa\b/i;
   const fullSeasonMatch = t.match(fullSeasonPattern);
   if (fullSeasonMatch) {
@@ -472,11 +466,18 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     return { season: parseInt(seasonPackEnMatch[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
+  // ═══ Padrão 10: Temp01 ... (4) ═══
+  const tempDir = t.match(/\b(?:temp|temporada|season|s)\s*(\d{1,2})\b/i);
+  const epParen = t.match(/\((\d{1,3})\)/);
+  if (tempDir && epParen) {
+    const season = parseInt(tempDir[1]);
+    const episode = parseInt(epParen[1]);
+    if (season > 0 && episode > 0 && ![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
+      return { season, episodeStart: episode, episodeEnd: episode };
+    }
+  }
+
   return null;
 }
 
-// Log de inicialização enxuto (apenas para confirmar que o módulo foi carregado)
 console.log('[INFO] TechnicalWords carregado com extração de packs completos corrigida');
-
-
-export const TECHNICAL_STRIP_WORDS: Set<string> = new Set();
