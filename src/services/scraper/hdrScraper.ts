@@ -8,7 +8,7 @@ import { analisarMagnet } from '../../magnet/magnetHelper.js';
 
 const logger = new Logger('HdrScraper');
 
-const HDR_BASE = 'https://hdrtorrent.com';
+const HDR_BASE = 'https://hdrtorrents.net';
 
 export interface HdrTorrent {
   title: string;

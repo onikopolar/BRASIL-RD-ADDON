@@ -1,6 +1,5 @@
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import * as tunnel from 'tunnel';
 import dns from 'dns';
 import https from 'https';
 import tls from 'tls';
@@ -8,6 +7,7 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
+import { CacheService } from '../../debrid/CacheService.js';
 import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, normalizarTexto, isCollectionTitle } from '../../titulos/TechnicalWords.js';
 
 const LEGENDADO_REGEX = new RegExp(
@@ -16,6 +16,10 @@ const LEGENDADO_REGEX = new RegExp(
     .join('|') + ')\\b',
   'i'
 );
+
+// Cabeçalho de seção precisa do particípio ("legendado"/"legendada"), não do substantivo
+// ("legenda"). O substantivo aparece em rótulos tipo "Legenda: PT-BR" e links pro opensubtitles.
+const LEGENDADO_CABECALHO_REGEX = /\blegendad[ao]s?\b/i;
 
 const logger = new Logger('WordPressScraper');
 
@@ -57,17 +61,6 @@ export interface WordPressSite {
   baseUrl: string;
   priority: number;
   timeout: number;
-  requiresProxy?: boolean;
-}
-
-function createProxyAgent(proxyUrl: string): any {
-  const url = new URL(proxyUrl);
-  const host = url.hostname;
-  const port = parseInt(url.port) || (url.protocol === 'https:' ? 443 : 8118);
-  if (url.protocol === 'https:') {
-    return tunnel.httpsOverHttps({ proxy: { host, port } });
-  }
-  return tunnel.httpsOverHttp({ proxy: { host, port } });
 }
 
 export const WP_SITES: WordPressSite[] = [
@@ -90,14 +83,35 @@ export const jsonAxiosConfig = {
   },
 };
 
+export type MagnetCacheEntry = { nome: string | null; infoHash: string };
+export type InfoBlock = {
+  originalTitle?: string;
+  translatedTitle?: string;
+  year?: number;
+  years?: number[];
+  size?: string;
+};
+export type SectionBoundaries = { dualIndex: number | null; legendadoIndex: number | null };
+export type IdiomaFlags = {
+  temNacional: boolean;
+  temDual: boolean;
+  temAudio: boolean;
+  temDublado: boolean;
+  temLegendado: boolean;
+  temLegendaSubstantivo: boolean;
+};
+export type TamanhoNumerico = { valor: number; unidade: 'GB' | 'MB' | 'KB' };
+
 export class WordPressScraper {
   public readonly qualityDetector: QualityDetector;
-  public readonly magnetCache = new Map<string, { nome: string | null; infoHash: string }>();
+  public readonly magnetCache: CacheService;
   public readonly POST_BATCH_SIZE = 3;
   public readonly PROTECTOR_BATCH_SIZE = 5;
+  public readonly MAGNET_CACHE_TTL = 30 * 60 * 1000; // 30min
 
   constructor() {
     this.qualityDetector = new QualityDetector();
+    this.magnetCache = new CacheService();
   }
 
   async search(
@@ -165,60 +179,11 @@ export class WordPressScraper {
       logger.debug(`WP ${site.name}: temporada detectada na query: ${querySeason}`);
     }
 
-    const allQueries = new Set<string>([searchQuery, ...(searchQueries || [])]);
-    const frases = new Set<string>();
+    const { frases, baseTitles } = this.montarFrasesDeBusca(searchQuery, searchQueries);
 
-    for (const q of allQueries) {
-      const phrase = normalizarTexto(
-        q
-          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
-          .replace(/\btemporada\s*\d+\b/gi, '')
-          .replace(/\bseason\s*\d+\b/gi, '')
-      );
-      if (phrase) frases.add(phrase);
-    }
-
-    logger.debug(`WP ${site.name}: frases possíveis: [${[...frases].join(' | ')}]`);
-
-    // Gera títulos base a partir de todas as frases para detecção de coleção
-    const baseTitles = [...frases].map(frase => {
-      return normalizarTexto(
-        frase
-          .replace(/\b\d+\b/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-      );
-    }).filter(Boolean);
-
-    const relevantPosts = postItems.filter(post => {
-      const lowerTitle = post.title.toLowerCase();
-      if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
-
-      if (querySeason) {
-        const seasonPatterns = [
-          new RegExp(`\\b${querySeason}\\s*[ªº°]?\\s*temporada\\b`, 'i'),
-          new RegExp(`\\btemporada\\s*${querySeason}\\b`, 'i'),
-          new RegExp(`\\bseason\\s*${querySeason}\\b`, 'i'),
-        ];
-        if (!seasonPatterns.some(p => p.test(lowerTitle))) {
-          return false;
-        }
-      }
-
-      const titleNormalizado = normalizarTexto(post.title);
-      const match = [...frases].some(frase => titleNormalizado.includes(frase));
-
-      // Detecção de coleção: título é coleção E contém algum título base (sem números)
-      const isCollection = isCollectionTitle(titleNormalizado) &&
-        baseTitles.some(base => titleNormalizado.includes(base));
-
-      if (!match && !isCollection) {
-        logger.debug(`WP ${site.name}: post ignorado (frase não encontrada): "${post.title.substring(0, 50)}"`);
-        return false;
-      }
-
-      return true;
-    });
+    const relevantPosts = postItems.filter(post =>
+      this.postRelevante(post, querySeason, frases, baseTitles, site.name)
+    );
 
     logger.info(`WP ${site.name}: ${relevantPosts.length} posts relevantes na API para "${searchQuery}"`);
 
@@ -255,16 +220,85 @@ export class WordPressScraper {
     return results;
   }
 
-  public extractQualityFromText(text: string): string | null {
-    const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
-    return match ? match[1].toLowerCase() : null;
+  montarFrasesDeBusca(searchQuery: string, searchQueries?: string[]): { frases: Set<string>; baseTitles: string[] } {
+    const allQueries = new Set<string>([searchQuery, ...(searchQueries || [])]);
+    const frases = new Set<string>();
+
+    for (const q of allQueries) {
+      const phrase = normalizarTexto(
+        q
+          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+          .replace(/\btemporada\s*\d+\b/gi, '')
+          .replace(/\bseason\s*\d+\b/gi, '')
+      );
+      if (phrase) frases.add(phrase);
+    }
+
+    const baseTitles = [...frases].map(frase =>
+      normalizarTexto(frase.replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim())
+    ).filter(Boolean);
+
+    return { frases, baseTitles };
   }
 
-  public getFullContextText($el: any): string {
+  postRelevante(
+    post: { title: string },
+    querySeason: number | undefined,
+    frases: Set<string>,
+    baseTitles: string[],
+    siteName: string
+  ): boolean {
+    const lowerTitle = post.title.toLowerCase();
+
+    if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
+
+    if (querySeason) {
+      const seasonPatterns = [
+        new RegExp(`\\b${querySeason}\\s*[ªº°]?\\s*temporada\\b`, 'i'),
+        new RegExp(`\\btemporada\\s*${querySeason}\\b`, 'i'),
+        new RegExp(`\\bseason\\s*${querySeason}\\b`, 'i'),
+      ];
+      if (!seasonPatterns.some(p => p.test(lowerTitle))) return false;
+    }
+
+    const titleNormalizado = normalizarTexto(post.title);
+    const match = [...frases].some(frase => titleNormalizado.includes(frase));
+    const isCollection = isCollectionTitle(titleNormalizado) &&
+      baseTitles.some(base => titleNormalizado.includes(base));
+
+    if (!match && !isCollection) {
+      logger.debug(`WP ${siteName}: post ignorado (frase não encontrada): "${post.title.substring(0, 50)}"`);
+      return false;
+    }
+
+    return true;
+  }
+
+  // Classifica texto em flags de idioma. Separa "legendado/legendada" (particípio, cabeçalho)
+  // de "legenda" (substantivo, rótulo de metadado ou link de site externo).
+  classificarTextoIdioma(texto: string): IdiomaFlags {
+    const t = normalizarTexto(texto);
+    return {
+      temNacional: /\bnacional\b/.test(t),
+      temDual: /\bdual\b/.test(t),
+      temAudio: /\baudio\b/.test(t),
+      temDublado: /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t),
+      temLegendado: LEGENDADO_CABECALHO_REGEX.test(texto),
+      temLegendaSubstantivo: /\blegenda\b/i.test(texto),
+    };
+  }
+
+  extractQualityFromText(text: string): string | null {
+    if (!text) return null;
+    const q = this.qualityDetector.extractBestQuality(text);
+    return (q && q !== 'HD') ? q : null;
+  }
+
+  getFullContextText($el: any): string {
     let current = $el.parent();
     for (let depth = 0; depth < 4; depth++) {
       const text = current.text().trim();
-      if (text.length > 10 && /\b\d{3,4}p\b/i.test(text)) {
+      if (text.length > 10 && /\b(\d{3,4}p|4k|uhd)\b/i.test(text)) {
         return text;
       }
       current = current.parent();
@@ -272,7 +306,7 @@ export class WordPressScraper {
     return $el.parent().text().trim();
   }
 
-  public cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
+  cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
     if (!parentText) return '';
 
     const epPatterns = [
@@ -295,14 +329,13 @@ export class WordPressScraper {
 
     let quality = qualityOverride || null;
     if (!quality && linkText) {
-      const match = linkText.match(/\b(\d{3,4}p|4K|HD)\b/i);
-      quality = match ? match[1].toLowerCase() : null;
+      quality = this.extractQualityFromText(linkText);
     }
 
     return quality ? `${episode}: ${quality}` : episode;
   }
 
-  public async scrapePostApi(
+  async scrapePostApi(
     postId: number,
     postTitle: string,
     provider: string,
@@ -375,7 +408,18 @@ export class WordPressScraper {
     return all;
   }
 
-  public async processDirectMagnets(
+  // Um elemento está "dentro da seção válida" quando:
+  // - não há nenhuma seção (aceita tudo), ou
+  // - há seção DUAL e o elemento vem depois dela e antes de LEGENDADO (se existir).
+  estaEntreSecoes(pos: number, dualIndex: number | null, legendadoIndex: number | null): boolean {
+    if (dualIndex === null && legendadoIndex === null) return true;
+    if (dualIndex === null) return false;
+    if (pos < dualIndex) return false;
+    if (legendadoIndex !== null && pos >= legendadoIndex) return false;
+    return true;
+  }
+
+  async processDirectMagnets(
     $: any,
     content: string,
     dualIndex: number | null,
@@ -393,12 +437,9 @@ export class WordPressScraper {
     const filteredElements = (dualIndex === null && legendadoIndex === null)
       ? magnetElements
       : magnetElements.filter((el: any) => {
-        const elementHtml = $(el).toString();
-        const hrefPos = content.indexOf(elementHtml);
+        const hrefPos = content.indexOf($(el).toString());
         if (hrefPos === -1) return true;
-        if (dualIndex !== null && hrefPos < dualIndex) return false;
-        if (legendadoIndex !== null && hrefPos >= legendadoIndex) return false;
-        return true;
+        return this.estaEntreSecoes(hrefPos, dualIndex, legendadoIndex);
       });
 
     const results: TorrentResult[] = [];
@@ -425,7 +466,7 @@ export class WordPressScraper {
     return results;
   }
 
-  public async processProtectorLinks(
+  async processProtectorLinks(
     $: any,
     content: string,
     dualIndex: number | null,
@@ -443,13 +484,9 @@ export class WordPressScraper {
     const results: TorrentResult[] = [];
 
     const filteredLinks = protectorLinks.filter((el: any) => {
-      if (dualIndex === null && legendadoIndex === null) return true;
-      const linkHtml = $(el).toString();
-      const linkPos = content.indexOf(linkHtml);
+      const linkPos = content.indexOf($(el).toString());
       if (linkPos === -1) return false;
-      if (dualIndex !== null && linkPos < dualIndex) return false;
-      if (legendadoIndex !== null && linkPos >= legendadoIndex) return false;
-      return true;
+      return this.estaEntreSecoes(linkPos, dualIndex, legendadoIndex);
     });
 
     for (let i = 0; i < filteredLinks.length; i += this.PROTECTOR_BATCH_SIZE) {
@@ -482,7 +519,24 @@ export class WordPressScraper {
     return results;
   }
 
-  public async processMagnetItem(
+  async analisarMagnetComCache(magnet: string, provider: string): Promise<MagnetCacheEntry | null> {
+    const cached = this.magnetCache.get<MagnetCacheEntry>(magnet);
+    if (cached) return cached;
+
+    try {
+      const dados = await analisarMagnet(magnet);
+      if (dados) {
+        const entry: MagnetCacheEntry = { nome: dados.nome, infoHash: dados.infoHash };
+        this.magnetCache.set(magnet, entry, this.MAGNET_CACHE_TTL);
+        return entry;
+      }
+    } catch (err: any) {
+      logger.warn(`WP ${provider}: erro ao analisar magnet: ${err.message}`);
+    }
+    return null;
+  }
+
+  async processMagnetItem(
     magnet: string,
     parentText: string,
     linkText: string,
@@ -495,25 +549,8 @@ export class WordPressScraper {
     year: number | undefined,
     years?: number[]
   ): Promise<TorrentResult | null> {
-    const cached = this.magnetCache.get(magnet);
-    let canonicalName: string | null = null;
-    let infoHash: string | undefined;
-
-    if (cached) {
-      canonicalName = cached.nome;
-      infoHash = cached.infoHash;
-    } else {
-      try {
-        const dados = await analisarMagnet(magnet);
-        if (dados) {
-          canonicalName = dados.nome;
-          infoHash = dados.infoHash;
-          this.magnetCache.set(magnet, { nome: dados.nome, infoHash: dados.infoHash });
-        }
-      } catch (err: any) {
-        logger.warn(`WP ${provider}: erro ao analisar magnet: ${err.message}`);
-      }
-    }
+    const dados = await this.analisarMagnetComCache(magnet, provider);
+    const canonicalName = dados?.nome ?? null;
 
     const getQualityOrNull = (text: string): string | null => {
       const qualities = this.qualityDetector.extractAllQualities(text);
@@ -524,7 +561,7 @@ export class WordPressScraper {
     const linkQuality = getQualityOrNull(linkText);
     const contextQuality = getQualityOrNull(fullContextText);
 
-    const quality = dnQuality || linkQuality || contextQuality || this.detectQuality(parentText, postTitle, html, magnet);
+    const quality = dnQuality || linkQuality || contextQuality || this.detectQuality(parentText, postTitle, html, canonicalName);
 
     if (!this.qualityDetector.isValidQuality(quality)) {
       logger.warn(`WP ${provider}: qualidade "${quality}" NÃO permitida`);
@@ -536,13 +573,9 @@ export class WordPressScraper {
     const episode = this.extractEpisodeFromText(parentText);
     const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, dnQuality || linkQuality);
 
-    // Extrai um título limpo do post (remove ruído)
     const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
 
-    // Usa o título original do contexto ou do post limpo
     const originalTitleFinal = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle || cleanTitleFromPost;
-
-    // O título de exibição pode ser o canonicalName (dn), mas o originalTitle deve ser limpo
     const displayTitle = cleanTitleFromPost || canonicalName || postTitle;
 
     return {
@@ -569,7 +602,7 @@ export class WordPressScraper {
     };
   }
 
-  private extractTitleFromPostTitle(postTitle: string): string | null {
+  extractTitleFromPostTitle(postTitle: string): string | null {
     if (!postTitle) return null;
     return postTitle
       .replace(/\bTorrent\b.*$/i, '')
@@ -578,25 +611,19 @@ export class WordPressScraper {
       .trim() || null;
   }
 
-  public extractOriginalTitleFromContext(contextText: string): string | null {
+  extractOriginalTitleFromContext(contextText: string): string | null {
     const match = contextText.match(/T[ií]tulo\s+Original:\s*([^\n]+)/i);
     return match?.[1]?.trim() || null;
   }
 
-  public extractInfoBlock($: any, html: string): {
-    originalTitle?: string;
-    translatedTitle?: string;
-    year?: number;
-    years?: number[];
-    size?: string;
-  } {
+  extractInfoBlock($: any, html: string): InfoBlock {
     const articleText = $.root().text() || html;
     const titleText = articleText;
 
     const originalMatch = articleText.match(/T[ií]tulo\s+Original\s*:\s*([^\n]+)/i);
     const translatedMatch = articleText.match(/T[ií]tulo\s+Traduzido\s*:\s*([^\n]+)/i);
 
-    let yearMatch = articleText.match(/Ano de Lançamento\s*:\s*([^\n]+)/i) || articleText.match(/Lançamento\s*:?\s*([^\n]+)/i);
+    const yearMatch = articleText.match(/Ano de Lançamento\s*:\s*([^\n]+)/i) || articleText.match(/Lançamento\s*:?\s*([^\n]+)/i);
     let years: number[] = [];
     if (yearMatch) {
       const rawYears = yearMatch[1].match(/\b(19|20)\d{2}\b/g) || [];
@@ -607,7 +634,6 @@ export class WordPressScraper {
         .map((y: string) => parseInt(y))
         .filter((y: number) => y >= 1950 && y <= 2030);
     }
-    const year = years.length > 0 ? years[0] : undefined;
 
     const sizeMatch = articleText.match(/Tamanho:\s*([^\n]+)/i);
 
@@ -620,7 +646,7 @@ export class WordPressScraper {
     };
   }
 
-  public async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
+  async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     const maxAttempts = 2;
     for (let attempt = 0; attempt < maxAttempts; attempt++) {
       try {
@@ -632,13 +658,9 @@ export class WordPressScraper {
         });
         const html: string = res.data;
         const match = html.match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
-        if (match) {
-          return match[1];
-        }
+        if (match) return match[1];
         const altMatch = html.match(/DEST_URL\s*=\s*"([^"]+)"/);
-        if (altMatch) {
-          return altMatch[1];
-        }
+        if (altMatch) return altMatch[1];
       } catch (err: any) {
         if (attempt < maxAttempts - 1) {
           await new Promise(resolve => setTimeout(resolve, 500));
@@ -650,14 +672,11 @@ export class WordPressScraper {
     return null;
   }
 
-  public detectQuality(parentText: string, postTitle: string, fullHtml: string, magnet?: string): string {
-    if (magnet) {
-      const canonicalName = this.extractCanonicalNameSync(magnet);
-      if (canonicalName) {
-        const q = this.qualityDetector.extractBestQuality(canonicalName);
-        if (q && q !== 'HD' && this.qualityDetector.isValidQuality(q)) {
-          return q;
-        }
+  detectQuality(parentText: string, postTitle: string, fullHtml: string, canonicalName?: string | null): string {
+    if (canonicalName) {
+      const q = this.qualityDetector.extractBestQuality(canonicalName);
+      if (q && q !== 'HD' && this.qualityDetector.isValidQuality(q)) {
+        return q;
       }
     }
 
@@ -667,7 +686,7 @@ export class WordPressScraper {
     return quality || 'HD';
   }
 
-  public extractCanonicalNameSync(magnet: string): string | null {
+  extractCanonicalNameSync(magnet: string): string | null {
     const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
     if (dnMatch) {
       try {
@@ -679,54 +698,75 @@ export class WordPressScraper {
     return null;
   }
 
-  public extractSize(text: string): string {
-    const m = text.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i);
-    return m ? `${m[1]} ${m[2]}` : 'Desconhecido';
+  // Extrai valor + unidade de um texto tipo "3.12 GB". Fonte única para
+  // extractSize (formata) e parseSize (converte pra bytes).
+  extrairTamanhoNumerico(text: string): TamanhoNumerico | null {
+    if (!text) return null;
+    const m = text.match(/([\d,.]+)\s*(GB|MB|KB)/i);
+    if (!m) return null;
+    const valor = parseFloat(m[1].replace(',', '.'));
+    if (!Number.isFinite(valor) || valor <= 0) return null;
+    const unidade = m[2].toUpperCase() as 'GB' | 'MB' | 'KB';
+    return { valor, unidade };
   }
 
-  public extractLanguage(title: string): string {
-    const lower = title.toLowerCase();
-    if (lower.includes('nacional')) return 'Nacional';
-    if (lower.includes('dual')) return 'Dual';
-    if (lower.includes('dublado') || lower.includes('dublad')) return 'Dublado';
-    if (LEGENDADO_REGEX.test(lower)) return 'Legendado';
+  extractSize(text: string): string {
+    const t = this.extrairTamanhoNumerico(text);
+    if (!t || t.unidade === 'KB') return 'Desconhecido';
+    return `${t.valor} ${t.unidade}`;
+  }
+
+  parseSize(sizeStr: string): number {
+    if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;
+    const t = this.extrairTamanhoNumerico(sizeStr);
+    if (!t) return 0;
+    const multiplicador = { GB: 1024 ** 3, MB: 1024 ** 2, KB: 1024 }[t.unidade];
+    return Math.round(t.valor * multiplicador);
+  }
+
+  extractLanguage(title: string): string {
+    if (!title) return 'Desconhecido';
+    const f = this.classificarTextoIdioma(title);
+    if (f.temDual) return 'Dual';
+    if (f.temDublado) return 'Dublado';
+    if (f.temNacional) return 'Nacional';
+    // "legenda" sozinho (substantivo) não basta — pode ser rótulo de metadado.
+    if (f.temLegendado || f.temLegendaSubstantivo) return 'Legendado';
     return 'Desconhecido';
   }
 
-  public cleanTitle(title: string): string {
+  cleanTitle(title: string): string {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  public estimateSeeders(provider: string): number {
-    const base: Record<string, number> = { 'BLUDV Filmes': 50, default: 20 };
+  estimateSeeders(provider: string): number {
+    const base: Record<string, number> = { 'Comando Torrents': 50, default: 20 };
     return Math.floor((base[provider] || base.default) * (0.6 + Math.random() * 0.8));
   }
 
-  public parseSize(sizeStr: string): number {
-    if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;
-    const match = sizeStr.match(/([\d,.]+)\s*(GB|MB|KB)/i);
-    if (!match) return 0;
-    const num = parseFloat(match[1].replace(',', '.'));
-    const unit = match[2].toUpperCase();
-    if (unit === 'GB') return num * 1024 * 1024 * 1024;
-    if (unit === 'MB') return num * 1024 * 1024;
-    if (unit === 'KB') return num * 1024;
-    return 0;
-  }
+  // Cabeçalho de seção: começa com "VERSÃO" ou é bem curto. Rejeita trailers, CTAs
+  // e rótulos de metadado (substantivo "legenda" sem particípio).
+  detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
+    const t = normalizarTexto(text).trim();
 
-  public detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
-    const t = text.toLowerCase();
-    const hasNacional = /\bnacional\b/.test(t);
-    const hasDual = /\bdual\b/.test(t) && (/\báudio\b|\baudio\b|\bdublado\b|\bdublagem\b/.test(t));
-    const hasDublado = /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t);
-    const hasLegendado = /\blegendado\b|\blegendada\b|\blegenda\b/.test(t);
+    if (/^(assistir|baixar|download|ver|trailer)\b/i.test(t)) return 'OUTRO';
 
-    if (hasLegendado && !hasDual && !hasDublado) return 'LEGENDADO';
-    if ((hasDual || hasDublado || hasNacional) && !hasLegendado) return 'DUAL';
+    const pareceCabecalho = /^versao\b/i.test(t) || t.length <= 25;
+    if (!pareceCabecalho) return 'OUTRO';
+
+    const f = this.classificarTextoIdioma(text);
+    const temDualCompleto = f.temDual && f.temAudio;
+
+    // Só aceita LEGENDADO se tiver o particípio "legendado"/"legendada".
+    // "legenda" sozinho é substantivo e costuma ser rótulo de metadado ou link.
+    const temLegendadoCabecalho = f.temLegendado;
+
+    if (temLegendadoCabecalho && !temDualCompleto && !f.temDublado) return 'LEGENDADO';
+    if ((temDualCompleto || f.temDublado || f.temNacional) && !temLegendadoCabecalho) return 'DUAL';
     return 'OUTRO';
   }
 
-  public findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
+  findSectionBoundaries($: any, content: string): SectionBoundaries {
     const selectors = ['strong', 'b'];
     let dualIndex: number | null = null;
     let legendadoIndex: number | null = null;
@@ -735,13 +775,12 @@ export class WordPressScraper {
       const elements = $(sel);
       for (let i = 0; i < elements.length; i++) {
         const text = $(elements[i]).text().trim();
-        if (!text || text.length > 30) continue;
+        if (!text) continue;
 
         const sectionType = this.detectSectionType(text);
         if (sectionType === 'OUTRO') continue;
 
-        const html = $(elements[i]).toString();
-        const pos = content.indexOf(html);
+        const pos = content.indexOf($(elements[i]).toString());
         if (pos === -1) continue;
 
         if (sectionType === 'DUAL' && dualIndex === null) {
@@ -756,12 +795,10 @@ export class WordPressScraper {
     return { dualIndex, legendadoIndex };
   }
 
-  public extractEpisodeFromText(text: string): number | undefined {
+  // Wrapper sobre extrairRangeEpisodios — mantém a assinatura antiga (só o número).
+  extractEpisodeFromText(text: string): number | undefined {
     if (!text) return undefined;
-    const match = text.match(/epis[oó]dio\s*(\d+)/i);
-    if (match) return parseInt(match[1], 10);
-    const altMatch = text.match(/\b(?:ep|e)\s*(\d+)\b/i);
-    if (altMatch) return parseInt(altMatch[1], 10);
-    return undefined;
+    const range = extrairRangeEpisodios(text);
+    return range?.episodeStart || undefined;
   }
 }

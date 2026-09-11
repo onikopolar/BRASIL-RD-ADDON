@@ -9,6 +9,7 @@ import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { extrairRangeEpisodios, INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
 import { LanguageDetector } from '../titulos/LanguageDetector.js';
 import { RescrapeService } from '../services/scraper/RescrapeService.js';
+import { CacheService } from '../debrid/CacheService.js';
 
 const logger = new Logger('AutoMagnetService');
 const torboxService = new TorboxService();
@@ -57,10 +58,10 @@ interface AutoMagnetResult {
 }
 
 export class AutoMagnetService {
-  private validationCache = new Map<string, { valid: boolean; data: AutoMagnetResult; timestamp: number }>();
-  private readonly cacheTTL = 30000;
+  private validationCache = new CacheService();
+  private titleValidationCache = new CacheService();
 
-  private titleValidationCache = new Map<string, { result: TitleMatchResult; timestamp: number }>();
+  private readonly cacheTTL = 30000;
   private readonly titleCacheTTL = 60000;
 
   constructor() { }
@@ -75,8 +76,8 @@ export class AutoMagnetService {
     tituloParaIdioma?: string
   ): Promise<TitleMatchResult> {
     const cacheKey = `title_${imdbId}_${torrentTitle.substring(0, 100)}_${season}_${episode}_${tituloParaIdioma || ''}`;
-    const cached = this.titleValidationCache.get(cacheKey);
-    if (cached && Date.now() - cached.timestamp < this.titleCacheTTL) return cached.result;
+    const cached = this.titleValidationCache.get<TitleMatchResult>(cacheKey);
+    if (cached) return cached;
 
     const result = await titleFilter.titulosCombinam(
       torrentTitle,
@@ -85,7 +86,7 @@ export class AutoMagnetService {
       episode,
       tituloParaIdioma
     );
-    this.titleValidationCache.set(cacheKey, { result, timestamp: Date.now() });
+    this.titleValidationCache.set(cacheKey, result, this.titleCacheTTL);
     return result;
   }
 
@@ -238,21 +239,19 @@ export class AutoMagnetService {
     const cacheKey = `${magnetLink}-${imdbId}-${imdbSeason}-${imdbEpisode}`;
 
     try {
-      const cached = this.validationCache.get(cacheKey);
-      if (cached && Date.now() - cached.timestamp < this.cacheTTL) {
-        return cached.data;
-      }
+      const cached = this.validationCache.get<AutoMagnetResult>(cacheKey);
+      if (cached) return cached;
 
       if (!this.validateMagnetLink(magnetLink)) {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Link magnet inválido' };
-        this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+        this.validationCache.set(cacheKey, result, this.cacheTTL);
         return result;
       }
 
       const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
       if (!imdbTitles || imdbTitles.allTitles.length === 0) {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Títulos IMDB não encontrados' };
-        this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+        this.validationCache.set(cacheKey, result, this.cacheTTL);
         return result;
       }
 
@@ -281,7 +280,7 @@ export class AutoMagnetService {
           message: 'Título não corresponde',
           validation: { titleMatches: false, reason: titleMatchResult.reason || 'Título não corresponde' }
         };
-        this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+        this.validationCache.set(cacheKey, result, this.cacheTTL);
         return result;
       }
 
@@ -332,7 +331,7 @@ export class AutoMagnetService {
 
       if (!saved) {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Já existe no banco' };
-        this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+        this.validationCache.set(cacheKey, result, this.cacheTTL);
         return result;
       }
 
@@ -349,7 +348,7 @@ export class AutoMagnetService {
           reason: 'Título validado'
         }
       };
-      this.validationCache.set(cacheKey, { valid: true, data: result, timestamp: Date.now() });
+      this.validationCache.set(cacheKey, result, this.cacheTTL);
       return result;
     } catch (error) {
       logger.error('Erro ao adicionar magnet', {
@@ -358,7 +357,7 @@ export class AutoMagnetService {
         error: error instanceof Error ? error.message : 'Erro'
       });
       const result: AutoMagnetResult = { success: false, magnetAdded: false, message: `Erro: ${error instanceof Error ? error.message : 'Erro'}` };
-      this.validationCache.set(cacheKey, { valid: false, data: result, timestamp: Date.now() });
+      this.validationCache.set(cacheKey, result, this.cacheTTL);
       return result;
     }
   }
@@ -459,8 +458,8 @@ export class AutoMagnetService {
 
   getStats() {
     return {
-      cacheSize: this.validationCache.size,
-      titleCacheSize: this.titleValidationCache.size,
+      cacheSize: this.validationCache.getStats().size,
+      titleCacheSize: this.titleValidationCache.getStats().size,
     };
   }
 }

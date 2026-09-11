@@ -18,8 +18,10 @@ const LEGENDADO_REGEX = new RegExp(
 
 const logger = new Logger('BludvScraper');
 
+// Força Google/Cloudflare no lookup — o DNS do site é instável em alguns ambientes.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
+// Agent HTTPS que resolve o domínio manualmente e conecta no IP com SNI correto.
 class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
     const hostname = options.hostname || options.host || '';
@@ -58,9 +60,49 @@ const AXIOS_OPTS = {
   },
 };
 
+export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
+
+export type SectionBoundaries = {
+  dualPos: number;
+  legendadoPos: number;
+};
+
+export type LinkContext = {
+  linkText: string;
+  parentText: string;
+  fullContextText: string;
+};
+
+export type PostItem = { title: string; url: string };
+export type ProtectorLink = { url: string; secao: SectionType } & LinkContext;
+export type ExtractedMagnet = { magnet: string; link: LinkContext; secao: SectionType };
+
+export type FrasesBusca = { frases: Set<string>; baseTitles: string[] };
+
+export type PostMetadata = {
+  quality?: string;
+  size?: string;
+  language?: string;
+  originalTitle?: string;
+  year?: number;
+  years?: number[];
+};
+
+export { BASE_URL, PROVIDER, AXIOS_OPTS };
+
+// Remove magnets duplicados mantendo a ordem de entrada.
+function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
+  const vistos = new Set<string>();
+  return magnets.filter(m => {
+    if (vistos.has(m.magnet)) return false;
+    vistos.add(m.magnet);
+    return true;
+  });
+}
+
 export class BludvScraper {
-  private readonly qualityDetector: QualityDetector;
-  private readonly BATCH_SIZE = 5;
+  public readonly qualityDetector: QualityDetector;
+  public readonly BATCH_SIZE = 5;
 
   constructor() {
     this.qualityDetector = new QualityDetector();
@@ -74,16 +116,15 @@ export class BludvScraper {
     imdbId?: string
   ): Promise<TorrentResult[]> {
     try {
-      const queriesParaBusca = searchQueries && searchQueries.length > 0
-        ? searchQueries
-        : [query];
+      const queriesParaBusca = searchQueries && searchQueries.length > 0 ? searchQueries : [query];
+      const frasesBusca = this.montarFrasesDeBusca(query, searchQueries);
 
-      const allPosts: { title: string; url: string }[] = [];
+      const allPosts: PostItem[] = [];
       const seenUrls = new Set<string>();
 
       for (const q of queriesParaBusca) {
         logger.debug(`BLUDV: tentando busca com query "${q}"`);
-        const posts = await this.searchPosts(q, targetSeason, searchQueries);
+        const posts = await this.searchPosts(q, targetSeason, frasesBusca);
 
         for (const post of posts) {
           if (!seenUrls.has(post.url)) {
@@ -119,88 +160,76 @@ export class BludvScraper {
 
   async searchPosts(
     query: string,
-    targetSeason?: number,
-    searchQueries?: string[]
-  ): Promise<{ title: string; url: string }[]> {
-    const encoded = encodeURIComponent(query);
-    const searchUrl = `${BASE_URL}/?s=${encoded}`;
-
+    targetSeason: number | undefined,
+    frasesBusca: FrasesBusca
+  ): Promise<PostItem[]> {
+    const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
     const res = await axios.get(searchUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
-    const items: { title: string; url: string }[] = [];
+
+    // Quando a busca não acha nada, o WordPress marca o body com search-no-results
+    // e enche a página com posts recentes como fallback. Nada ali é resultado real.
+    if ($('body').hasClass('search-no-results')) {
+      logger.debug('[BLUDV] busca sem resultados (search-no-results)');
+      return [];
+    }
+
+    const items: PostItem[] = [];
+    const urlsVistas = new Set<string>();
 
     $('a[href]').each((_, el) => {
       const href = ($(el).attr('href') || '').trim();
-      const text = ($(el).text() || '').trim();
+
+      // Links com capa têm text() vazio — o título real está no alt da <img>.
+      const text = ($(el).text() || '').trim()
+        || ($(el).find('img').attr('alt') || '').trim()
+        || ($(el).find('img').attr('title') || '').trim();
+
       if (!href.includes('bludvfilmes')) return;
 
-      const path = new URL(href).pathname;
+      let path: string;
+      try { path = new URL(href).pathname; } catch { return; }
       const segments = path.split('/').filter(Boolean);
 
-      if (segments.length === 1 && segments[0].length > 20 && segments[0].includes('-')) {
-        const fullUrl = href.startsWith('http') ? href : `${BASE_URL}/${segments[0]}/`;
-        if (!items.some(item => item.url === fullUrl)) {
-          items.push({ title: text, url: fullUrl });
-        }
-      }
+      if (segments.length !== 1 || segments[0].length <= 20 || !segments[0].includes('-')) return;
+
+      const fullUrl = href.startsWith('http') ? href : `${BASE_URL}/${segments[0]}/`;
+
+      if (urlsVistas.has(fullUrl)) return;
+      urlsVistas.add(fullUrl);
+
+      items.push({ title: text, url: fullUrl });
     });
 
-    const allQueries = new Set<string>([query, ...(searchQueries || [])]);
-    const frases = new Set<string>();
+    return items.filter(item => this.postRelevante(item, targetSeason, frasesBusca)).slice(0, 5);
+  }
 
-    for (const q of allQueries) {
-      const phrase = normalizarTexto(
-        q
-          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
-          .replace(/\btemporada\s*\d+\b/gi, '')
-          .replace(/\bseason\s*\d+\b/gi, '')
-          .replace(/\b\d{4}\b/g, '')
-      );
-      if (phrase) frases.add(phrase);
+  postRelevante(item: PostItem, targetSeason: number | undefined, frasesBusca: FrasesBusca): boolean {
+    const lowerTitle = item.title.toLowerCase();
+
+    if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
+      logger.debug(`[BLUDV] post legendado ignorado: "${item.title.substring(0, 50)}"`);
+      return false;
     }
 
-    logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
+    if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
 
-    const baseTitles = [...frases].map(frase => {
-      return normalizarTexto(
-        frase
-          .replace(/\b\d+\b/g, ' ')
-          .replace(/\s+/g, ' ')
-          .trim()
-      );
-    }).filter(Boolean);
+    if (targetSeason !== undefined) {
+      const range = extrairRangeEpisodios(item.title);
+      if (range && range.season !== targetSeason) return false;
+    }
 
-    const relevantPosts = items.filter(item => {
-      const lowerTitle = item.title.toLowerCase();
+    const titleNormalizado = normalizarTexto(item.title);
+    const match = [...frasesBusca.frases].some(frase => titleNormalizado.includes(frase));
+    const isCollection = isCollectionTitle(titleNormalizado) &&
+      frasesBusca.baseTitles.some(base => titleNormalizado.includes(base));
 
-      if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
-        logger.debug(`[BLUDV] post legendado ignorado: "${item.title.substring(0, 50)}"`);
-        return false;
-      }
+    if (!match && !isCollection) {
+      logger.debug(`[BLUDV] post ignorado (frase não encontrada): "${item.title.substring(0, 50)}"`);
+      return false;
+    }
 
-      if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
-
-      if (targetSeason !== undefined) {
-        const range = extrairRangeEpisodios(item.title);
-        if (range && range.season !== targetSeason) return false;
-      }
-
-      const titleNormalizado = normalizarTexto(item.title);
-
-      const match = [...frases].some(frase => titleNormalizado.includes(frase));
-
-      const isCollection = isCollectionTitle(titleNormalizado) &&
-        baseTitles.some(base => titleNormalizado.includes(base));
-
-      if (!match && !isCollection) {
-        logger.debug(`[BLUDV] post ignorado (frase não encontrada): "${item.title.substring(0, 50)}"`);
-        return false;
-      }
-
-      return true;
-    }).slice(0, 5);
-
-    return relevantPosts;
+    return true;
   }
 
   async scrapePost(
@@ -224,12 +253,8 @@ export class BludvScraper {
       const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
         const isCollection = isCollectionTitle(postTitle);
-        if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
-          return [];
-        }
-        if (!isCollection) {
-          imdbConfirmed = true;
-        }
+        if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
+        if (!isCollection) imdbConfirmed = true;
       }
     }
 
@@ -238,123 +263,64 @@ export class BludvScraper {
       if (range && range.season !== targetSeason) return [];
     }
 
-    const metadata = this.extractPostMetadata($, contentHtml);
+    const metadata = this.extractPostMetadata($);
 
-    const dualLinks = this.extractDualSectionProtectorLinks($, contentHtml);
+    // Acha os cabeçalhos de seção (DUAL / LEGENDADO) uma vez só e usa pra filtrar tudo.
+    const boundaries = this.findSectionBoundaries($, contentHtml);
+    logger.debug(`[BLUDV] boundaries: dualPos=${boundaries.dualPos}, legendadoPos=${boundaries.legendadoPos}`);
 
-    type LinkContext = {
-      linkText: string;
-      parentText: string;
-      fullContextText: string;
-    };
-    let allMagnets: { magnet: string; link: LinkContext }[] = [];
-
-    if (dualLinks.length > 0) {
-      for (let i = 0; i < dualLinks.length; i += this.BATCH_SIZE) {
-        const batch = dualLinks.slice(i, i + this.BATCH_SIZE);
-        const batchPromises = batch.map(async (link) => {
-          const magnet = await this.extractMagnetFromProtector(link.url);
-          return { magnet, link };
-        });
-        const batchResults = await Promise.all(batchPromises);
-        for (const result of batchResults) {
-          if (result.magnet) {
-            allMagnets.push({ magnet: result.magnet, link: result.link });
-          }
-        }
-      }
-    } else {
-      const directLinks = this.extractDirectMagnets($, contentHtml);
-      allMagnets = directLinks.map((item: {
-        magnet: string;
-        linkText: string;
-        parentText: string;
-        fullContextText: string;
-      }) => ({
-        magnet: item.magnet,
-        link: {
-          linkText: item.linkText,
-          parentText: item.parentText,
-          fullContextText: item.fullContextText,
-        },
-      }));
+    // Se o post só tem seção LEGENDADO (sem DUAL), ignora — não queremos legendado.
+    if (boundaries.dualPos === -1 && boundaries.legendadoPos !== -1) {
+      logger.debug('[BLUDV] post apenas legendado — descartado');
+      return [];
     }
+
+    // Magnets diretos no HTML (<center> com <a href="magnet:...">).
+    const directMagnets = this.extractDirectMagnets($, contentHtml, boundaries);
+    logger.debug(`[BLUDV] magnets diretos na seção válida: ${directMagnets.length}`);
+
+    // Magnets atrás de protetor (systemads1.com) — resolvidos um a um.
+    const protectorLinks = this.extractProtectorLinks($, contentHtml, boundaries);
+    logger.debug(`[BLUDV] protector links na seção válida: ${protectorLinks.length}`);
+
+    const protectorMagnets = await this.resolverMagnetsDoProtetor(protectorLinks);
+
+    // Junta tudo e dedup por URL do magnet.
+    const allMagnets = dedupByMagnet([...directMagnets, ...protectorMagnets]);
 
     if (allMagnets.length === 0) return [];
 
     const analyzedMagnets = await Promise.all(
-      allMagnets.map(async ({ magnet, link }) => {
+      allMagnets.map(async ({ magnet, link, secao }) => {
         let canonicalName: string | undefined;
         try {
           const dados = await analisarMagnet(magnet);
           canonicalName = dados?.nome || undefined;
         } catch { }
-        return { magnet, link, canonicalName };
+        return { magnet, link, canonicalName, secao };
       })
     );
 
     const results: TorrentResult[] = [];
-
-    const getQualityOrNull = (text: string): string | null => {
-      const qualities = this.qualityDetector.extractAllQualities(text);
-      return qualities.length > 0 ? qualities[0] : null;
-    };
-
-    // Extrai título limpo do post para validação
+    const magnetsVistos = new Set<string>();
     const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
 
-    for (const { magnet, link, canonicalName } of analyzedMagnets) {
-      const dnQuality = canonicalName ? getQualityOrNull(canonicalName) : null;
-      const linkQuality = getQualityOrNull(link.linkText);
-      const contextQuality = getQualityOrNull(link.fullContextText);
-      const parentQuality = getQualityOrNull(link.parentText);
+    for (const { magnet, link, canonicalName, secao } of analyzedMagnets) {
+      if (magnetsVistos.has(magnet)) continue;
+      magnetsVistos.add(magnet);
 
-      let quality = dnQuality || linkQuality || contextQuality || parentQuality;
-      if (!quality || !this.qualityDetector.isValidQuality(quality)) {
-        quality = this.qualityDetector.extractBestQuality(postTitle);
-        if (!quality || !this.qualityDetector.isValidQuality(quality)) {
-          quality = 'HD';
-        }
-      }
+      const quality = this.resolverQualidade(canonicalName, link, postTitle, metadata.quality);
+      const { episode, episodeRangeText } = this.resolverEpisodio(canonicalName, link);
+      const language = this.resolverIdioma(secao, metadata.language);
 
-      let episode: number | undefined;
-      let episodeRangeText: string | undefined;
-
-      if (canonicalName) {
-        const rangeCanonical = extrairRangeEpisodios(canonicalName);
-        if (rangeCanonical && rangeCanonical.episodeStart > 0) {
-          episode = rangeCanonical.episodeStart;
-          episodeRangeText = "Episódio " + rangeCanonical.episodeStart + (rangeCanonical.episodeEnd > rangeCanonical.episodeStart ? "-" + rangeCanonical.episodeEnd : "");
-        }
-      }
-
-      if (!episodeRangeText) {
-        const contextForEpisode = link.fullContextText || link.linkText;
-        const rangeContext = extrairRangeEpisodios(contextForEpisode);
-        if (rangeContext && rangeContext.episodeStart > 0) {
-          episode = rangeContext.episodeStart;
-          episodeRangeText = "Episódio " + rangeContext.episodeStart + (rangeContext.episodeEnd > rangeContext.episodeStart ? "-" + rangeContext.episodeEnd : "");
-        } else {
-          const epMatch = contextForEpisode.match(/EPISÓDIO\s*(\d+)/i);
-          if (epMatch) {
-            episode = parseInt(epMatch[1], 10);
-            episodeRangeText = "Episódio " + episode;
-          }
-        }
-      }
-
-      // Título para validação: prefere metadata.originalTitle, depois título limpo do post
       const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
-
-      // Título de exibição: pode manter canonicalName, mas título principal deve ser limpo
       const displayTitle = originalTitleFinal || canonicalName || postTitle;
 
       const size = metadata.size || 'Desconhecido';
-      const language = metadata.language || 'Desconhecido';
 
       const cleanedHtmlTitle = episodeRangeText
-        ? episodeRangeText + ": " + (dnQuality || linkQuality || contextQuality || "HD")
-        : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, dnQuality || linkQuality || contextQuality);
+        ? `${episodeRangeText}: ${quality}`
+        : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, quality);
 
       results.push({
         title: this.cleanTitle(displayTitle),
@@ -384,7 +350,267 @@ export class BludvScraper {
     return results;
   }
 
-  private extractTitleFromPostTitle(postTitle: string): string | null {
+  // Percorre os <strong>/<b> dentro do conteúdo e acha as posições dos cabeçalhos
+  // "DUAL ÁUDIO" (ou similar) e "LEGENDADO". Rejeita trailers e textos longos.
+  findSectionBoundaries($: any, contentHtml: string): SectionBoundaries {
+    const strongEls = $('.content strong, .content b').toArray();
+    let dualPos = -1;
+    let legendadoPos = -1;
+
+    for (const el of strongEls) {
+      const texto = $(el).text().trim();
+      if (!texto) continue;
+
+      const tipo = this.detectSectionType(texto);
+      if (tipo === 'NONE') continue;
+
+      const pos = contentHtml.indexOf($(el).toString());
+      if (pos === -1) continue;
+
+      if (tipo === 'DUAL' && dualPos === -1) {
+        dualPos = pos;
+      } else if (tipo === 'LEGENDADO' && dualPos !== -1 && pos > dualPos && legendadoPos === -1) {
+        legendadoPos = pos;
+        break;
+      }
+    }
+
+    return { dualPos, legendadoPos };
+  }
+
+  // Classifica um <strong>/<b> como cabeçalho de seção.
+  // Rejeita trailers, CTAs e textos longos que contenham a keyword por acaso.
+  detectSectionType(text: string): SectionType {
+    const t = normalizarTexto(text).trim();
+
+    if (/^(trailer|assistir|baixar|download|ver)\b/i.test(t)) return 'NONE';
+    if (t.length > 60) return 'NONE';
+
+    const hasNacional = /\bnacional\b/.test(t);
+    const hasDual = /\bdual\b/.test(t) && /\baudio\b/.test(t);
+    const hasDublado = /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t);
+    const hasLegendado = /\blegendado\b|\blegendada\b/.test(t);
+
+    if (hasLegendado && !hasDual && !hasDublado && !hasNacional) return 'LEGENDADO';
+    if ((hasDual || hasDublado || hasNacional) && !hasLegendado) return 'DUAL';
+    return 'NONE';
+  }
+
+  // Dado o offset de um elemento no HTML, diz em qual seção ele cai.
+  getSectionForPosition(pos: number, boundaries: SectionBoundaries): SectionType {
+    const { dualPos, legendadoPos } = boundaries;
+
+    // Sem cabeçalhos: aceita tudo como "sem seção definida".
+    if (dualPos === -1 && legendadoPos === -1) return 'NONE';
+
+    // Só legendado no post: nada presta.
+    if (dualPos === -1) return 'LEGENDADO';
+
+    // Antes do cabeçalho DUAL: nada presta.
+    if (pos < dualPos) return 'NONE';
+
+    // Depois do cabeçalho LEGENDADO: é legendado.
+    if (legendadoPos !== -1 && pos >= legendadoPos) return 'LEGENDADO';
+
+    return 'DUAL';
+  }
+
+  // Extrai magnets diretos do HTML, filtrando por seção.
+  // Estrutura típica: <center><span>...1080p (2.88 GB)</span><br><a href="magnet:...">Magnet-Link</a></center>
+  extractDirectMagnets($: any, contentHtml: string, boundaries: SectionBoundaries): ExtractedMagnet[] {
+    const resultados: ExtractedMagnet[] = [];
+
+    for (const centerEl of $('center').toArray()) {
+      const magnetLink = $(centerEl).find('a[href^="magnet:"]').first();
+      if (!magnetLink.length) continue;
+
+      const magnet = magnetLink.attr('href')?.trim();
+      if (!magnet) continue;
+
+      const pos = contentHtml.indexOf($(centerEl).toString());
+      const secao = this.getSectionForPosition(pos, boundaries);
+      if (secao === 'LEGENDADO') continue;
+
+      const spanText = $(centerEl).find('span').first().text().trim();
+      const ctx = this.buildLinkContext($, magnetLink[0]);
+
+      resultados.push({
+        magnet,
+        link: {
+          linkText: ctx.linkText,
+          parentText: ctx.parentText,
+          fullContextText: spanText || ctx.fullContextText,
+        },
+        secao,
+      });
+    }
+
+    // Fallback: se a estrutura <center> mudou, varre todos os magnets diretos.
+    if (resultados.length === 0) {
+      for (const el of $('a[href^="magnet:"]').toArray() as any[]) {
+        const magnet = $(el).attr('href')?.trim();
+        if (!magnet) continue;
+
+        const pos = contentHtml.indexOf($(el).toString());
+        const secao = this.getSectionForPosition(pos, boundaries);
+        if (secao === 'LEGENDADO') continue;
+
+        resultados.push({
+          magnet,
+          link: this.buildLinkContext($, el),
+          secao,
+        });
+      }
+    }
+
+    return resultados;
+  }
+
+  // Extrai links de protetor (systemads1.com), filtrando por seção.
+  extractProtectorLinks($: any, contentHtml: string, boundaries: SectionBoundaries): ProtectorLink[] {
+    const allLinks = $('a[href*="systemads1.com"]').toArray();
+    if (!allLinks.length) return [];
+
+    const result: ProtectorLink[] = [];
+    for (const el of allLinks) {
+      const pos = contentHtml.indexOf($(el).toString());
+      if (pos === -1) continue;
+
+      const secao = this.getSectionForPosition(pos, boundaries);
+      if (secao === 'LEGENDADO') continue;
+
+      result.push({
+        url: $(el).attr('href') as string,
+        secao,
+        ...this.buildLinkContext($, el),
+      });
+    }
+    return result;
+  }
+
+  // Resolve os links do protetor em lotes, devolvendo os magnets prontos.
+  async resolverMagnetsDoProtetor(links: ProtectorLink[]): Promise<ExtractedMagnet[]> {
+    const resultado: ExtractedMagnet[] = [];
+    for (let i = 0; i < links.length; i += this.BATCH_SIZE) {
+      const batch = links.slice(i, i + this.BATCH_SIZE);
+      const batchResults = await Promise.all(
+        batch.map(async (link) => {
+          const magnet = await this.extractMagnetFromProtector(link.url);
+          if (!magnet) return null;
+          return {
+            magnet,
+            link: {
+              linkText: link.linkText,
+              parentText: link.parentText,
+              fullContextText: link.fullContextText,
+            },
+            secao: link.secao,
+          } as ExtractedMagnet;
+        })
+      );
+      for (const r of batchResults) {
+        if (r) resultado.push(r);
+      }
+    }
+    return resultado;
+  }
+
+  // Decide o idioma final do stream: seção tem prioridade sobre o metadata.
+  resolverIdioma(secao: SectionType, metaLanguage?: string): string {
+    if (secao === 'DUAL') return 'Dual';
+    if (secao === 'LEGENDADO') return 'Legendado';
+
+    // Sem seção: usa metadata do post, normalizando formatos compostos.
+    if (!metaLanguage) return 'Desconhecido';
+
+    const lower = metaLanguage.toLowerCase();
+    if (lower.includes('|')) return 'Dual'; // "Português | Inglês" = dual
+    if (lower.includes('nacional')) return 'Nacional';
+    if (lower.includes('dual')) return 'Dual';
+    if (lower.includes('dublado') || lower.includes('dublad')) return 'Dublado';
+    if (LEGENDADO_REGEX.test(lower)) return 'Legendado';
+    return metaLanguage;
+  }
+
+  resolverQualidade(
+    canonicalName: string | undefined,
+    link: LinkContext,
+    postTitle: string,
+    metadataQuality?: string
+  ): string {
+    const candidatos = [
+      metadataQuality,
+      canonicalName,
+      link.linkText,
+      link.fullContextText,
+      link.parentText,
+    ];
+
+    for (const texto of candidatos) {
+      if (!texto) continue;
+      const quality = this.qualityDetector.extractBestQuality(texto);
+      if (quality && this.qualityDetector.isValidQuality(quality)) return quality;
+    }
+
+    const doTitulo = this.qualityDetector.extractBestQuality(postTitle);
+    return (doTitulo && this.qualityDetector.isValidQuality(doTitulo)) ? doTitulo : 'HD';
+  }
+
+  resolverEpisodio(
+    canonicalName: string | undefined,
+    link: LinkContext
+  ): { episode?: number; episodeRangeText?: string } {
+    if (canonicalName) {
+      const r = this.formatarRange(extrairRangeEpisodios(canonicalName));
+      if (r) return r;
+    }
+
+    const contexto = link.fullContextText || link.linkText;
+    const r = this.formatarRange(extrairRangeEpisodios(contexto));
+    if (r) return r;
+
+    const epMatch = contexto.match(/EPISÓDIO\s*(\d+)/i);
+    if (epMatch) {
+      const ep = parseInt(epMatch[1], 10);
+      return { episode: ep, episodeRangeText: `Episódio ${ep}` };
+    }
+
+    return {};
+  }
+
+  formatarRange(range: { episodeStart: number; episodeEnd: number } | null | undefined): { episode: number; episodeRangeText: string } | null {
+    if (!range || range.episodeStart <= 0) return null;
+    const texto = range.episodeEnd > range.episodeStart
+      ? `Episódio ${range.episodeStart}-${range.episodeEnd}`
+      : `Episódio ${range.episodeStart}`;
+    return { episode: range.episodeStart, episodeRangeText: texto };
+  }
+
+  montarFrasesDeBusca(query: string, searchQueries?: string[]): FrasesBusca {
+    const allQueries = new Set<string>([query, ...(searchQueries || [])]);
+    const frases = new Set<string>();
+
+    for (const q of allQueries) {
+      const phrase = normalizarTexto(
+        q
+          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+          .replace(/\btemporada\s*\d+\b/gi, '')
+          .replace(/\bseason\s*\d+\b/gi, '')
+          .replace(/\b\d{4}\b/g, '')
+      );
+      if (phrase) frases.add(phrase);
+    }
+
+    logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
+
+    const baseTitles = [...frases].map(frase =>
+      normalizarTexto(frase.replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim())
+    ).filter(Boolean);
+
+    return { frases, baseTitles };
+  }
+
+  extractTitleFromPostTitle(postTitle: string): string | null {
     if (!postTitle) return null;
     return postTitle
       .replace(/\bTorrent\b.*$/i, '')
@@ -393,14 +619,7 @@ export class BludvScraper {
       .trim() || null;
   }
 
-  extractPostMetadata($: any, _content: string): {
-    quality?: string;
-    size?: string;
-    language?: string;
-    originalTitle?: string;
-    year?: number;
-    years?: number[];
-  } {
+  extractPostMetadata($: any): PostMetadata {
     const getMetaValue = (fieldName: string): string | undefined => {
       const em = $('em')
         .toArray()
@@ -415,12 +634,8 @@ export class BludvScraper {
 
     const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
     let originalTitle: string | undefined;
-
     if (originalTitleRaw && originalTitleRaw.length >= 3) {
-      originalTitle = originalTitleRaw
-        .split('|')[0]
-        .replace(/\(\d{4}\)$/, '')
-        .trim();
+      originalTitle = originalTitleRaw.split('|')[0].replace(/\(\d{4}\)$/, '').trim();
     }
 
     const yearRaw = getMetaValue('Lançamento:');
@@ -439,115 +654,19 @@ export class BludvScraper {
     };
   }
 
-  extractDualSectionProtectorLinks(
-    $: any,
-    contentHtml: string
-  ): { url: string; linkText: string; parentText: string; fullContextText: string }[] {
-    const allLinks = $('a[href*="systemads1.com"]').toArray();
-    if (!allLinks.length) return [];
-
-    const strongEls = $('.content strong, .content b').toArray();
-    let dualPos = -1;
-    let legendadoPos = contentHtml.length;
-
-    for (let i = 0; i < strongEls.length; i++) {
-      const text = $(strongEls[i]).text().trim();
-      if (dualPos === -1 && /\b(?:DUAL\s+[ÁA]UDIO|DUBLADO)\b/i.test(text)) {
-        const dualHtml = $(strongEls[i]).toString();
-        dualPos = contentHtml.indexOf(dualHtml);
-      }
-      if (dualPos !== -1 && /\b(?:LEGENDADO|LEGENDADA)\b/i.test(text)) {
-        const legendadoHtml = $(strongEls[i]).toString();
-        const pos = contentHtml.indexOf(legendadoHtml);
-        if (pos > dualPos) legendadoPos = pos;
-        break;
-      }
-    }
-
-    const mapLink = (el: any) => ({
-      url: $(el).attr('href'),
-      linkText: $(el).text().trim(),
-      parentText: $(el).parent().text().trim(),
-      fullContextText: this.getFullContextText($(el))
-    });
-
-    if (dualPos === -1) {
-      const hasLegendado = strongEls.some((el: any) =>
-        /\b(?:LEGENDADO|LEGENDADA)\b/i.test($(el).text().trim())
-      );
-      if (hasLegendado) return [];
-      return allLinks.map(mapLink);
-    }
-
-    const result: { url: string; linkText: string; parentText: string; fullContextText: string }[] = [];
-    for (const el of allLinks) {
-      const linkHtml = $(el).toString();
-      const linkPos = contentHtml.indexOf(linkHtml);
-      if (linkPos > dualPos && linkPos < legendadoPos) {
-        result.push(mapLink(el));
-      }
-    }
-    return result;
-  }
-
-  extractDirectMagnets(
-    $: any,
-    contentHtml: string
-  ): { magnet: string; linkText: string; parentText: string; fullContextText: string }[] {
-    const resultados: { magnet: string; linkText: string; parentText: string; fullContextText: string }[] = [];
-
-    // Tenta processar por blocos <center>
-    const centers = $('center').toArray();
-
-    for (const centerEl of centers) {
-      const magnetLink = $(centerEl).find('a[href^="magnet:"]').first();
-      if (!magnetLink.length) continue;
-
-      const magnet = magnetLink.attr('href')?.trim();
-      if (!magnet) continue;
-
-      const linkText = magnetLink.text().trim();
-      const parentText = magnetLink.parent().text().trim();
-
-      // Extrai qualidade a partir do span dentro do center (texto do servidor)
-      const spanText = $(centerEl).find('span').first().text().trim();
-      const fullContextText = spanText || $(centerEl).text().trim();
-
-      resultados.push({
-        magnet,
-        linkText,
-        parentText,
-        fullContextText,
-      });
-    }
-
-    // Fallback: se não encontrou nenhum center com magnet, usa método antigo
-    if (resultados.length === 0) {
-      const allLinks = $('a[href^="magnet:"]').toArray();
-      for (const el of allLinks) {
-        const magnet = $(el).attr('href')?.trim();
-        if (!magnet) continue;
-        resultados.push({
-          magnet,
-          linkText: $(el).text().trim(),
-          parentText: $(el).parent().text().trim(),
-          fullContextText: this.getFullContextText($(el)),
-        });
-      }
-    }
-
-    return resultados;
+  buildLinkContext($: any, el: any): LinkContext {
+    const $el = $(el);
+    return {
+      linkText: $el.text().trim(),
+      parentText: $el.parent().text().trim(),
+      fullContextText: this.getFullContextText($el),
+    };
   }
 
   async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     try {
-      const res = await axios.get(protectorUrl, {
-        ...AXIOS_OPTS,
-        timeout: 8000,
-        maxRedirects: 5,
-      });
-      const html: string = res.data;
-      const match = html.match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
+      const res = await axios.get(protectorUrl, { ...AXIOS_OPTS, timeout: 8000, maxRedirects: 5 });
+      const match = (res.data as string).match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
       return match ? match[1] : null;
     } catch (err: any) {
       logger.warn(`Falha ao extrair magnet do protetor: ${err.message}`);
@@ -555,40 +674,26 @@ export class BludvScraper {
     }
   }
 
-  extractQualityFromText(text: string): string | null {
-    const match = text.match(/\b(\d{3,4}p|4K|HD)\b/i);
-    return match ? match[1].toLowerCase() : null;
-  }
-
+  // Sobe pelos ancestrais buscando o primeiro nó com só UMA menção de qualidade.
+  // Duas ou mais = container grande, não serve como contexto individual.
   getFullContextText($el: any): string {
-    // Log inicial
-    console.log('[DEBUG getFullContext] INÍCIO');
-
-    // Tenta o span anterior
     const prevSpan = $el.parent().prev('span');
-    console.log('[DEBUG getFullContext] prevSpan length:', prevSpan.length);
     if (prevSpan.length) {
       const text = prevSpan.text().trim();
-      console.log('[DEBUG getFullContext] prevSpan text:', JSON.stringify(text));
       if (text) return text;
     }
 
     let current = $el.parent();
     for (let depth = 0; depth < 4; depth++) {
       const text = current.text().trim();
-      console.log(`[DEBUG getFullContext] depth=${depth} tag=${current[0]?.name} text=${text.substring(0, 120)}`);
       if (text.length > 10) {
         const matches = text.match(/\b(2160p|1080p|720p|480p|4K|HD)\b/gi);
-        console.log(`[DEBUG getFullContext] matches:`, matches);
-        if (matches && matches.length === 1) {
-          return text;
-        }
+        if (matches && matches.length === 1) return text;
       }
       current = current.parent();
     }
-    const fallback = $el.parent().text().trim();
-    console.log('[DEBUG getFullContext] FALLBACK:', fallback);
-    return fallback;
+
+    return $el.parent().text().trim();
   }
 
   cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {
@@ -602,17 +707,14 @@ export class BludvScraper {
     let episode = '';
     for (const pattern of epPatterns) {
       const match = contextText.match(pattern);
-      if (match) {
-        episode = match[0];
-        break;
-      }
+      if (match) { episode = match[0]; break; }
     }
 
     if (!episode) return '';
 
     let quality = qualityOverride || null;
     if (!quality) {
-      quality = this.extractQualityFromText(linkText) || this.extractQualityFromText(contextText);
+      quality = this.qualityDetector.extractBestQuality(linkText) || this.qualityDetector.extractBestQuality(contextText);
     }
 
     return quality ? `${episode}: ${quality}` : episode;

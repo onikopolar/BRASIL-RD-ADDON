@@ -1,6 +1,5 @@
 // Arquivo: src/titulos/technical-words.ts
-// Palavras técnicas otimizadas para filtragem de títulos de torrents
-// Exporta constantes para uso no SimilarityCalculator
+// Palavras técnicas e utilitários de parsing de títulos de torrents.
 
 export const TECHNICAL_ACRONYMS = [
   'hdr', 'dv', 'hq', 'bd', 'dvd', 'tv', 'avc', 'hevc', 'aac', 'ac3', 'dts', 'imax', '3d',
@@ -52,7 +51,7 @@ export const INTERNATIONAL_TRACKERS = [
   '1337x', 'torrentday', 'iptorrents', 'filelist', 'torrentleech',
   'demonoid', 'kickasstorrents', 'kat', 'thepiratebay', 'tpb',
   'limetorrents', 'zooqle', 'torrentz2', 'torrentdownloads', 'mononoke',
-  'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub', 'rartv', 'bone', 'BONE'
+  'nyaa', 'anidex', 'tokyotosho', 'rutracker', 'nnmclub', 'rartv', 'bone', 'BONE',
 ];
 
 export const BRAZILIAN_RELEASE_GROUPS = [
@@ -77,11 +76,15 @@ export function isTechnicalWord(word: string): boolean {
   return _ALL_NON_TITLE_WORDS.has(word.toLowerCase());
 }
 
+// Normaliza texto pra comparação: lowercase, sem acento, sem emoji, sem pontuação.
 export function normalizarTexto(texto: string): string {
   return texto
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
+    // Emojis e pictogramas (Unicode 12+) — nunca são úteis em títulos de torrent
+    .replace(/\p{Extended_Pictographic}/gu, ' ')
+    .replace(/\p{Emoji_Presentation}/gu, ' ')
     .replace(/&#0*38;/g, '&')
     .replace(/&#x26;/gi, '&')
     .replace(/&amp;/gi, '&')
@@ -130,7 +133,7 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'vo', 'ov',
   'legendado', 'legendada', 'legenda',
   'lege',
-  'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', "Hindi",
+  'yg', 'KyoGo', 'kyogo', 'english', 'English', 'hindi', 'Hindi',
   'turg', 'Turg', 'TURG', 'fitgirl', 'FitGirl', 'steamrip',
   'g4ris', 'rartv', 'ntb', 'bone', 'BONE', 'ION10', '10bit', 'CM', 'RDNYB', 'DCPRiP',
   'legedando', 'legedanda', 'legedados', 'legedadas',
@@ -138,12 +141,33 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
 
 const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
-  'coletanea', 'franquia', 'duologia', 'saga', 'todas as temporadas', 'temporada completa', 'season pack', 'pack completo',
+  'coletanea', 'franquia', 'duologia', 'saga', 'todas as temporadas',
+  'temporada completa', 'season pack', 'pack completo',
 ]);
 
+// Detecta título de coleção/franquia/pack. Normaliza internamente — pode receber texto cru.
 export function isCollectionTitle(title: string): boolean {
-  const lower = title.toLowerCase();
-  return [...COLLECTION_WORDS].some(w => lower.includes(w));
+  if (!title) return false;
+  const normalizado = normalizarTexto(title);
+  if (!normalizado) return false;
+
+  for (const termo of COLLECTION_WORDS) {
+    const termoNorm = normalizarTexto(termo);
+    if (!termoNorm) continue;
+
+    // Termos compostos: busca substring direta (o espaço já serve de delimitador).
+    if (termoNorm.includes(' ')) {
+      if (normalizado.includes(termoNorm)) return true;
+      continue;
+    }
+
+    // Termos de 1 palavra: exige boundary antes e depois pra evitar "sagaz" casar "saga".
+    const escaped = termoNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`);
+    if (re.test(normalizado)) return true;
+  }
+
+  return false;
 }
 
 export function containsInternationalIndicators(title: string): {
@@ -163,7 +187,7 @@ export function containsInternationalIndicators(title: string): {
     return {
       isInternational: true,
       indicators: foundIndicators,
-      reason: `Contém indicadores internacionais: ${foundIndicators.join(', ')}`
+      reason: `Contém indicadores internacionais: ${foundIndicators.join(', ')}`,
     };
   }
   return { isInternational: false, indicators: [], reason: 'Nenhum indicador internacional encontrado' };
@@ -197,7 +221,7 @@ export function containsBrazilianIndicators(title: string): {
     return {
       isBrazilian: true,
       indicators: foundIndicators,
-      reason: `Contém indicadores brasileiros: ${foundIndicators.join(', ')}`
+      reason: `Contém indicadores brasileiros: ${foundIndicators.join(', ')}`,
     };
   }
   return { isBrazilian: false, indicators: [], reason: 'Nenhum indicador brasileiro encontrado' };
@@ -210,14 +234,13 @@ export function getTechnicalWordsStats() {
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
-    version: '1.4.0',
-    description: 'Detecção de temporada em packs completos corrigida'
+    version: '1.5.0',
+    description: 'Boundaries em SxxExx, S04 isolado, padrão Temp..(N) seguro, isCollectionTitle normalizado',
   };
 }
 
 export function getPotentialSequelNumbers(title: string): number[] {
-  const lower = title.toLowerCase()
-    .normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+  const lower = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '');
   const spaceTokens = lower
     .replace(/[^\w\s.]/g, ' ')
     .replace(/\s+/g, ' ')
@@ -302,14 +325,19 @@ export interface EpisodeRange {
   episodeEnd: number;
 }
 
+// Extrai range de temporada/episódio de um título. Devolve null quando não há nada.
+// Os padrões estão ordenados do mais específico ao mais genérico.
 export function extrairRangeEpisodios(title: string): EpisodeRange | null {
+  if (!title) return null;
+
   const t = title
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
     .trim();
 
-  // ═══ Padrão 1: SxxExx ═══
-  const sxxExx = t.match(/s(\d{1,2})\s*e(\d{1,3})/i);
+  // ═══ Padrão 1: SxxExx (com múltiplos episódios opcionais) ═══
+  // \b no início evita casar o "S" de "CLASS04"; \b no fim evita match parcial em E01123.
+  const sxxExx = t.match(/\bs(\d{1,2})\s*e(\d{1,3})\b/i);
   if (sxxExx) {
     const season = parseInt(sxxExx[1]);
     const firstEp = parseInt(sxxExx[2]);
@@ -355,6 +383,13 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     }
   }
 
+  // ═══ Padrão 1c: Sxx isolado — season pack (ex.: "Reacher.S04.1080p") ═══
+  // \b antes impede "CLASS04"; \b depois impede "S04E01" (que já casou acima).
+  const sIsolado = t.match(/\bs(\d{1,2})\b(?!\s*e\d)/i);
+  if (sIsolado) {
+    return { season: parseInt(sIsolado[1]), episodeStart: 0, episodeEnd: 0 };
+  }
+
   // ═══ Padrão 2: 2x04 ═══
   const seasonXEp = t.match(/\b(\d{1,2})x(\d{1,3})\b/i);
   if (seasonXEp) {
@@ -375,8 +410,9 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 3b: Temporada/Season/Temp 2 (6) ═══
-  const tempComEpParenteses = t.match(/\b(?:temporada|season|temp)\s*(\d{1,2})\s*\((\d{1,3})\)/i);
+  // ═══ Padrão 3b: Temporada/Season/Temp N (M) — com gap controlado ═══
+  // [^\d(]{0,20} evita capturar parênteses aleatórios longe do season.
+  const tempComEpParenteses = t.match(/\b(?:temporada|season|temp|s)\s*(\d{1,2})\b[^\d(]{0,20}\(\s*(\d{1,3})\s*\)/i);
   if (tempComEpParenteses) {
     const season = parseInt(tempComEpParenteses[1]);
     const episode = parseInt(tempComEpParenteses[2]);
@@ -385,7 +421,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     }
   }
 
-  // ═══ Padrão 4a ═══
+  // ═══ Padrão 4a: Episódio N ao M ═══
   const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e)\s*(\d{1,3})\b/i);
   if (episodioRangeWords) {
     return {
@@ -395,7 +431,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4b ═══
+  // ═══ Padrão 4b: Episódio N-M ═══
   const episodioRangeHyphen = t.match(/\bepis[oó]dios?\s*(\d{1,3})\s*-\s*(\d{1,3})\b/i);
   if (episodioRangeHyphen) {
     return {
@@ -405,7 +441,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 4c ═══
+  // ═══ Padrão 4c: Nº e Mº episódio ═══
   const ptRangeComOrdinal = t.match(/(\d{1,3})\s*º\s*e\s*(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptRangeComOrdinal) {
     return {
@@ -415,21 +451,21 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
-  // ═══ Padrão 5b ═══
+  // ═══ Padrão 5b: Nº episódio ═══
   const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptSingleComOrdinal) {
     const ep = parseInt(ptSingleComOrdinal[1]);
     return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
-  // ═══ Padrão 5 ═══
+  // ═══ Padrão 5: Episódio N ═══
   const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
   if (episodioOnly) {
     const ep = parseInt(episodioOnly[1]);
     return { season: 0, episodeStart: ep, episodeEnd: ep };
   }
 
-  // ═══ Padrão 6 ═══
+  // ═══ Padrão 6: S02 / Season02 / 2x sozinhos ═══
   const sOnly = t.match(/^s(\d{1,2})$/i);
   if (sOnly) return { season: parseInt(sOnly[1]), episodeStart: 0, episodeEnd: 0 };
   const seasonOnly = t.match(/^season(\d{1,2})$/i);
@@ -437,17 +473,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const xOnly = t.match(/^(\d{1,2})x$/i);
   if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 7 ═══
+  // ═══ Padrão 7: Nª temporada ═══
   const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
   if (tempPack) {
     return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 8 ═══
+  // ═══ Padrão 8: Season N ═══
   const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
   if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
 
-  // ═══ Padrão 9 ═══
+  // ═══ Padrão 9: temporada completa / complete season / season pack ═══
   const fullSeasonPattern = /\b(\d{1,2})\s*[ªº°]?\s*temporada\s*completa\b/i;
   const fullSeasonMatch = t.match(fullSeasonPattern);
   if (fullSeasonMatch) {
@@ -466,18 +502,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     return { season: parseInt(seasonPackEnMatch[1]), episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 10: Temp01 ... (4) ═══
-  const tempDir = t.match(/\b(?:temp|temporada|season|s)\s*(\d{1,2})\b/i);
-  const epParen = t.match(/\((\d{1,3})\)/);
-  if (tempDir && epParen) {
-    const season = parseInt(tempDir[1]);
-    const episode = parseInt(epParen[1]);
-    if (season > 0 && episode > 0 && ![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
-      return { season, episodeStart: episode, episodeEnd: episode };
-    }
-  }
-
   return null;
 }
 
-console.log('[INFO] TechnicalWords carregado com extração de packs completos corrigida');
+console.log('[INFO] TechnicalWords carregado — v1.5.0');

@@ -1,6 +1,10 @@
+import { Logger } from '../utils/logger.js';
+
 // ── Carregamento lazy do parse-torrent (ESM) ──────────────────────────
 
 let analisadorTorrent: any = null;
+
+const logger = new Logger('MagnetHelper');
 
 async function carregarAnalisador() {
   if (!analisadorTorrent) {
@@ -90,7 +94,7 @@ export async function gerarUrlResolve(
   parametros.append('magnet', magnet);
 
   const consulta = parametros.toString();
-  console.log('🔍 GERAR_URL_RESOLVE', { tipo, temporada, episodio, qualidade, imdbId, infoHash, consulta: consulta || 'SEM_QUERY' });
+  logger.debug('GERAR_URL_RESOLVE', { tipo, temporada, episodio, qualidade, imdbId, infoHash });
   if (consulta) url += `?${consulta}`;
 
   return url;
