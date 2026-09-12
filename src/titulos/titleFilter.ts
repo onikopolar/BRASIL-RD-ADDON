@@ -168,10 +168,14 @@ export class TitleFilter {
       }
 
       const seasonParaSimilaridade = temporadaAlvo;
+
+      // Mexi aqui pra rastrear que o years chega no Similarity, sem isso não dava pra saber se ia ou não
+      this.logger.debug(`TITLEFILTER_REPASSA | torrent="${tituloTorrent.substring(0, 50)}" | year=${anoTorrent ?? '-'} | years=[${years?.join(',') ?? '-'}] | imdbAno=${imdbTitles?.year ?? '-'} | isYearInCollection=${isYearInCollection}`);
+
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent,
         imdbId,
-        { year: anoTorrent, season: seasonParaSimilaridade },
+        { year: anoTorrent, season: seasonParaSimilaridade, years },
         tituloParaIdioma,
         imdbTitles ?? undefined
       );

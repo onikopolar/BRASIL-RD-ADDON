@@ -21,9 +21,29 @@ const LEGENDADO_REGEX = new RegExp(
 // ("legenda"). O substantivo aparece em rótulos tipo "Legenda: PT-BR" e links pro opensubtitles.
 const LEGENDADO_CABECALHO_REGEX = /\blegendad[ao]s?\b/i;
 
+// Irmão anterior só conta como marcador de qualidade se for qualidade pura
+// "720p" casa, "A Era do Gelo 1-4 720p/1080p" não casa
+const QUALIDADE_PURA_REGEX = /^\s*(?:qualidade:?\s*)?(\d{3,4}p|4k|uhd|full\s*hd)\s*$/i;
+
 const logger = new Logger('WordPressScraper');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
+
+// Mexi aqui porque a API do WP retorna entidades HTML cruas (&#8211;, &amp;, &nbsp;) no title.rendered
+// Sem decodificar, títulos com endash apareciam como "A Era do Gelo 2 &#8211; (2005)" no stream final
+function decodeHtmlEntities(texto: string): string {
+  if (!texto || (!texto.includes('&') && !texto.includes('&#'))) return texto;
+
+  return texto
+    .replace(/&#(\d+);/g, (_m, cod) => String.fromCharCode(parseInt(cod, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, cod) => String.fromCharCode(parseInt(cod, 16)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'");
+}
 
 class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
@@ -102,6 +122,12 @@ export type IdiomaFlags = {
 };
 export type TamanhoNumerico = { valor: number; unidade: 'GB' | 'MB' | 'KB' };
 
+// Contexto local de um link de magnet, extraído no momento em que o elemento está na mão
+export type ContextoLocalMagnet = {
+  altDaImg: string | null;
+  textoIrmaoAnterior: string | null;
+};
+
 export class WordPressScraper {
   public readonly qualityDetector: QualityDetector;
   public readonly magnetCache: CacheService;
@@ -166,9 +192,18 @@ export class WordPressScraper {
 
     for (const post of posts) {
       if (!post.id || !post.title?.rendered || !post.link) continue;
+
+      // Mexi aqui porque title.rendered vem com entidades HTML cruas da API do WP
+      const titleBruto = post.title.rendered as string;
+      const titleLimpo = decodeHtmlEntities(titleBruto);
+
+      if (titleBruto !== titleLimpo) {
+        logger.debug(`WP ${site.name}: DECODE_TITLE | bruto="${titleBruto.substring(0, 60)}" | limpo="${titleLimpo.substring(0, 60)}"`);
+      }
+
       postItems.push({
         id: post.id,
-        title: post.title.rendered,
+        title: titleLimpo,
         url: post.link,
       });
     }
@@ -335,6 +370,80 @@ export class WordPressScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
+  // Extrai o contexto local do link do magnet no momento em que ele está na mão.
+  // Duas fontes específicas do Comando Torrents:
+  //   - alt da <img> dentro do <a> (Zodíaco)
+  //   - texto do irmão anterior quando é qualidade pura, tipo <p><strong>720p</strong></p> (Ice Age)
+  private extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
+    const $el = $(el);
+
+    const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
+
+    let textoIrmaoAnterior: string | null = null;
+    const irmao = $el.parent().prev();
+    if (irmao.length) {
+      const texto = irmao.text().trim();
+      if (texto && QUALIDADE_PURA_REGEX.test(texto)) {
+        textoIrmaoAnterior = texto;
+      }
+    }
+
+    return { altDaImg, textoIrmaoAnterior };
+  }
+
+  // Resolve a qualidade específica DESTE magnet, olhando em ordem do mais específico ao mais genérico.
+  // Mexi aqui porque o WP Comando guarda qualidade em lugares diferentes por post:
+  // Zodíaco guarda no alt da img, Ice Age guarda num <p><strong>720p</strong></p> antes do link.
+  private resolverQualidadeEspecifica(
+    canonicalName: string | null,
+    ctxLocal: ContextoLocalMagnet,
+    linkText: string,
+    fullContextText: string,
+    parentText: string,
+    postTitle: string,
+    html: string
+  ): { qualidade: string; fonte: string } {
+    // 1. canonicalName do próprio magnet
+    if (canonicalName) {
+      const q = this.extractQualityFromText(canonicalName);
+      if (q) return { qualidade: q, fonte: 'canonicalName' };
+    }
+
+    // 2. alt da imagem dentro do link (Zodíaco)
+    if (ctxLocal.altDaImg) {
+      const q = this.extractQualityFromText(ctxLocal.altDaImg);
+      if (q) return { qualidade: q, fonte: 'altDaImg' };
+    }
+
+    // 3. Irmão anterior com qualidade pura (Ice Age)
+    if (ctxLocal.textoIrmaoAnterior) {
+      const q = this.extractQualityFromText(ctxLocal.textoIrmaoAnterior);
+      if (q) return { qualidade: q, fonte: 'textoIrmaoAnterior' };
+    }
+
+    // 4. linkText
+    const qLink = this.extractQualityFromText(linkText);
+    if (qLink) return { qualidade: qLink, fonte: 'linkText' };
+
+    // 5. fullContextText (ancestral que tenha UMA única menção)
+    const qCtx = this.extractQualityFromText(fullContextText);
+    if (qCtx) return { qualidade: qCtx, fonte: 'fullContextText' };
+
+    // 6. parentText
+    const qParent = this.extractQualityFromText(parentText);
+    if (qParent) return { qualidade: qParent, fonte: 'parentText' };
+
+    // 7. postTitle
+    const qPost = this.extractQualityFromText(postTitle);
+    if (qPost) return { qualidade: qPost, fonte: 'postTitle' };
+
+    // 8. HTML inteiro
+    const qHtml = this.extractQualityFromText(html);
+    if (qHtml) return { qualidade: qHtml, fonte: 'html' };
+
+    return { qualidade: 'HD', fonte: 'fallback' };
+  }
+
   async scrapePostApi(
     postId: number,
     postTitle: string,
@@ -346,7 +455,15 @@ export class WordPressScraper {
     const postUrl = `https://comando1.com/wp-json/wp/v2/posts/${postId}?_fields=id,title,link,content`;
     const response = await axios.get(postUrl, jsonAxiosConfig);
     const post = response.data;
-    const titleRendered = post.title?.rendered || postTitle;
+
+    // Mexi aqui porque o title.rendered do fetch completo também vem com entidades HTML cruas
+    const titleRenderedBruto = post.title?.rendered || postTitle;
+    const titleRendered = decodeHtmlEntities(titleRenderedBruto);
+
+    if (titleRenderedBruto !== titleRendered) {
+      logger.debug(`WP ${provider}: DECODE_TITLE_FULL | bruto="${titleRenderedBruto.substring(0, 60)}" | limpo="${titleRendered.substring(0, 60)}"`);
+    }
+
     const contentHtml = post.content?.rendered || '';
 
     if (!contentHtml) {
@@ -454,7 +571,8 @@ export class WordPressScraper {
         const parentText = $(el).parent().text().trim();
         const linkText = $(el).text().trim();
         const fullContextText = this.getFullContextText($(el));
-        return this.processMagnetItem(magnet, parentText, linkText, fullContextText, postTitle, html, provider, type, globalOriginalTitle, year, years);
+        const ctxLocal = this.extrairContextoLocal($, el);
+        return this.processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years);
       });
 
       const batchResults = await Promise.all(batchPromises);
@@ -506,8 +624,9 @@ export class WordPressScraper {
         const parentText = $(el).parent().text().trim();
         const linkText = $(el).text().trim();
         const fullContextText = this.getFullContextText($(el));
+        const ctxLocal = this.extrairContextoLocal($, el);
 
-        return this.processMagnetItem(magnet, parentText, linkText, fullContextText, postTitle, html, provider, type, globalOriginalTitle, year, years);
+        return this.processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years);
       });
 
       const batchResults = await Promise.all(batchPromises);
@@ -541,6 +660,7 @@ export class WordPressScraper {
     parentText: string,
     linkText: string,
     fullContextText: string,
+    ctxLocal: ContextoLocalMagnet,
     postTitle: string,
     html: string,
     provider: string,
@@ -552,31 +672,47 @@ export class WordPressScraper {
     const dados = await this.analisarMagnetComCache(magnet, provider);
     const canonicalName = dados?.nome ?? null;
 
-    const getQualityOrNull = (text: string): string | null => {
-      const qualities = this.qualityDetector.extractAllQualities(text);
-      return qualities.length > 0 ? qualities[0] : null;
-    };
-
-    const dnQuality = canonicalName ? getQualityOrNull(canonicalName) : null;
-    const linkQuality = getQualityOrNull(linkText);
-    const contextQuality = getQualityOrNull(fullContextText);
-
-    const quality = dnQuality || linkQuality || contextQuality || this.detectQuality(parentText, postTitle, html, canonicalName);
+    // Mexi aqui pra delegar toda a detecção pro QualityDetector numa cadeia clara de prioridade
+    // Antes a qualidade vinha só de linkText/contextQuality/detectQuality e não pegava alt da img nem irmão anterior
+    const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeEspecifica(
+      canonicalName,
+      ctxLocal,
+      linkText,
+      fullContextText,
+      parentText,
+      postTitle,
+      html
+    );
 
     if (!this.qualityDetector.isValidQuality(quality)) {
-      logger.warn(`WP ${provider}: qualidade "${quality}" NÃO permitida`);
+      logger.warn(`WP ${provider}: qualidade "${quality}" NÃO permitida | fonte=${fonteQualidade}`);
       return null;
     }
 
     const size = this.extractSize(parentText) || this.extractSize(postTitle);
     const language = this.extractLanguage(postTitle) || this.extractLanguage(parentText) || 'Desconhecido';
     const episode = this.extractEpisodeFromText(parentText);
-    const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, dnQuality || linkQuality);
+    const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
 
     const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
 
     const originalTitleFinal = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle || cleanTitleFromPost;
     const displayTitle = cleanTitleFromPost || canonicalName || postTitle;
+
+    // Mexi aqui porque magnet sem dn= deixava canonicalName vazio, e aí a stream caía no title genérico do post
+    // Se veio do magnet, preserva; se não, sintetiza com originalTitle + anos + qualidade
+    const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
+      originalTitleFinal || postTitle,
+      years,
+      quality
+    );
+
+    if (!canonicalName) {
+      logger.debug(`WP ${provider}: canonicalName sintetizado | post="${postTitle.substring(0, 40)}" | canon="${canonicalFinal}"`);
+    }
+
+    // Log rastreável da qualidade escolhida — ajuda a saber qual fonte ganhou em cada magnet
+    logger.debug(`WP QUALIDADE | provider=${provider} | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
 
     return {
       title: this.cleanTitle(displayTitle),
@@ -598,22 +734,57 @@ export class WordPressScraper {
       originalTitle: originalTitleFinal ?? undefined,
       year,
       years: years ?? (year ? [year] : undefined),
-      canonicalName: canonicalName ?? undefined,
+      canonicalName: canonicalFinal,
     };
   }
 
+  // Mexi aqui pra limpar caracteres soltos no fim do título base antes de compor o canonical
+  // "Ice Age*" vira "Ice Age", "A Era do Gelo !" vira "A Era do Gelo"
+  private limparTituloBase(titulo: string): string {
+    return titulo
+      .replace(/[*]+/g, '')
+      .replace(/[?!,;:]+\s*$/g, '')
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Mexi aqui pra montar nome descritivo quando o magnet não traz dn= próprio
+  // Formato: "Título Base <anos> <qualidade>", tipo "A Era do Gelo 2 2006 720p"
+  private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
+    const baseLimpo = this.limparTituloBase(base);
+
+    const anos = years && years.length > 0
+      ? (years.length === 1
+          ? `${years[0]}`
+          : `${years[0]}-${years[years.length - 1]}`)
+      : null;
+
+    return [baseLimpo, anos, quality].filter(Boolean).join(' ').trim();
+  }
+
+  // Mexi aqui porque o regex antigo (\s*[–|-]\s*) cortava "1-4" no hífen sem espaços,
+  // transformando "A Era do Gelo 1-4 (2012) – BluRay..." em "A Era do Gelo 1"
+  // Agora só corta quando o separador tem espaços em volta, preservando ranges tipo 1-4
   extractTitleFromPostTitle(postTitle: string): string | null {
     if (!postTitle) return null;
-    return postTitle
+    const original = postTitle;
+    const limpo = postTitle
       .replace(/\bTorrent\b.*$/i, '')
-      .replace(/\s*[–|-]\s*.*$/, '')
+      .replace(/\s+[–|-]\s+.*$/, '')
       .replace(/\b(720p|1080p|2160p|4K|BluRay|WEB-DL|DUAL|Dublado|Legendado)\b.*$/i, '')
-      .trim() || null;
+      .trim();
+
+    if (original !== limpo) {
+      logger.debug(`WP EXTRACT_TITLE | post="${original.substring(0, 60)}" | extraido="${limpo.substring(0, 60)}"`);
+    }
+
+    return limpo || null;
   }
 
   extractOriginalTitleFromContext(contextText: string): string | null {
     const match = contextText.match(/T[ií]tulo\s+Original:\s*([^\n]+)/i);
-    return match?.[1]?.trim() || null;
+    if (!match?.[1]) return null;
+    return this.limparTituloBase(match[1].trim()) || null;
   }
 
   extractInfoBlock($: any, html: string): InfoBlock {
@@ -637,8 +808,12 @@ export class WordPressScraper {
 
     const sizeMatch = articleText.match(/Tamanho:\s*([^\n]+)/i);
 
+    // Mexi aqui porque "Ice Age*" virava título base sujo no canonicalName sintetizado
+    const originalBruto = originalMatch?.[1]?.trim();
+    const originalTitle = originalBruto ? this.limparTituloBase(originalBruto) : undefined;
+
     return {
-      originalTitle: originalMatch?.[1]?.trim(),
+      originalTitle,
       translatedTitle: translatedMatch?.[1]?.trim(),
       year: years.length > 0 ? years[0] : undefined,
       years,
@@ -670,20 +845,6 @@ export class WordPressScraper {
       }
     }
     return null;
-  }
-
-  detectQuality(parentText: string, postTitle: string, fullHtml: string, canonicalName?: string | null): string {
-    if (canonicalName) {
-      const q = this.qualityDetector.extractBestQuality(canonicalName);
-      if (q && q !== 'HD' && this.qualityDetector.isValidQuality(q)) {
-        return q;
-      }
-    }
-
-    let quality = this.qualityDetector.extractBestQuality(parentText);
-    if (quality === 'HD') quality = this.qualityDetector.extractBestQuality(postTitle);
-    if (quality === 'HD') quality = this.qualityDetector.extractBestQuality(fullHtml);
-    return quality || 'HD';
   }
 
   extractCanonicalNameSync(magnet: string): string | null {

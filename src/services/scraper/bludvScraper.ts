@@ -311,12 +311,33 @@ export class BludvScraper {
       if (magnetsVistos.has(magnet)) continue;
       magnetsVistos.add(magnet);
 
-      const quality = this.resolverQualidade(canonicalName, link, postTitle, metadata.quality);
+      // Mexi aqui pra pegar a fonte da qualidade e logar. Sem isso não dava pra saber por que 720p virava 1080p.
+      const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeComFonte(
+        canonicalName,
+        link,
+        postTitle,
+        metadata.quality
+      );
       const { episode, episodeRangeText } = this.resolverEpisodio(canonicalName, link);
       const language = this.resolverIdioma(secao, metadata.language);
 
       const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
       const displayTitle = originalTitleFinal || canonicalName || postTitle;
+
+      // Mexi aqui porque magnet sem dn= deixava canonicalName vazio, e aí a stream caía no title genérico do post
+      // Se veio do magnet, preserva; se não, sintetiza com originalTitle + anos + qualidade
+      const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
+        originalTitleFinal || postTitle,
+        metadata.years,
+        quality
+      );
+
+      if (!canonicalName) {
+        logger.debug(`[BLUDV] canonicalName sintetizado | post="${postTitle.substring(0, 40)}" | canon="${canonicalFinal}"`);
+      }
+
+      // Log rastreável da qualidade escolhida — mesma ideia do WP, ajuda a ver qual fonte ganhou em cada magnet
+      logger.debug(`[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
 
       const size = metadata.size || 'Desconhecido';
 
@@ -344,12 +365,24 @@ export class BludvScraper {
         originalTitle: originalTitleFinal ?? undefined,
         year: metadata.year,
         years: metadata.years,
-        canonicalName,
+        canonicalName: canonicalFinal,
         imdbConfirmed,
       });
     }
 
     return results;
+  }
+
+  // Mexi aqui pra montar nome descritivo quando o magnet não traz dn= próprio
+  // Formato: "Título Base <anos> <qualidade>", tipo "Ice Age 2002-2012 1080p"
+  private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
+    const anos = years && years.length > 0
+      ? (years.length === 1
+          ? `${years[0]}`
+          : `${years[0]}-${years[years.length - 1]}`)
+      : null;
+
+    return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
   // Percorre os <strong>/<b> dentro do conteúdo e acha as posições dos cabeçalhos
@@ -534,28 +567,63 @@ export class BludvScraper {
     return metaLanguage;
   }
 
+  // Mexi aqui porque a ordem antiga colocava metadataQuality (genérico do post) antes do
+  // fullContextText (específico do magnet). Numa quadrilogia com "Blu-ray Rip" no metadata,
+  // os dois magnets saíam como 1080p mesmo o de baixo tendo "720p" escrito no span.
+  // Ordem nova: específico do magnet vence genérico do post.
+  private resolverQualidadeComFonte(
+    canonicalName: string | undefined,
+    link: LinkContext,
+    postTitle: string,
+    metadataQuality?: string
+  ): { qualidade: string; fonte: string } {
+    // 1. canonicalName do magnet (mais específico)
+    if (canonicalName) {
+      const q = this.qualityDetector.extractBestQuality(canonicalName);
+      if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'canonicalName' };
+    }
+
+    // 2. fullContextText (o span "SERVIDOR... 720p" que fica acima do magnet)
+    if (link.fullContextText) {
+      const q = this.qualityDetector.extractBestQuality(link.fullContextText);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'fullContextText' };
+    }
+
+    // 3. linkText
+    if (link.linkText) {
+      const q = this.qualityDetector.extractBestQuality(link.linkText);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'linkText' };
+    }
+
+    // 4. parentText
+    if (link.parentText) {
+      const q = this.qualityDetector.extractBestQuality(link.parentText);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'parentText' };
+    }
+
+    // 5. metadataQuality (do post — genérico, vem por último)
+    if (metadataQuality) {
+      const q = this.qualityDetector.extractBestQuality(metadataQuality);
+      if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'metadataQuality' };
+    }
+
+    // 6. postTitle
+    if (postTitle) {
+      const q = this.qualityDetector.extractBestQuality(postTitle);
+      if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'postTitle' };
+    }
+
+    return { qualidade: 'HD', fonte: 'fallback' };
+  }
+
+  // Wrapper mantido pra compatibilidade — só devolve a qualidade sem a fonte
   resolverQualidade(
     canonicalName: string | undefined,
     link: LinkContext,
     postTitle: string,
     metadataQuality?: string
   ): string {
-    const candidatos = [
-      metadataQuality,
-      canonicalName,
-      link.linkText,
-      link.fullContextText,
-      link.parentText,
-    ];
-
-    for (const texto of candidatos) {
-      if (!texto) continue;
-      const quality = this.qualityDetector.extractBestQuality(texto);
-      if (quality && this.qualityDetector.isValidQuality(quality)) return quality;
-    }
-
-    const doTitulo = this.qualityDetector.extractBestQuality(postTitle);
-    return (doTitulo && this.qualityDetector.isValidQuality(doTitulo)) ? doTitulo : 'HD';
+    return this.resolverQualidadeComFonte(canonicalName, link, postTitle, metadataQuality).qualidade;
   }
 
   resolverEpisodio(

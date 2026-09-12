@@ -201,17 +201,22 @@ class TorrentScraperService {
     }
     extractDnFromMagnet(magnet) {
         const dnMatch = magnet.match(/dn=([^&]+)/i);
-        return dnMatch ? decodeURIComponent(dnMatch[1].replace(/\+/g, ' ')) : magnet;
+        if (!dnMatch)
+            return undefined;
+        return decodeURIComponent(dnMatch[1].replace(/\+/g, ' '));
     }
     mapHdrResult(r, type) {
         if (!r.magnet)
             return null;
-        const magnetName = r.canonicalName || this.extractDnFromMagnet(r.magnet) || r.title;
+        const dnDoMagnet = this.extractDnFromMagnet(r.magnet);
+        const temDn = dnDoMagnet !== undefined;
+        const magnetName = r.canonicalName || dnDoMagnet || r.title;
         const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
         const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(magnetName);
         const season = r.season ?? range?.seasonStart ?? undefined;
         const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
         const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
+        logger.debug(`HDR_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | fallbackTitle="${r.title.substring(0, 40)}" | escolhido="${magnetName.substring(0, 50)}"`);
         return this.buildTorrentResult({
             title: r.title,
             magnet: r.magnet,
@@ -238,8 +243,8 @@ class TorrentScraperService {
         if (!r.magnet)
             return null;
         const dnDoMagnet = this.extractDnFromMagnet(r.magnet);
-        const temDn = dnDoMagnet !== r.magnet;
-        const displayName = r.canonicalName || (temDn ? dnDoMagnet : undefined);
+        const temDn = dnDoMagnet !== undefined;
+        const displayName = r.canonicalName || dnDoMagnet;
         let quality = this.qualityDetector.extractQualityFromFilename(displayName || '');
         if (quality === 'HD' && r.qualityHint) {
             const hintQuality = this.qualityDetector.extractQualityFromFilename(r.qualityHint);
@@ -250,6 +255,7 @@ class TorrentScraperService {
         const season = r.season ?? range?.seasonStart ?? undefined;
         const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
         const titleFinal = r.canonicalName || r.originalTitle || displayName || 'Starck Torrent';
+        logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}"`);
         return this.buildTorrentResult({
             title: titleFinal,
             magnet: r.magnet,
@@ -264,7 +270,7 @@ class TorrentScraperService {
             episode,
             originalTitle: r.originalTitle,
             year: r.year,
-            canonicalName: r.canonicalName || (temDn ? dnDoMagnet : undefined),
+            canonicalName: r.canonicalName || dnDoMagnet,
             infoHash: r.infoHash,
             confidence: 0.70,
             relevanceScore: 0,

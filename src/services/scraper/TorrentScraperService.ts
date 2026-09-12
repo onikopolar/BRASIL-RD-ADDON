@@ -270,9 +270,12 @@ export class TorrentScraperService {
     };
   }
 
-  private extractDnFromMagnet(magnet: string): string {
+  // Mexi aqui porque o magnet sem &dn= fazia essa função devolver o magnet inteiro, virando título depois
+  // Agora devolve undefined quando não tem dn, deixando o fallback por title acontecer
+  private extractDnFromMagnet(magnet: string): string | undefined {
     const dnMatch = magnet.match(/dn=([^&]+)/i);
-    return dnMatch ? decodeURIComponent(dnMatch[1].replace(/\+/g, ' ')) : magnet;
+    if (!dnMatch) return undefined;
+    return decodeURIComponent(dnMatch[1].replace(/\+/g, ' '));
   }
 
   private mapHdrResult(
@@ -294,12 +297,18 @@ export class TorrentScraperService {
   ): TorrentResult | null {
     if (!r.magnet) return null;
 
-    const magnetName = r.canonicalName || this.extractDnFromMagnet(r.magnet) || r.title;
+    const dnDoMagnet = this.extractDnFromMagnet(r.magnet);
+    const temDn = dnDoMagnet !== undefined;
+    // Ordem de prioridade: canonicalName do scraper, senão dn do magnet, senão title do post
+    const magnetName = r.canonicalName || dnDoMagnet || r.title;
     const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
     const range = extrairRangeEpisodios(magnetName);
     const season = r.season ?? range?.seasonStart ?? undefined;
     const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
     const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
+
+    // Log pra ver de onde saiu o canonicalName do HDR após o fix
+    logger.debug(`HDR_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | fallbackTitle="${r.title.substring(0, 40)}" | escolhido="${magnetName.substring(0, 50)}"`);
 
     return this.buildTorrentResult({
       title: r.title,
@@ -341,8 +350,9 @@ export class TorrentScraperService {
     if (!r.magnet) return null;
 
     const dnDoMagnet = this.extractDnFromMagnet(r.magnet);
-    const temDn = dnDoMagnet !== r.magnet;
-    const displayName = r.canonicalName || (temDn ? dnDoMagnet : undefined);
+    // Mexi aqui também porque o extractDnFromMagnet agora devolve undefined em vez do magnet cru
+    const temDn = dnDoMagnet !== undefined;
+    const displayName = r.canonicalName || dnDoMagnet;
 
     let quality = this.qualityDetector.extractQualityFromFilename(displayName || '');
     if (quality === 'HD' && r.qualityHint) {
@@ -355,6 +365,9 @@ export class TorrentScraperService {
     const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
 
     const titleFinal = r.canonicalName || r.originalTitle || displayName || 'Starck Torrent';
+
+    // Log pra ver de onde saiu o displayName do Starck após o fix
+    logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}"`);
 
     return this.buildTorrentResult({
       title: titleFinal,
@@ -370,7 +383,7 @@ export class TorrentScraperService {
       episode,
       originalTitle: r.originalTitle,
       year: r.year,
-      canonicalName: r.canonicalName || (temDn ? dnDoMagnet : undefined),
+      canonicalName: r.canonicalName || dnDoMagnet,
       infoHash: r.infoHash,
       confidence: 0.70,
       relevanceScore: 0,
