@@ -122,19 +122,55 @@ export class StreamFormatter {
     return 'PT-BR';
   }
 
+  //  FORMATAÇÃO DE TAMANHO
+  //
+  // FIX 9: scrapers entregam size como string ("7 GB"), mas o DB (Postgres BIGINT)
+  // devolve como number (bytes). Sem isso, streams do DB saíam "💾 10522669875".
+  // A função aceita os dois formatos e sempre devolve string legível.
+
+  private formatarTamanho(size: string | number | undefined | null): string | null {
+    if (size === undefined || size === null || size === '') return null;
+
+    // String com unidade ("7 GB", "826 MB") → usa direto
+    if (typeof size === 'string') {
+      if (/\d+\s*(GB|MB|KB)/i.test(size)) return size;
+      const num = Number(size);
+      if (!Number.isFinite(num) || num <= 0) return null;
+      return this.bytesParaHumano(num);
+    }
+
+    // Number puro (bytes do DB) → formata
+    if (typeof size === 'number' && size > 0) {
+      return this.bytesParaHumano(size);
+    }
+
+    return null;
+  }
+
+  private bytesParaHumano(bytes: number): string {
+    if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+    if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(2)} MB`;
+    if (bytes >= 1024) return `${(bytes / 1024).toFixed(2)} KB`;
+    return `${bytes} B`;
+  }
+
   //  MONTAGEM DE TÍTULO
 
   private formatTitleCorreto(
     torrentTitle: string,
     seeds: number,
-    size: string | undefined,
+    size: string | number | undefined,
     language: string,
     provider: string
   ): string {
     const linhas: string[] = [torrentTitle.trim()];
 
     const linhaInfos: string[] = [`🔗 ${seeds}`];
-    if (size) linhaInfos.push(`💾 ${size}`);
+
+    // FIX 9: formata defensivamente — string crua, number (bytes) ou lixo viram texto legível
+    const sizeFormatado = this.formatarTamanho(size);
+    if (sizeFormatado) linhaInfos.push(`💾 ${sizeFormatado}`);
+
     if (provider) linhaInfos.push(`⚙️ ${provider}`);
     linhas.push(linhaInfos.join(' '));
 
@@ -195,9 +231,10 @@ export class StreamFormatter {
     const qualidades = this.determinarQualidades(torrent, tituloFonte);
     const fileIdxParaStream = fileIdx ?? 0;
 
-    // Metadados comuns extraídos uma única vez
+    // Metadados comuns extraídos uma única vez.
+    // FIX 9: tamanho pode chegar como string (scraper) OU number (BIGINT do DB).
     const seeds = torrent.seeders || 0;
-    const tamanho = torrent.size;
+    const tamanho: string | number | undefined = torrent.size;
     const idiomaBruto = torrent.language || 'PT-BR';
 
     const streams: Stream[] = [];
@@ -261,7 +298,7 @@ export class StreamFormatter {
     titles?: string[];
     imdbId?: string;
     seeds: number;
-    tamanho?: string;
+    tamanho?: string | number;
     idiomaBruto: string;
     requestId: string;
   }): Promise<Stream> {
@@ -324,7 +361,7 @@ export class StreamFormatter {
     episodio?: number;
     fileIdx: number;
     seeds: number;
-    tamanho?: string;
+    tamanho?: string | number;
     idiomaBruto: string;
   }): Promise<Stream> {
     const {

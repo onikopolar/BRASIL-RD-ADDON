@@ -3,11 +3,20 @@ import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto, temporadaAlvoNoRange, EpisodeRange } from '../../titulos/TechnicalWords.js';
+import {
+  extrairRangeEpisodios,
+  normalizarTexto,
+  temporadaAlvoNoRange,
+  EpisodeRange,
+} from '../../titulos/TechnicalWords.js';
 
 const logger = new Logger('StarckScraper');
 
 const STARCK_BASE = 'https://www.starck-oficial.com';
+
+// FIX 1: só aceita como qualidade de vídeo valores que realmente são qualidade.
+// Sem isso, "Qualidade de Video: 10" (nota) sobrescrevia o "FHD" do .sl-quality
+const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
 
 export interface StarckTorrent {
   magnet: string;
@@ -18,6 +27,7 @@ export interface StarckTorrent {
   canonicalName?: string;
   qualityHint?: string;
   quality?: string;
+  format?: string;
   size?: string;
   season?: number;
   episode?: number;
@@ -187,13 +197,18 @@ function extractPostMetadata($: any): PostMetadata {
       }
       else if (label.includes('tamanho')) result.size = value;
       else if (label.includes('idioma')) result.language = value;
-      else if (label.includes('qualidade de video') || label.includes('qualidade')) result.quality = value;
+      // FIX 1: só aceita qualidade de vídeo se o value for qualidade real.
+      // "Qualidade de Video: 10" (nota) não passa; "Qualidade do Audio" cai fora naturalmente.
+      else if (/qualidade\s+de\s+v[íi]deo/i.test(label)) {
+        if (QUALIDADE_VALIDA_REGEX.test(value)) result.quality = value;
+      }
     }
   });
 
+  // FIX 1: fallback pro span .sl-quality (FHD/HD/etc) quando nada foi capturado acima
   if (!result.quality) {
     const q = $('.sl-quality').first().text().trim();
-    if (q) result.quality = q;
+    if (q && QUALIDADE_VALIDA_REGEX.test(q)) result.quality = q;
   }
 
   if (!result.language) {
@@ -247,7 +262,7 @@ function extrairMetadadosDoBotao($: any, linkEl: any): {
   }
 
   const terceiraLinha = linhas[2];
-  const qualidadeMatch = terceiraLinha.match(/(\d{3,4}p|4K|HD)/i);
+  const qualidadeMatch = terceiraLinha.match(/(\d{3,4}p|4K|FHD|HD)/i);
   const tamanhoMatch = terceiraLinha.match(/\(([\d.]+)\s*GB\)/i);
 
   return {
@@ -275,6 +290,15 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
     const idMatch = href.match(/[?&]id=([^&]+)/i);
     if (!idMatch) return;
 
+    // FIX 4: antes de qualquer coisa, olha o idioma do botão.
+    // Se for "Legendado", descarta — mesmo sem cabeçalho "VERSÃO LEGENDADO" na página.
+    const botaoMetadados = extrairMetadadosDoBotao($, el);
+    if (botaoMetadados.idioma && /legendad[ao]/i.test(botaoMetadados.idioma)) {
+      logger.debug(`Starck decode | botão marcado como Legendado — ignorado | href=${href.substring(0, 60)}`);
+      return;
+    }
+
+    // Checagem por seção (segunda barreira)
     if (!linkEhDaSecaoDual($, el)) return;
 
     try {
@@ -284,8 +308,6 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
 
       //Aqui ele corrige o "&" solto dentro do dn (não vem codificado pelo Starck)
       magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
-
-      const botaoMetadados = extrairMetadadosDoBotao($, el);
 
       const parentP = $(el).closest('p');
       const parentText = parentP.text().trim() || '';
@@ -299,6 +321,7 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
         quality: botaoMetadados.qualidade,
         size: botaoMetadados.tamanho,
         language: botaoMetadados.idioma,
+        // FIX 3: propaga o formato extraído do botão (MKV, MP4, etc)
         format: botaoMetadados.formato,
         episode,
       });
@@ -365,6 +388,8 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
       canonicalName: item.canonicalName,
       qualityHint: item.qualityHint,
       quality: item.quality,
+      // FIX 3: expõe o formato do botão pro mapper usar, se quiser
+      format: item.format,
       size: item.size,
       language: item.language || 'Dual Áudio',
       episode,

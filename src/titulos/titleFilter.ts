@@ -65,7 +65,9 @@ export class TitleFilter {
       const anoDoTituloParaIdioma = tituloParaIdioma ? extrairAno(tituloParaIdioma)?.[0] : undefined;
       const anoTorrent: number | undefined = anoDoScraper || anoDoTitulo || anoDoTituloParaIdioma;
 
-      const isCollection = isCollectionTitle(tituloTorrent) || isCollectionTitle(tituloParaIdioma || '');
+      // Mexi aqui porque tituloParaIdioma é o título do post (usado só pra filtragem de scrapers)
+      // Ele nunca deve influenciar validação de match. Só tituloTorrent (originalTitle do HTML) decide coleção.
+      const isCollection = isCollectionTitle(tituloTorrent);
 
       let isYearInCollection = false;
       if (years && imdbTitles?.year !== undefined) {
@@ -164,6 +166,21 @@ export class TitleFilter {
           similarity: 0,
           torrentMetadata: metadados,
           reason: `Temporada diferente: S${range.seasonStart}-S${range.seasonEnd} vs S${temporadaAlvo}`
+        };
+      }
+
+      // ✅ IMDb confirmado no HTML do post → pula similarity (economiza CPU/RAM)
+      // Todas as validações acima (ano, range S/E, temporada) já rodaram. Só o fuzzy é pulado.
+      // Seguro porque imdbConfirmed só vira true quando o link IMDb do post bate com o imdbId do request.
+      if (imdbConfirmed && !isCollection) {
+        this.logger.debug(
+          `IMDB_CONFIRMADO_SKIP_SIMILARITY | torrent="${tituloTorrent.substring(0, 50)}" | imdbId=${imdbId}`
+        );
+        return {
+          matches: true,
+          similarity: 0.9,
+          torrentMetadata: metadados,
+          reason: 'IMDb confirmado no post'
         };
       }
 

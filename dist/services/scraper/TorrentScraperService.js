@@ -246,6 +246,11 @@ class TorrentScraperService {
         const temDn = dnDoMagnet !== undefined;
         const displayName = r.canonicalName || dnDoMagnet;
         let quality = this.qualityDetector.extractQualityFromFilename(displayName || '');
+        if (quality === 'HD' && r.quality) {
+            const q = this.qualityDetector.extractQualityFromFilename(r.quality);
+            if (q !== 'HD')
+                quality = q;
+        }
         if (quality === 'HD' && r.qualityHint) {
             const hintQuality = this.qualityDetector.extractQualityFromFilename(r.qualityHint);
             if (hintQuality !== 'HD')
@@ -255,13 +260,13 @@ class TorrentScraperService {
         const season = r.season ?? range?.seasonStart ?? undefined;
         const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
         const titleFinal = r.canonicalName || r.originalTitle || displayName || 'Starck Torrent';
-        logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}"`);
+        logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | qualityBotao="${(r.quality || '').substring(0, 20)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}" | qualidadeFinal=${quality}`);
         return this.buildTorrentResult({
             title: titleFinal,
             magnet: r.magnet,
             seeders: 0,
             leechers: 0,
-            size: 'N/A',
+            size: r.size || 'N/A',
             quality: quality || 'HD',
             provider: 'Starck',
             language: r.language || 'desconhecido',

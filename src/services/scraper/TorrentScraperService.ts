@@ -341,7 +341,10 @@ export class TorrentScraperService {
       year?: number;
       canonicalName?: string;
       language?: string;
+      quality?: string;
       qualityHint?: string;
+      format?: string;
+      size?: string;
       season?: number;
       episode?: number;
     },
@@ -350,11 +353,20 @@ export class TorrentScraperService {
     if (!r.magnet) return null;
 
     const dnDoMagnet = this.extractDnFromMagnet(r.magnet);
-    // Mexi aqui também porque o extractDnFromMagnet agora devolve undefined em vez do magnet cru
     const temDn = dnDoMagnet !== undefined;
     const displayName = r.canonicalName || dnDoMagnet;
 
+    // FIX 3: cadeia de prioridade pra qualidade — do mais específico ao mais genérico
+    // 1. canonicalName do magnet (dn=)
+    // 2. quality do botão (Starck manda "1080p" direto do <span class="text">)
+    // 3. qualityHint (parentText)
     let quality = this.qualityDetector.extractQualityFromFilename(displayName || '');
+
+    if (quality === 'HD' && r.quality) {
+      const q = this.qualityDetector.extractQualityFromFilename(r.quality);
+      if (q !== 'HD') quality = q;
+    }
+
     if (quality === 'HD' && r.qualityHint) {
       const hintQuality = this.qualityDetector.extractQualityFromFilename(r.qualityHint);
       if (hintQuality !== 'HD') quality = hintQuality;
@@ -366,15 +378,14 @@ export class TorrentScraperService {
 
     const titleFinal = r.canonicalName || r.originalTitle || displayName || 'Starck Torrent';
 
-    // Log pra ver de onde saiu o displayName do Starck após o fix
-    logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}"`);
+    logger.debug(`STARCK_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | qualityBotao="${(r.quality || '').substring(0, 20)}" | originalTitle="${(r.originalTitle || '').substring(0, 40)}" | escolhido="${titleFinal.substring(0, 50)}" | qualidadeFinal=${quality}`);
 
     return this.buildTorrentResult({
       title: titleFinal,
       magnet: r.magnet,
       seeders: 0,
       leechers: 0,
-      size: 'N/A',
+      size: r.size || 'N/A',
       quality: quality || 'HD',
       provider: 'Starck',
       language: r.language || 'desconhecido',

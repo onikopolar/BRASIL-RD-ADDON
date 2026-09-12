@@ -305,20 +305,27 @@ export class SimilarityCalculator {
 
   /**
    * Detecta match estruturalmente suspeito: TMDB com 1 token só e torrent com
-   * tokens extras que NÃO são metadado técnico.
+   * 2+ tokens extras que NÃO são metadado técnico.
    *
-   * "superman" vs "superman and lois"    → suspeito → F1
-   * "superman" vs "superman returns"     → suspeito → F1
-   * "superman" vs "superman 1080p"       → ok       → N1
-   * "superman" vs "superman 1080p dual"  → ok       → N1
+   * "superman" vs "superman and lois"    → suspeito (3t) → F1
+   * "superman" vs "superman returns"     → 2 tokens, N1 resolve (o gate de ano cuida do resto)
+   * "ghosts"   vs "city of ghosts"       → suspeito (3t) → F1
+   * "ragnarok" vs "gaten ragnarok"       → 2 tokens, N1 resolve (artigo, mesmo título)
+   * "superman" vs "superman 1080p"       → ok → N1
+   *
+   * Mexi aqui porque exigir 2+ extras evita rejeitar títulos com artigo/variação
+   * ("gaten" de "gåten ragnarok", "the" de "the matrix") — casos onde o único
+   * extra não muda o significado.
    */
   private matchCurtoSuspeito(tmdbTokens: string[], torrentTokens: string[]): boolean {
     if (tmdbTokens.length !== 1) return false;
-    if (torrentTokens.length <= 1) return false;
+    // Precisa de 3+ tokens no torrent (TMDB + 2 extras). Com 2 tokens é só
+    // "título + artigo/versão", que o N1 resolve corretamente.
+    if (torrentTokens.length < 3) return false;
 
     const tokenTmdb = tmdbTokens[0];
     const extras = torrentTokens.filter(t => t !== tokenTmdb);
-    if (extras.length === 0) return false;
+    if (extras.length < 2) return false;
 
     // Se todos os extras são legítimos (técnicos), não é suspeito
     const todosLegitimos = extras.every(t => this.EXTRAS_LEGITIMOS.test(t));

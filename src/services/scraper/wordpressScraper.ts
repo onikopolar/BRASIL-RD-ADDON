@@ -403,7 +403,7 @@ export class WordPressScraper {
     postTitle: string,
     html: string
   ): { qualidade: string; fonte: string } {
-    // 1. canonicalName do próprio magnet
+    // 1. canonicalName do próprio magnet (dn=). ESSA É A FONTE DE VERDADE.
     if (canonicalName) {
       const q = this.extractQualityFromText(canonicalName);
       if (q) return { qualidade: q, fonte: 'canonicalName' };
@@ -493,6 +493,15 @@ export class WordPressScraper {
     const year = infoBlock.year;
     const years = infoBlock.years || (infoBlock.year ? [infoBlock.year] : undefined);
 
+    // DEBUG: revela o que o infoBlock achou — usado pra rastrear de onde vem o "size global"
+    logger.debug(
+      `WP INFO_BLOCK | provider=${provider}` +
+      ` | size="${infoBlock.size || '-'}"` +
+      ` | originalTitle="${(infoBlock.originalTitle || '-').substring(0, 50)}"` +
+      ` | year=${infoBlock.year ?? '-'}` +
+      ` | years=[${infoBlock.years?.join(',') ?? '-'}]`
+    );
+
     const content = html;
     const { dualIndex, legendadoIndex } = this.findSectionBoundaries($, content);
 
@@ -558,6 +567,15 @@ export class WordPressScraper {
         if (hrefPos === -1) return true;
         return this.estaEntreSecoes(hrefPos, dualIndex, legendadoIndex);
       });
+
+    // DEBUG: quantos parentTexts únicos existem?
+    // Se for 1 pra N magnets → todos no mesmo <p> → size/qualidade vazam entre eles.
+    const parentTextsUnicos = new Set<string>(
+      filteredElements.map((el: any) => String($(el).parent().text().trim()))
+    );
+    const parentPreview = [...parentTextsUnicos]
+      .slice(0, 3)
+      .map((t: string) => t.substring(0, 60).replace(/\s+/g, ' '));
 
     const results: TorrentResult[] = [];
 
@@ -689,7 +707,22 @@ export class WordPressScraper {
       return null;
     }
 
-    const size = this.extractSize(parentText) || this.extractSize(postTitle);
+    // DEBUG: rastreia size e qualidade por magnet. Ajuda a saber se o size do post
+    // está vazando pra todos os magnets ou se cada um tem seu valor individual.
+    const sizeParent = this.extractSize(parentText);
+    const sizePost = this.extractSize(postTitle);
+    const size = sizeParent || sizePost;
+
+    const parentPreview = parentText.substring(0, 100).replace(/\s+/g, ' ');
+    logger.debug(
+      `WP ITEM_DEBUG | provider=${provider}` +
+      ` | magnet=${magnet.substring(0, 20)}...` +
+      ` | quality="${quality}" (fonte=${fonteQualidade})` +
+      ` | dn="${(canonicalName || '').substring(0, 70)}"` +
+      ` | size_parent="${sizeParent}" | size_post="${sizePost}" | size_final="${size}"` +
+      ` | parentPreview="${parentPreview}"`
+    );
+
     const language = this.extractLanguage(postTitle) || this.extractLanguage(parentText) || 'Desconhecido';
     const episode = this.extractEpisodeFromText(parentText);
     const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
@@ -755,8 +788,8 @@ export class WordPressScraper {
 
     const anos = years && years.length > 0
       ? (years.length === 1
-          ? `${years[0]}`
-          : `${years[0]}-${years[years.length - 1]}`)
+        ? `${years[0]}`
+        : `${years[0]}-${years[years.length - 1]}`)
       : null;
 
     return [baseLimpo, anos, quality].filter(Boolean).join(' ').trim();

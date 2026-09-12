@@ -46,7 +46,7 @@ export function detectSeasonRange(text: string): EpisodeRange | null {
   const range = extrairRangeEpisodios(text);
   if (range) return range;
 
-  const seasonMatch = text.match(/(\d+)\s*ª\s+TEMPORADA/i) || text.match(/Season\s+(\d+)/i);
+  const seasonMatch = text.match(/(\d+)\s*ª\s*TEMPORADA/i) || text.match(/Season\s+(\d+)/i);
   if (seasonMatch) {
     const s = parseInt(seasonMatch[1]);
     return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
@@ -109,7 +109,11 @@ export function isLikelyPostLink(href: string, text: string): boolean {
   return containsTorrentWord || !!slugMatch;
 }
 
-//Aqui ele detecta o idioma do magnet pelo texto do parágrafo
+//Aqui ele detecta o idioma do magnet pelo texto do parágrafo.
+//Ordem importa: "dublado" e "nacional" são mais específicos que "dual";
+//um arquivo "Dublado e Dual Áudio" traz as duas faixas e ainda é dual.
+//Mantemos "dual" em primeiro pra preservar o comportamento atual —
+//o rótulo "Dual Áudio" já engloba dublado + original.
 export function extractLanguage(parentText: string): string {
   const t = parentText.toLowerCase();
   if (t.includes('dual') && /áudio|audio/.test(t)) return 'Dual Áudio';
@@ -178,6 +182,17 @@ export function extrairAno(texto: string): number | undefined {
   return m ? parseInt(m[0]) : undefined;
 }
 
+//Aqui ele extrai o dn= do magnet, decodificado
+function extrairDnDoMagnet(magnet: string): string | undefined {
+  const m = magnet.match(/[&?]dn=([^&]+)/i);
+  if (!m) return undefined;
+  try {
+    return decodeURIComponent(m[1].replace(/\+/g, ' '));
+  } catch {
+    return m[1];
+  }
+}
+
 interface SearchResultItem {
   title: string;
   postUrl: string;
@@ -226,7 +241,12 @@ export async function extractMagnetsFromPost(
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
 
-  const pageTitle = $('title').text().replace(/Torrent.*$/i, '').trim() || postTitle;
+  // FIX H5: prefere o <h1> (título real do post) antes do <title> da aba.
+  // O <title> às vezes tem sufixo do site que sobra depois do replace.
+  const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
+  const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
+  const pageTitle = h1Title || titleTag || postTitle;
+
   const metadata = extractHdrMetadata($);
 
   const rawMagnets: {
@@ -254,7 +274,17 @@ export async function extractMagnetsFromPost(
     if (!passaFiltroTemporada([parentText, postTitle, pageTitle], targetSeason)) return;
 
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i)?.[0];
-    const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i)?.[0];
+    let sizeMatch = parentText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
+
+    // FIX H3: fallback de tamanho pelo dn= do magnet quando o parentText não tem.
+    // No formato "#lista_download", o <p> só tem "NNº EPISÓDIO ... QUALIDADE" e o
+    // tamanho real às vezes viaja no dn. Se não tiver em nenhum, fica vazio mesmo.
+    if (!sizeMatch) {
+      const dn = extrairDnDoMagnet(href);
+      if (dn) {
+        sizeMatch = dn.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
+      }
+    }
 
     rawMagnets.push({ href, parentText, linkText, qualityMatch, sizeMatch });
   });
@@ -265,7 +295,7 @@ export async function extractMagnetsFromPost(
   for (const raw of rawMagnets) {
     try {
       const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
-      const infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
+      let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
 
       if (!infoHash) {
         logger.warn(`HDR extractMagnetsFromPost | magnet sem infoHash | magnet=${raw.href.substring(0, 60)}`);
@@ -273,15 +303,30 @@ export async function extractMagnetsFromPost(
       }
 
       let canonicalName: string | undefined;
+      let hashNormalizado = false;
+
+      // FIX H1+H2: o analisarMagnet já normaliza base32 → hex.
+      // Antes só o nome era capturado e o hash base32 (32 chars) do HDR vazava pro
+      // pipeline, quebrando dedup e resolve. Agora o hash também é reusado.
       try {
         const dados = await analisarMagnet(raw.href);
         canonicalName = dados?.nome ?? undefined;
+        if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
+          infoHash = dados.infoHash.toLowerCase();
+          hashNormalizado = true;
+        }
       } catch {
         canonicalName = undefined;
       }
 
+      if (hashNormalizado) {
+        logger.debug(`HDR | hash base32 → hex | magnet=${raw.href.substring(0, 40)}... | hash=${infoHash.substring(0, 12)}`);
+      } else {
+        logger.debug(`HDR | hash mantido do regex | magnet=${raw.href.substring(0, 40)}... | hash=${infoHash.substring(0, 12)} | len=${infoHash.length}`);
+      }
+
       let year = metadata.year;
-      let originalTitle = metadata.originalTitle || metadata.originalTitleBruto;
+      const originalTitle = metadata.originalTitle || metadata.originalTitleBruto;
 
       const anoDoMagnet = extrairAno(raw.parentText) || (canonicalName ? extrairAno(canonicalName) : undefined);
       if (anoDoMagnet) {
@@ -335,7 +380,7 @@ export async function extractMagnetsFromPost(
         episode,
       });
 
-      logger.info(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | year=${year} | quality=${qualityMatch || 'N/A'}`);
+      logger.info(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | year=${year} | quality=${qualityMatch || 'N/A'} | size=${sizeMatch || 'N/A'}`);
     } catch (err) {
       logger.warn(`HDR extractMagnetsFromPost | erro ao processar magnet | magnet=${raw.href.substring(0, 60)} | error=${(err as Error).message}`);
     }

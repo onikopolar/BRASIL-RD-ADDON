@@ -90,6 +90,11 @@ export type PostMetadata = {
 
 export { BASE_URL, PROVIDER, AXIOS_OPTS };
 
+// FIX 7/7b: zero-pad em números de episódio ("Episódio 1" → "Episódio 01") e plural em ranges
+function pad2(n: number): string {
+  return String(n).padStart(2, '0');
+}
+
 // Remove magnets duplicados mantendo a ordem de entrada.
 function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
   const vistos = new Set<string>();
@@ -339,7 +344,12 @@ export class BludvScraper {
       // Log rastreável da qualidade escolhida — mesma ideia do WP, ajuda a ver qual fonte ganhou em cada magnet
       logger.debug(`[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
 
-      const size = metadata.size || 'Desconhecido';
+      // FIX 8: fallback de tamanho pelo fullContextText (ex: span "SERVIDOR... (16.43 GB)").
+      // Posts sem <em>Tamanho:</em> ou <b>Tamanho:</b> não tinham de onde puxar.
+      const size = metadata.size
+        || this.extrairTamanhoDoContexto(link.fullContextText)
+        || this.extrairTamanhoDoContexto(link.parentText)
+        || 'Desconhecido';
 
       const cleanedHtmlTitle = episodeRangeText
         ? `${episodeRangeText}: ${quality}`
@@ -371,6 +381,13 @@ export class BludvScraper {
     }
 
     return results;
+  }
+
+  // FIX 8: extrai o primeiro "X.YZ GB/MB/KB" de um texto — usado como fallback de tamanho
+  private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
+    if (!texto) return undefined;
+    const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
+    return m ? m[0] : undefined;
   }
 
   // Mexi aqui pra montar nome descritivo quando o magnet não traz dn= próprio
@@ -642,17 +659,19 @@ export class BludvScraper {
     const epMatch = contexto.match(/EPISÓDIO\s*(\d+)/i);
     if (epMatch) {
       const ep = parseInt(epMatch[1], 10);
-      return { episode: ep, episodeRangeText: `Episódio ${ep}` };
+      // FIX 7: zero-pad no fallback de regex cru
+      return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
     }
 
     return {};
   }
 
+  // FIX 7 + 7b: zero-pad no número e plural quando é range
   formatarRange(range: { episodeStart: number; episodeEnd: number } | null | undefined): { episode: number; episodeRangeText: string } | null {
     if (!range || range.episodeStart <= 0) return null;
     const texto = range.episodeEnd > range.episodeStart
-      ? `Episódio ${range.episodeStart}-${range.episodeEnd}`
-      : `Episódio ${range.episodeStart}`;
+      ? `Episódios ${pad2(range.episodeStart)}-${pad2(range.episodeEnd)}`
+      : `Episódio ${pad2(range.episodeStart)}`;
     return { episode: range.episodeStart, episodeRangeText: texto };
   }
 
@@ -689,17 +708,48 @@ export class BludvScraper {
       .trim() || null;
   }
 
+  // FIX 8b: aceita labels em <em> (formato moderno) e <b> (posts antigos pré-2018).
+  // O formato antigo usa <b>Label:</b> Valor<br> — o valor é um text node, não está em <span>.
   extractPostMetadata($: any): PostMetadata {
     const getMetaValue = (fieldName: string): string | undefined => {
-      const em = $('em')
-        .toArray()
-        .find((el: any) => $(el).text().trim().toLowerCase() === fieldName.toLowerCase());
-      if (!em) return undefined;
-      const parentSpan = $(em).closest('span');
-      if (!parentSpan.length) return undefined;
-      const fullText = parentSpan.text().trim();
-      const prefix = $(em).text().trim();
-      return fullText.substring(fullText.indexOf(prefix) + prefix.length).trim() || undefined;
+      const target = fieldName.toLowerCase().replace(/:$/, '').trim();
+
+      const label = $('em, b').toArray().find((el: any) => {
+        const t = $(el).text().trim().toLowerCase().replace(/:$/, '').trim();
+        return t === target;
+      });
+      if (!label) return undefined;
+
+      const $label = $(label);
+
+      // Caso 1: <span><em>Label:</em> Valor</span> — formato moderno.
+      const parentSpan = $label.closest('span');
+      if (parentSpan.length) {
+        const fullText = parentSpan.text().trim();
+        const prefix = $label.text().trim();
+        const idx = fullText.indexOf(prefix);
+        if (idx !== -1) {
+          const after = fullText.substring(idx + prefix.length).trim();
+          if (after) return after;
+        }
+      }
+
+      // Caso 2: <p><b>Label:</b> Valor<br>... — formato antigo.
+      // Extrai o HTML do pai, acha o label, pega o que vem depois até <br>, <b> ou fim do <p>.
+      const $parent = $label.parent();
+      const parentHtml = $parent.html() || '';
+      const labelHtml = $label.toString();
+      const idxHtml = parentHtml.indexOf(labelHtml);
+      if (idxHtml !== -1) {
+        const after = parentHtml.substring(idxHtml + labelHtml.length);
+        const match = after.match(/^[:\s]*(.*?)(?:<br|<b|<\/p|$)/i);
+        if (match) {
+          const valor = match[1].replace(/<[^>]+>/g, '').trim();
+          if (valor) return valor;
+        }
+      }
+
+      return undefined;
     };
 
     const originalTitleRaw = getMetaValue('Título Original:') || getMetaValue('Titulo Original:');
