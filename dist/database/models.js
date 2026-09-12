@@ -44,7 +44,7 @@ exports.sequelize = sequelize;
 if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
     sequelize.authenticate()
         .then(() => console.log('Conexao com PostgreSQL estabelecida'))
-        .catch(err => console.error('Erro na conexao PostgreSQL:', err.message));
+        .catch(err => console.error('Erro na conexao Postgres:', err.message));
 }
 class Torrent extends sequelize_1.Model {
 }
@@ -58,6 +58,7 @@ Torrent.init({
     imdbId: { type: sequelize_1.DataTypes.STRING(32) },
     imdbIds: { type: sequelize_1.DataTypes.JSONB, allowNull: true, defaultValue: [] },
     imdbSeason: { type: sequelize_1.DataTypes.INTEGER },
+    imdbSeasonEnd: { type: sequelize_1.DataTypes.INTEGER },
     imdbEpisodeStart: { type: sequelize_1.DataTypes.INTEGER },
     imdbEpisodeEnd: { type: sequelize_1.DataTypes.INTEGER },
     seeders: { type: sequelize_1.DataTypes.INTEGER },

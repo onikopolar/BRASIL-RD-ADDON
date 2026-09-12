@@ -63,12 +63,10 @@ export class StreamHandler {
     return StreamHandler.instance;
   }
 
-  /** Getter público para o TorboxService compartilhado (cache de títulos, etc.) */
   public get torbox(): TorboxService {
     return this.torboxService;
   }
 
-  /** Getter público para o CatalogProvider (usado pela rota de resolve para obter títulos TMDB) */
   public get catalog(): CatalogProvider {
     return this.catalogProvider;
   }
@@ -85,11 +83,11 @@ export class StreamHandler {
     if (!request.apiKey) return { streams: [] };
 
     try {
-      // Obtém títulos e ano do TMDB para o IMDb ID da requisição
       const imdbId = this.extractImdbIdFromRequest(request);
       let tmdbTitles: string[] | undefined;
       let tmdbYear: number | undefined;
 
+      // Tenta pegar títulos do TMDB só pra enriquecer o stream; falha aqui não interrompe nada
       if (imdbId) {
         try {
           const tmdbData = await this.catalogProvider.getTmdbSearchData(imdbId);
@@ -100,11 +98,10 @@ export class StreamHandler {
             tmdbYear = tmdbData.imdbTitles.year;
           }
         } catch {
-          // Falha ao obter títulos não deve interromper o fluxo
+          // silencioso de propósito
         }
       }
 
-      // Tenta banco de dados primeiro
       const dbResult = await this.getStreamsFromDatabase(request);
       if (dbResult.success && dbResult.streams.length > 0) {
         this.stats.servedFromDatabase++;
@@ -116,7 +113,6 @@ export class StreamHandler {
         return { streams: sorted };
       }
 
-      // Depois tenta catálogo
       const catalogResult = await this.getStreamsFromCatalog(request);
       if (catalogResult.success && catalogResult.streams.length > 0) {
         this.stats.servedFromCatalog++;
@@ -128,7 +124,6 @@ export class StreamHandler {
         return { streams: sorted };
       }
 
-      // Sem streams — informativo
       const informativeStream = this.createInformativeStreamIfNoContent(request);
       return { streams: informativeStream ? [informativeStream] : [] };
     } catch (error) {
@@ -151,7 +146,7 @@ export class StreamHandler {
     }
   }
 
-  /** Registra os títulos TMDB (enriquecidos com o ano) no cache do TorboxService para cada stream com infoHash */
+  //Guarda os títulos TMDB no cache do Torbox pra usar no fallback de nome de arquivo
   private registerTitlesForStreams(streams: Stream[], titles?: string[], year?: number): void {
     if (!titles || titles.length === 0) return;
 
@@ -164,7 +159,7 @@ export class StreamHandler {
         try {
           this.torboxService.setTitlesForHash(stream.infoHash, enrichedTitles);
         } catch {
-          // Silencioso – falha no registro não afeta a entrega do stream
+          // silencioso de propósito
         }
       }
     }
@@ -223,11 +218,19 @@ export class StreamHandler {
         if (seasonMatch) {
           const season = parseInt(seasonMatch[1]);
           const episode = parseInt(seasonMatch[2]);
+
+          // Temporada: aceita se o alvo cai dentro do range [imdbSeason, imdbSeasonEnd],
+          // ou se o torrent não declara temporada nenhuma
           where[Op.and] = [
             {
               [Op.or]: [
-                { imdbSeason: season },
                 { imdbSeason: null },
+                {
+                  [Op.and]: [
+                    { imdbSeason: { [Op.lte]: season } },
+                    { imdbSeasonEnd: { [Op.gte]: season } },
+                  ],
+                },
               ],
             },
             {
@@ -287,7 +290,7 @@ export class StreamHandler {
         }
       }
 
-      // Usa o magnet completo salvo no banco, se existir; caso contrário, fallback para magnet mínimo.
+      // Usa o magnet completo salvo no banco; se não tiver, reconstrói mínimo pelo infoHash
       const magnetCompleto = torrent.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`;
 
       const torrentWithMagnet = {

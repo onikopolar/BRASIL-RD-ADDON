@@ -8,7 +8,7 @@ import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.j
 import { TitleFilter } from '../titulos/titleFilter.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
-import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios } from '../titulos/TechnicalWords.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, temporadaAlvoNoRange, normalizarTexto } from '../titulos/TechnicalWords.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -21,7 +21,7 @@ interface ScrapedTorrent {
   title: string;
   htmlTitle?: string;
   canonicalName?: string;
-  magnetInfoHash?: string;
+  infoHash?: string;
   originalTitle?: string;
   year?: number;
   years?: number[];
@@ -59,7 +59,7 @@ export class CatalogProvider {
   private readonly autoMagnetService: AutoMagnetService;
 
   private readonly streamCache = new Map<string, CacheEntry<Stream[]> & { isEmpty: boolean }>();
-  private readonly STREAM_TTL = 6 * 60 * 60 * 1000; // 6 horas (era 24h)
+  private readonly STREAM_TTL = 6 * 60 * 60 * 1000;
   private readonly STREAM_EMPTY_TTL = 10 * 1000;
   private readonly MAX_STREAM_CACHE_SIZE = 5000;
 
@@ -70,7 +70,7 @@ export class CatalogProvider {
   private readonly inFlightScraping: Set<string> = new Set();
 
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000; // 5 min
+  private readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
   constructor() {
     this.logger = new Logger('CatalogProvider');
@@ -83,14 +83,12 @@ export class CatalogProvider {
     this.startCacheCleanup();
   }
 
-  //  CACHE GENÉRICO (DRY)
-
+  //Limpa caches de streams e TMDB em intervalo fixo
   private startCacheCleanup(): void {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
       const now = Date.now();
 
-      // Limpa streamCache
       for (const [key, entry] of this.streamCache.entries()) {
         const ttl = entry.isEmpty ? this.STREAM_EMPTY_TTL : this.STREAM_TTL;
         if (now - entry.timestamp > ttl) {
@@ -98,7 +96,6 @@ export class CatalogProvider {
         }
       }
 
-      // Limpa tmdbDataCache
       for (const [key, entry] of this.tmdbDataCache.entries()) {
         if (now - entry.timestamp > this.TMDB_CACHE_TTL) {
           this.tmdbDataCache.delete(key);
@@ -135,8 +132,7 @@ export class CatalogProvider {
     map.set(key, { data, timestamp: Date.now() });
   }
 
-  //  TMDB SEARCH DATA
-
+  //Busca títulos no TMDB por imdbId e temporada, com cache local
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
     const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
     const cached = this.getFromMap(this.tmdbDataCache, cacheKey, this.TMDB_CACHE_TTL);
@@ -168,55 +164,52 @@ export class CatalogProvider {
     return tmdb.seasonYear;
   }
 
-  //  STREAMS
+  async getStreamsFromCatalog(request: any): Promise<Stream[]> {
+    const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
+    const cacheKey = this.generateCacheKey(request, season, episode);
 
-async getStreamsFromCatalog(request: any): Promise<Stream[]> {
-  const { season, episode } = this.extractSeasonEpisodeFromRequest(request);
-  const cacheKey = this.generateCacheKey(request, season, episode);
-
-  const cached = this.getFromCache(cacheKey);
-  if (cached !== null) {
-    this.logger.debug('CATALOG_CACHE_HIT', { cacheKey, totalStreams: cached.length });
-    return this.streamFormatter.sortStreamsByQuality(cached);
-  }
-
-  this.logger.debug('CATALOG_START', {
-    cacheKey,
-    temCache: false,
-    request: { id: request.id, imdbId: request.imdbId, type: request.type }
-  });
-
-  // Não há mais catálogo curado; começamos sem streams
-  let uniqueStreams: Stream[] = [];
-
-  if (uniqueStreams.length === 0) {
-    const shouldScrape = await this.shouldAttemptScraping(request);
-    if (!shouldScrape) {
-      this.saveToCache(cacheKey, []);
-      return [];
+    const cached = this.getFromCache(cacheKey);
+    if (cached !== null) {
+      this.logger.debug('CATALOG_CACHE_HIT', { cacheKey, totalStreams: cached.length });
+      return this.streamFormatter.sortStreamsByQuality(cached);
     }
 
-    this.markScrapingStart(request);
-    try {
-      const scraped = await this.performIntelligentScraping(request, season, episode);
-      uniqueStreams = this.removeDuplicatesByInfoHash(scraped);
-    } finally {
-      this.markScrapingEnd(request);
-    }
-  }
+    this.logger.debug('CATALOG_START', {
+      cacheKey,
+      temCache: false,
+      request: { id: request.id, imdbId: request.imdbId, type: request.type }
+    });
 
-  const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
-  sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
-  this.logger.info('📋 Catálogo', {
-    imdbId: request.imdbId || request.id,
-    season,
-    episode,
-    total: sorted.length,
-    qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
-  });
-  this.saveToCache(cacheKey, sorted);
-  return sorted;
-}
+    let uniqueStreams: Stream[] = [];
+
+    if (uniqueStreams.length === 0) {
+      const shouldScrape = await this.shouldAttemptScraping(request);
+      if (!shouldScrape) {
+        this.saveToCache(cacheKey, []);
+        return [];
+      }
+
+      this.markScrapingStart(request);
+      try {
+        const scraped = await this.performIntelligentScraping(request, season, episode);
+        uniqueStreams = this.removeDuplicatesByInfoHash(scraped);
+      } finally {
+        this.markScrapingEnd(request);
+      }
+    }
+
+    const sorted = this.streamFormatter.sortStreamsByQuality(uniqueStreams);
+    sorted.forEach(s => metricsService.recordStreamReturned(request.type, this.extractStreamQuality(s)));
+    this.logger.info('📋 Catálogo', {
+      imdbId: request.imdbId || request.id,
+      season,
+      episode,
+      total: sorted.length,
+      qualidades: [...new Set(sorted.map(s => this.extractStreamQuality(s)))],
+    });
+    this.saveToCache(cacheKey, sorted);
+    return sorted;
+  }
 
   private async performIntelligentScraping(request: any, season?: number, episode?: number): Promise<Stream[]> {
     const type = request.type;
@@ -240,7 +233,11 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
       searchQuery, type, finalSeason, tmdb.seasonYear ?? undefined, imdbId || undefined
     );
 
+    this.logarTorrents('PÓS-SCRAPER', torrentResults);
+
     await this.enrichTorrentsWithMagnetData(torrentResults);
+    this.logarTorrents('PÓS-ENRICH', torrentResults);
+
     const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
 
     const { valid, invalid } = await this.filterAndValidateTorrents(
@@ -263,7 +260,7 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
       /\b(?:temporada completa|season pack|complete pack)\b/i.test(t.title) ||
       (() => {
         const r = extrairRangeEpisodios(t.canonicalName || t.title);
-        return r && r.season === finalSeason && r.episodeStart === 0 && r.episodeEnd === 0;
+        return r !== null && r.seasonStart > 0 && r.episodeStart === 0 && r.episodeEnd === 0 && temporadaAlvoNoRange(r, finalSeason);
       })()
     );
 
@@ -278,19 +275,39 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
     return this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
   }
 
+  private logarTorrents(prefixo: string, torrents: ScrapedTorrent[]): void {
+    this.logger.debug(`${prefixo} | total=${torrents.length}`);
+    for (const t of torrents) {
+      const hash = t.infoHash ? t.infoHash.substring(0, 12) : 'SEM-HASH';
+      const titulo = (t.title || t.canonicalName || '').substring(0, 55);
+      this.logger.debug(`${prefixo} | ${t.provider} | ${hash} | ${titulo}`);
+    }
+  }
+
   private extractEpisodeNumber(title: string): number | null {
     const match = title.match(/e(\d+)/i);
     return match ? parseInt(match[1]) : null;
   }
 
   private async enrichTorrentsWithMagnetData(torrents: ScrapedTorrent[]): Promise<void> {
-    const needData = torrents.filter(t => !t.magnetInfoHash || !t.canonicalName);
+    const needData = torrents.filter(t => !t.infoHash || !t.canonicalName);
     if (needData.length === 0) return;
+
+    this.logger.debug('ENRICH_START', {
+      total: torrents.length,
+      precisam: needData.length,
+    });
 
     const results = await Promise.all(needData.map(t => analisarMagnet(t.magnet).catch(() => null)));
     needData.forEach((t, i) => {
-      if (results[i]?.nome) t.canonicalName = results[i]!.nome!;
-      if (results[i]?.infoHash) t.magnetInfoHash = results[i]!.infoHash.toLowerCase();
+      const r = results[i];
+      const antesHash = t.infoHash ? 'sim' : 'nao';
+      const antesNome = t.canonicalName ? 'sim' : 'nao';
+      if (r?.nome) t.canonicalName = r.nome;
+      if (r?.infoHash) t.infoHash = r.infoHash.toLowerCase();
+      const depoisHash = t.infoHash ? 'sim' : 'nao';
+      const depoisNome = t.canonicalName ? 'sim' : 'nao';
+      this.logger.debug(`ENRICH_ITEM | ${t.provider} | hash ${antesHash}->${depoisHash} | nome ${antesNome}->${depoisNome} | ${(t.title || '').substring(0, 45)}`);
     });
   }
 
@@ -299,20 +316,24 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
     const unique: ScrapedTorrent[] = [];
 
     for (const t of torrents) {
-      const hash = t.magnetInfoHash;
-      if (hash) {
-        const h = hash.toLowerCase();
-        if (seen.has(h)) continue;
-        seen.add(h);
-      } else {
-        const titleKey = (t.title || t.canonicalName || '').toLowerCase().trim();
-        if (seen.has(titleKey)) continue;
-        seen.add(titleKey);
-      }
+      const hash = t.infoHash;
+      const chave = hash ? hash.toLowerCase() : (t.title || t.canonicalName || '').toLowerCase().trim();
+      const tipoChave = hash ? 'hash' : 'titulo';
+      const status = seen.has(chave) ? 'REMOVIDO' : 'ACEITO';
+      this.logger.debug(`DEDUP_${status} | ${t.provider} | chave=${tipoChave}:${chave.substring(0, 12)} | ${(t.title || '').substring(0, 45)}`);
+      if (seen.has(chave)) continue;
+      seen.add(chave);
       unique.push(t);
     }
 
+    this.logger.debug('DEDUP_RESULT', { entrada: torrents.length, saida: unique.length });
     return unique;
+  }
+
+  //Escolhe o título que vai pra validação. Se originalTitle não tem conteúdo latino útil (japonês, coreano), usa title
+  private escolherTituloParaValidar(original: string | undefined, title: string | undefined): string {
+    if (original && normalizarTexto(original).length > 0) return original;
+    return title || '';
   }
 
   private async filterAndValidateTorrents(
@@ -329,10 +350,10 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
 
     const results = await Promise.allSettled(
       naoLegendado.map(async (t) => {
-        const tituloParaValidar = t.originalTitle || t.title || '';
+        const tituloParaValidar = this.escolherTituloParaValidar(t.originalTitle, t.title);
         const tituloParaIdioma = t.title || t.originalTitle || '';
-        this.logger.debug(`🔍 Validando: "${tituloParaValidar?.substring(0, 50)}" | alvo S${season ?? '?'}E${episode ?? '?'}`);
-        this.logger.debug('TitleFilter campos', { title: t.title, originalTitle: t.originalTitle, canonicalName: t.canonicalName });
+        this.logger.debug(`TITULO_ESCOLHIDO | validar="${tituloParaValidar.substring(0, 50)}" | original="${(t.originalTitle || '').substring(0, 30)}" | title="${(t.title || '').substring(0, 30)}"`);
+        this.logger.debug(`🔍 Validando: "${tituloParaValidar.substring(0, 50)}" | alvo S${season ?? '?'}E${episode ?? '?'}`);
 
         const result = await this.titleFilter.titulosCombinam(
           tituloParaValidar,
@@ -364,7 +385,7 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
             alvo: `S${season ?? '?'}E${episode ?? '?'}`,
             torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
             provider: torrent.provider,
-            infoHash: torrent.magnetInfoHash?.substring(0, 12) || 'N/A'
+            infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
           });
           valid.push(torrent);
         } else {
@@ -377,7 +398,7 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
 
     if (invalid.length > 0) {
       const razoes: Record<string, number> = {};
-      results.forEach((res, i) => {
+      results.forEach((res) => {
         if (res.status === 'fulfilled' && !res.value.result.matches) {
           const motivo = res.value.result.reason?.split('|')[0]?.trim() || 'desconhecido';
           razoes[motivo] = (razoes[motivo] || 0) + 1;
@@ -430,7 +451,7 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
             torrent.size,
             season,
             episodeValue,
-            torrent.magnetInfoHash,
+            torrent.infoHash,
             torrent.provider,
             torrent.originalTitle,
             torrent.htmlTitle
@@ -461,14 +482,6 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
   private async processTorrentsWithOptimization(
     torrents: ScrapedTorrent[], request: any, season?: number, episode?: number
   ): Promise<Stream[]> {
-    if (torrents.length > 0) {
-      //    this.logger.debug('ANTES_STREAM_FORMATTER', {
-      //      magnet: torrents[0]?.magnet?.substring(0, 200),
-      //      tamanho: torrents[0]?.magnet?.length,
-      //      title: torrents[0]?.title || torrents[0]?.canonicalName
-      //    });
-    }
-
     return this.processInBatches(
       torrents,
       async (torrent: ScrapedTorrent) => {
@@ -503,7 +516,6 @@ async getStreamsFromCatalog(request: any): Promise<Stream[]> {
       streams,
       this.MAX_STREAM_CACHE_SIZE
     );
-    // Ajusta a flag isEmpty
     const entry = this.streamCache.get(key);
     if (entry) {
       entry.isEmpty = isEmpty;

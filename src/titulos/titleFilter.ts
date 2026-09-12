@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SimilarityCalculator } from './SimilarityCalculator.js';
 import { LanguageDetector } from './LanguageDetector.js';
 import { EpisodeMatcher } from './episodeMatcher.js';
-import { extrairRangeEpisodios, extrairAno, isCollectionTitle } from './TechnicalWords.js';
+import { extrairRangeEpisodios, extrairAno, isCollectionTitle, temporadaAlvoNoRange } from './TechnicalWords.js';
 import { TitleMatchResult, SeriesMetadata } from './interfaces.js';
 import { ImdbTitles } from '../catalogo/ImdbScraperService.js';
 
@@ -24,14 +24,14 @@ export class TitleFilter {
 
     // Determina se é pack completo de temporada ou série completa
     const isCompleteSeason = range
-      ? (range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0)
+      ? (range.seasonStart > 0 && range.episodeStart === 0 && range.episodeEnd === 0)
       : this.episodeMatcher.ehPackTemporadaCompleta(titulo);
 
     return {
-      season: range?.season ?? undefined,
+      season: range?.seasonStart ?? undefined,
       episode: range?.episodeStart ?? undefined,
       isCompleteSeason,
-      hasEpisodeInfo: !!(range && (range.season > 0 || range.episodeStart > 0)),
+      hasEpisodeInfo: !!(range && (range.seasonStart > 0 || range.episodeStart > 0)),
       matchedPattern: undefined,
     };
   }
@@ -149,19 +149,21 @@ export class TitleFilter {
             };
           }
         } else {
-          const isSeasonPack = range && range.season > 0 && range.episodeStart === 0 && range.episodeEnd === 0;
-          if (isSeasonPack && temporadaAlvo !== undefined && range!.season === temporadaAlvo) {
+          //Aqui ele aceita pack de temporada quando o alvo cabe no range
+          const isSeasonPack = range && range.seasonStart > 0 && range.episodeStart === 0 && range.episodeEnd === 0;
+          if (isSeasonPack && temporadaAlvo !== undefined && temporadaAlvoNoRange(range, temporadaAlvo)) {
             // Pack de temporada: aceita como fallback
           }
         }
       }
 
-      if (range && temporadaAlvo !== undefined && range.season > 0 && range.season !== temporadaAlvo) {
+      //Aqui ele checa se o alvo cabe no range de temporada declarado
+      if (range && temporadaAlvo !== undefined && !temporadaAlvoNoRange(range, temporadaAlvo)) {
         return {
           matches: false,
           similarity: 0,
           torrentMetadata: metadados,
-          reason: `Temporada diferente: S${range.season} vs S${temporadaAlvo}`
+          reason: `Temporada diferente: S${range.seasonStart}-S${range.seasonEnd} vs S${temporadaAlvo}`
         };
       }
 

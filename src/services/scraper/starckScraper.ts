@@ -3,7 +3,7 @@ import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, temporadaAlvoNoRange, EpisodeRange } from '../../titulos/TechnicalWords.js';
 
 const logger = new Logger('StarckScraper');
 
@@ -34,6 +34,7 @@ const axiosConfig = {
   },
 };
 
+//Aqui ele limpa o slug, decodifica e troca hífen por espaço
 export function cleanSlug(slug: string): string {
   let decodificado = slug;
   try {
@@ -65,9 +66,9 @@ export function cleanSlug(slug: string): string {
   return semData.replace(/-/g, ' ');
 }
 
+//Aqui ele extrai o título base do slug, tirando temporada e ano
 export function extrairTituloBaseDoSlug(slug: string): string {
   const limpo = cleanSlug(slug);
-  const range = extrairRangeEpisodios(limpo);
   const normalizado = normalizarTexto(limpo);
 
   return normalizado
@@ -82,9 +83,10 @@ interface SearchResultItem {
   title: string;
   postUrl: string;
   slugTitle: string;
-  season?: number;
+  range: EpisodeRange | null;
 }
 
+//Aqui ele busca links do catálogo e filtra pelo range de temporada
 async function searchStarckLinks(
   searchQuery: string,
   allQueries: string[],
@@ -109,7 +111,6 @@ async function searchStarckLinks(
       const slug = fullUrl.split('/').filter(Boolean).pop() || '';
       const slugTitle = extrairTituloBaseDoSlug(slug);
       const range = extrairRangeEpisodios(cleanSlug(slug));
-      const season = range?.season;
 
       if (!slugTitle || slugTitle.length < 3) return;
 
@@ -117,7 +118,7 @@ async function searchStarckLinks(
         title: $(el).text().trim() || slugTitle,
         postUrl: fullUrl,
         slugTitle,
-        season,
+        range,
       });
     });
 
@@ -138,7 +139,8 @@ async function searchStarckLinks(
     const filtered = results.filter(item => {
       const titleNormalizado = normalizarTexto(item.slugTitle);
 
-      if (targetSeason !== undefined && item.season !== targetSeason) {
+      //Aqui ele checa se o alvo cabe no range declarado pelo slug
+      if (!temporadaAlvoNoRange(item.range, targetSeason)) {
         return false;
       }
 
@@ -167,6 +169,7 @@ interface PostMetadata {
   quality?: string;
 }
 
+//Aqui ele extrai metadados do post a partir do bloco de descrição
 function extractPostMetadata($: any): PostMetadata {
   const result: PostMetadata = {};
 
@@ -204,6 +207,7 @@ function extractPostMetadata($: any): PostMetadata {
   return result;
 }
 
+//Aqui ele confirma se o link está antes da seção "LEGENDADO", ou seja, é dual
 function linkEhDaSecaoDual($: any, el: any): boolean {
   const html = $('body').html() || '';
   const legendadoPos = html.search(/VERS[ÃA]O\s+LEGENDAD[OA]/i);
@@ -216,9 +220,7 @@ function linkEhDaSecaoDual($: any, el: any): boolean {
   return linkPos < legendadoPos;
 }
 
-/**
- * Extrai metadados de um botão .buttons-content
- */
+//Aqui ele extrai idioma, formato, qualidade e tamanho do botão do magnet
 function extrairMetadadosDoBotao($: any, linkEl: any): {
   idioma?: string;
   formato?: string;
@@ -231,23 +233,19 @@ function extrairMetadadosDoBotao($: any, linkEl: any): {
   const textoSpan = container.find('.text').first().text().trim();
   if (!textoSpan) return {};
 
-  // Divide as linhas
   const linhas = textoSpan.split('\n').map((s: string) => s.trim()).filter(Boolean);
   if (linhas.length < 3) return {};
 
-  // Primeira linha: "Dual ÁudioMKV" ou "Dual ÁudioHDR"
   const primeiraLinha = linhas[0];
   const idiomaMatch = primeiraLinha.match(/(Dual Áudio|Dublado|Legendado|Nacional)/i);
   const idioma = idiomaMatch ? idiomaMatch[1] : undefined;
 
-  // Formato: geralmente após o idioma, sem espaço
   let formato: string | undefined;
   if (idiomaMatch && idiomaMatch[0]) {
     const restante = primeiraLinha.substring(idiomaMatch[0].length);
     if (restante) formato = restante.trim();
   }
 
-  // Terceira linha: "1080p (3.12 GB)" ou "2160p (28.05 GB)"
   const terceiraLinha = linhas[2];
   const qualidadeMatch = terceiraLinha.match(/(\d{3,4}p|4K|HD)/i);
   const tamanhoMatch = terceiraLinha.match(/\(([\d.]+)\s*GB\)/i);
@@ -260,6 +258,7 @@ function extrairMetadadosDoBotao($: any, linkEl: any): {
   };
 }
 
+//Aqui ele decodifica os magnets em base64 e enriquece com metadados do botão
 async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMetadata): Promise<StarckTorrent[]> {
   const rawMagnets: {
     magnet: string;
@@ -283,7 +282,7 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
       let magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
       if (!magnet.startsWith('magnet:?')) return;
 
-      // Corrige "&" dentro do campo dn (não codificado pelo Starck)
+      //Aqui ele corrige o "&" solto dentro do dn (não vem codificado pelo Starck)
       magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
 
       const botaoMetadados = extrairMetadadosDoBotao($, el);
@@ -348,7 +347,7 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
       episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
     }
 
-    // Se o magnet não tem nome (dn), monta a partir de metadados da página
+    //Aqui ele monta um canonicalName a partir dos metadados quando o magnet não tem dn
     if (!item.canonicalName) {
       const tituloBase = metadata.originalTitle || postTitle;
       const partes = [
@@ -376,6 +375,7 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
   return results;
 }
 
+//Aqui é o entrypoint do scraper Starck
 export async function searchStarck(
   query: string,
   type: 'movie' | 'series' = 'movie',

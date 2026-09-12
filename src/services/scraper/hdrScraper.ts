@@ -2,9 +2,14 @@ import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { Logger } from '../../utils/logger.js';
 import { agenteHttps, lookupCustomizado } from './wordpressScraper.js';
-import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle } from '../../titulos/TechnicalWords.js';
+import {
+  extrairRangeEpisodios,
+  normalizarTexto,
+  isCollectionTitle,
+  temporadaAlvoNoRange,
+  EpisodeRange,
+} from '../../titulos/TechnicalWords.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-
 
 const logger = new Logger('HdrScraper');
 
@@ -36,17 +41,34 @@ const axiosConfig = {
   },
 };
 
-// ═══════════════════════════════════════════════════════════════════
-//  HELPERS
-// ═══════════════════════════════════════════════════════════════════
-
-export function detectSeasonFromText(text: string): number | null {
+//Aqui ele extrai o range de temporada/episódio do texto, preservando intervalos como "1ª à 5ª"
+export function detectSeasonRange(text: string): EpisodeRange | null {
   const range = extrairRangeEpisodios(text);
-  if (range && range.season && range.season > 0) return range.season;
+  if (range) return range;
+
   const seasonMatch = text.match(/(\d+)\s*ª\s+TEMPORADA/i) || text.match(/Season\s+(\d+)/i);
-  return seasonMatch ? parseInt(seasonMatch[1]) : null;
+  if (seasonMatch) {
+    const s = parseInt(seasonMatch[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
+  }
+  return null;
 }
 
+//Regra única do HDR: com alvo definido, aceita se houver range que contenha o alvo,
+//ou se nenhum dos textos declarar temporada mas indicar coleção/pack da série
+export function passaFiltroTemporada(textos: string[], targetSeason?: number): boolean {
+  if (targetSeason === undefined) return true;
+
+  for (const t of textos) {
+    if (!t) continue;
+    const range = detectSeasonRange(t);
+    if (range) return temporadaAlvoNoRange(range, targetSeason);
+  }
+
+  return textos.some(t => isCollectionTitle(t));
+}
+
+//Aqui ele filtra links que não são posts (menu, categoria, feed, etc)
 export function isLikelyPostLink(href: string, text: string): boolean {
   if (!href || !text) return false;
 
@@ -87,6 +109,7 @@ export function isLikelyPostLink(href: string, text: string): boolean {
   return containsTorrentWord || !!slugMatch;
 }
 
+//Aqui ele detecta o idioma do magnet pelo texto do parágrafo
 export function extractLanguage(parentText: string): string {
   const t = parentText.toLowerCase();
   if (t.includes('dual') && /áudio|audio/.test(t)) return 'Dual Áudio';
@@ -96,17 +119,13 @@ export function extractLanguage(parentText: string): string {
   return '';
 }
 
-/**
- * Extrai metadados do post a partir do parágrafo que contém os rótulos em negrito.
- * Retorna título original (limpo, preferindo a tag pós-IMDb), título bruto, ano e idioma.
- */
-function extractHdrMetadata($: any): { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } {
+//Aqui ele extrai título original, ano e idioma do parágrafo de metadados do post
+export function extractHdrMetadata($: any): { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } {
   const result: { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } = {};
 
   const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
   if (!paragrafo.length) return result;
 
-  // Extrai Título Original cru
   paragrafo.find('b').each((_i: number, el: any) => {
     const rotulo = $(el).text().trim();
     const html = $(el).parent().html() || '';
@@ -129,18 +148,14 @@ function extractHdrMetadata($: any): { originalTitle?: string; originalTitleBrut
     }
   });
 
-  // Tenta extrair título base limpo a partir do link pós-IMDb (método primário)
   const tituloBase = extrairTituloBasePosImdb($, paragrafo);
   result.originalTitle = tituloBase || result.originalTitleBruto;
 
   return result;
 }
 
-/**
- * Extrai o título base do link imediatamente após o link do IMDb.
- * Ex.: "Batman", "The Walking Dead", "Pennyworth".
- */
-function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
+//Aqui ele pega o título base que aparece no link logo depois do link do IMDb
+export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   const imdbLink = paragrafo.find('a[href*="imdb.com/title/"]').first();
   if (!imdbLink.length) return null;
 
@@ -157,15 +172,18 @@ function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════
-//  BUSCA E EXTRAÇÃO
-// ═══════════════════════════════════════════════════════════════════
+//Aqui ele extrai um ano de 4 dígitos do texto
+export function extrairAno(texto: string): number | undefined {
+  const m = texto.match(/\b(19|20)\d{2}\b/);
+  return m ? parseInt(m[0]) : undefined;
+}
 
 interface SearchResultItem {
   title: string;
   postUrl: string;
 }
 
+//Aqui ele busca os posts no site e filtra pelo range de temporada do título
 export async function searchHdrLinks(query: string, targetSeason?: number): Promise<SearchResultItem[]> {
   const searchUrl = `${HDR_BASE}/index.php?s=${encodeURIComponent(query)}`;
 
@@ -186,10 +204,7 @@ export async function searchHdrLinks(query: string, targetSeason?: number): Prom
       if (seen.has(absoluteHref)) return;
       seen.add(absoluteHref);
 
-      if (targetSeason !== undefined) {
-        const season = detectSeasonFromText(text);
-        if (season !== null && season !== targetSeason) return;
-      }
+      if (!passaFiltroTemporada([text], targetSeason)) return;
 
       results.push({ title: text, postUrl: absoluteHref });
     });
@@ -201,6 +216,7 @@ export async function searchHdrLinks(query: string, targetSeason?: number): Prom
   }
 }
 
+//Aqui ele extrai os magnets do post, filtrando por range de temporada e idioma
 export async function extractMagnetsFromPost(
   html: string,
   postTitle: string,
@@ -221,7 +237,7 @@ export async function extractMagnetsFromPost(
     sizeMatch?: string;
   }[] = [];
 
-  // ── 1. Coleta magnets brutos ─────────────────────────────────────
+  //Aqui ele coleta os magnets crus do HTML, descartando legendado puro
   $('a[href^="magnet:"]').each((_i: number, el: any) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -235,12 +251,7 @@ export async function extractMagnetsFromPost(
 
     if (isLegendado && !isDualOuDublado) return;
 
-    const seasonNumber =
-      detectSeasonFromText(parentText) ??
-      detectSeasonFromText(postTitle) ??
-      detectSeasonFromText(pageTitle);
-
-    if (targetSeason !== undefined && seasonNumber !== null && seasonNumber !== targetSeason) return;
+    if (!passaFiltroTemporada([parentText, postTitle, pageTitle], targetSeason)) return;
 
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i)?.[0];
     const sizeMatch = parentText.match(/(\d+(?:\.\d+)?)\s*(GB|MB)/i)?.[0];
@@ -250,7 +261,7 @@ export async function extractMagnetsFromPost(
 
   logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalMagnetsBrutos=${rawMagnets.length}`);
 
-  // ── 2. Processa cada magnet bruto ────────────────────────────────
+  //Aqui ele processa cada magnet bruto e monta o resultado final
   for (const raw of rawMagnets) {
     try {
       const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
@@ -269,7 +280,6 @@ export async function extractMagnetsFromPost(
         canonicalName = undefined;
       }
 
-      // Extrai ano/título específicos do magnet (fallback para metadata global)
       let year = metadata.year;
       let originalTitle = metadata.originalTitle || metadata.originalTitleBruto;
 
@@ -278,18 +288,17 @@ export async function extractMagnetsFromPost(
         year = anoDoMagnet;
       }
 
-      // Não sobrescreve originalTitle com canonicalName.
-      // canonicalName será usado apenas para exibição/qualidade, não para validação.
-
       const language = extractLanguage(raw.parentText) || metadata.language || extractLanguage(pageTitle);
-      const seasonNumber =
-        detectSeasonFromText(raw.parentText) ??
-        detectSeasonFromText(postTitle) ??
-        detectSeasonFromText(pageTitle);
 
-      const range = extrairRangeEpisodios(raw.parentText);
-      let episodeStart = range?.episodeStart ?? undefined;
-      let episodeEnd = range?.episodeEnd ?? undefined;
+      //Aqui ele reextrai o range pra montar o rótulo da temporada
+      const range =
+        detectSeasonRange(raw.parentText) ??
+        detectSeasonRange(postTitle) ??
+        detectSeasonRange(pageTitle);
+
+      const rangeEp = extrairRangeEpisodios(raw.parentText);
+      let episodeStart = rangeEp?.episodeStart ?? undefined;
+      let episodeEnd = rangeEp?.episodeEnd ?? undefined;
 
       if (episodeStart === undefined && canonicalName) {
         const rangeCanonical = extrairRangeEpisodios(canonicalName);
@@ -301,8 +310,15 @@ export async function extractMagnetsFromPost(
       const qualityMatch = raw.qualityMatch;
       const sizeMatch = raw.sizeMatch;
 
-      const magnetTitle = seasonNumber
-        ? `${pageTitle} - ${seasonNumber}ª Temporada${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
+      //Aqui ele preserva o range no rótulo quando é intervalo, tipo "1ª à 5ª Temporada"
+      const seasonLabel = range && range.seasonStart > 0
+        ? (range.seasonStart === range.seasonEnd
+            ? `${range.seasonStart}ª Temporada`
+            : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
+        : '';
+
+      const magnetTitle = seasonLabel
+        ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
         : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
 
       results.push({
@@ -315,7 +331,7 @@ export async function extractMagnetsFromPost(
         originalTitle,
         year,
         canonicalName,
-        season: seasonNumber ?? undefined,
+        season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
         episode,
       });
 
@@ -329,12 +345,7 @@ export async function extractMagnetsFromPost(
   return results;
 }
 
-// Helper adicionado
-function extrairAno(texto: string): number | undefined {
-  const m = texto.match(/\b(19|20)\d{2}\b/);
-  return m ? parseInt(m[0]) : undefined;
-}
-
+//Aqui é o entrypoint do scraper HDR: monta queries, busca posts e extrai magnets
 export async function searchHdr(
   query: string,
   type: 'movie' | 'series' = 'movie',
@@ -354,6 +365,7 @@ export async function searchHdr(
     if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
   }
 
+  //Aqui ele adiciona a variação sem "temporada N" pra pegar packs
   for (const q of queriesBase) {
     if (type === 'series') {
       const tituloSemTemporada = q
@@ -386,6 +398,7 @@ export async function searchHdr(
         continue;
       }
 
+      //Aqui ele filtra por frase base ou coleção, aproveitando fallback de packs
       const filtrados = links.filter(link => {
         const tituloNorm = normalizarTexto(link.title);
         const contemFrase = frasesValidas.some(frase => tituloNorm.includes(frase));
@@ -423,7 +436,7 @@ export async function searchHdr(
             }
           }
         } catch {
-          // ignora erro no post
+          //Aqui ele ignora erro de um post individual pra não derrubar a busca toda
         }
       }
 

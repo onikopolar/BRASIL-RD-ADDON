@@ -12,17 +12,19 @@ export interface TorrentResult {
     sizeInBytes: number;
     season?: number;
     episode?: number;
-    /** Título original extraído do HTML do post (ex: BLUDV "Título Original: ...") */
+    //Título original extraído do HTML do post (ex: BLUDV "Título Original: ...")
     originalTitle?: string;
-    /** Ano de lançamento extraído do HTML do post (ex: "Lançamento: 2020") */
+    //Ano de lançamento extraído do HTML do post (ex: "Lançamento: 2020")
     year?: number;
-    /** Anos de lançamento múltiplos para coleções/franquias (ex.: 2001, 2004, 2007, 2010) */
+    //Anos de lançamento múltiplos para coleções/franquias (ex.: 2001, 2004, 2007, 2010)
     years?: number[];
-    /** Nome canônico extraído do magnet (campo dn via magnetHelper) */
+    //Hash do magnet (btih) extraído durante o scraping; usado para dedup entre provedores
+    infoHash?: string;
+    //Nome canônico extraído do magnet (campo dn via magnetHelper)
     canonicalName?: string;
-    /** Indica que o IMDb ID do post foi validado durante o scraping (HDR) */
+    //Indica que o IMDb ID do post foi validado durante o scraping (HDR)
     imdbConfirmed?: boolean;
-    /** Contexto HTML com informações de episódio (ex: "EPISÓDIO 01: 1080p") */
+    //Contexto HTML com informações de episódio (ex: "EPISÓDIO 01: 1080p")
     htmlTitle?: string;
     lastUpdated: Date;
     confidence: number;

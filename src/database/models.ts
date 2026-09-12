@@ -32,9 +32,9 @@ const sequelizeConfig: any = {
     idle: 10000,
     evict: 10000
   }
-  // Removida opção "retry" (não suportada diretamente)
 };
 
+// SSL só quando o banco é Railway externo, que exige conexão segura
 if (DATABASE_URL?.includes('postgres')) {
   sequelizeConfig.dialectOptions = {
     ssl: isRailwayExternal ? { require: true, rejectUnauthorized: false } : false
@@ -48,12 +48,8 @@ const sequelize = DATABASE_URL
 if (process.env.NODE_ENV === 'production' && DATABASE_URL) {
   sequelize.authenticate()
     .then(() => console.log('Conexao com PostgreSQL estabelecida'))
-    .catch(err => console.error('Erro na conexao PostgreSQL:', err.message));
+    .catch(err => console.error('Erro na conexao Postgres:', err.message));
 }
-
-// ═══════════════════════════════════════
-// MODELO: Torrent
-// ═══════════════════════════════════════
 
 interface TorrentAttributes {
   infoHash: string;
@@ -62,19 +58,21 @@ interface TorrentAttributes {
   size?: number;
   type: string;
   imdbId?: string;
-  imdbIds?: string[]; // JSON com todos os IMDb IDs associados
+  imdbIds?: string[];
   imdbSeason?: number;
+  imdbSeasonEnd?: number;
   imdbEpisodeStart?: number;
   imdbEpisodeEnd?: number;
   seeders?: number;
   idioma?: string;
   qualidade?: string;
-  magnet?: string; // NOVO: magnet completo para uso futuro
+  magnet?: string;
   uploadDate: Date;
   lastSeen: Date;
   rescrapeAt?: Date | null;
 }
 
+// Representa um torrent já validado e indexado pelo IMDb
 class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public infoHash!: string;
   public provider!: string;
@@ -84,6 +82,7 @@ class Torrent extends Model<TorrentAttributes> implements TorrentAttributes {
   public imdbId?: string;
   public imdbIds?: string[];
   public imdbSeason?: number;
+  public imdbSeasonEnd?: number;
   public imdbEpisodeStart?: number;
   public imdbEpisodeEnd?: number;
   public seeders?: number;
@@ -104,7 +103,10 @@ Torrent.init(
     type:       { type: DataTypes.STRING(10) },
     imdbId:     { type: DataTypes.STRING(32) },
     imdbIds: { type: DataTypes.JSONB, allowNull: true, defaultValue: [] },
+    // imdbSeason guarda o início do intervalo de temporadas
     imdbSeason: { type: DataTypes.INTEGER },
+    // imdbSeasonEnd guarda o fim; quando é temporada única, recebe o mesmo valor de imdbSeason
+    imdbSeasonEnd: { type: DataTypes.INTEGER },
     imdbEpisodeStart: { type: DataTypes.INTEGER },
     imdbEpisodeEnd:   { type: DataTypes.INTEGER },
     seeders:    { type: DataTypes.INTEGER },
@@ -127,27 +129,23 @@ Torrent.init(
       { fields: ['provider'] },
       { fields: ['uploadDate'] },
       { fields: ['imdbId', 'type'] },
-      // Índice GIN para buscas em imdbIds (Postgres)
       { fields: ['imdbIds'], using: 'gin' }
     ]
   }
 );
 
-// ═══════════════════════════════════════
-// MODELO: ImdbTitleCache (cache de títulos TMDB)
-// ═══════════════════════════════════════
-
 interface ImdbTitleCacheAttributes {
   id?: number;
   imdbId: string;
   season?: number | null;
-  titlesPt: string[];      // agora array de strings
-  titlesEn: string[];      // array de strings
+  titlesPt: string[];
+  titlesEn: string[];
   year?: number | null;
-  episodeTitles?: any | null; // JSON com títulos de episódios
+  episodeTitles?: any | null;
   updatedAt: Date;
 }
 
+// Cache de títulos do TMDB por imdbId + temporada, evita bater na API toda hora
 class ImdbTitleCache extends Model<ImdbTitleCacheAttributes> implements ImdbTitleCacheAttributes {
   public id!: number;
   public imdbId!: string;
@@ -170,10 +168,11 @@ ImdbTitleCache.init(
       type: DataTypes.STRING(32),
       allowNull: false
     },
+    // season 0 representa filme, sem temporada
     season: {
       type: DataTypes.INTEGER,
       allowNull: false,
-      defaultValue: 0   // 0 = filme (sem temporada)
+      defaultValue: 0
     },
     titlesPt: {
       type: DataTypes.JSONB,

@@ -7,7 +7,7 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -214,9 +214,10 @@ export class BludvScraper {
 
     if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
 
+    //Aqui ele checa se o alvo cabe no range declarado pelo título
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(item.title);
-      if (range && range.season !== targetSeason) return false;
+      if (!temporadaAlvoNoRange(range, targetSeason)) return false;
     }
 
     const titleNormalizado = normalizarTexto(item.title);
@@ -258,9 +259,10 @@ export class BludvScraper {
       }
     }
 
+    //Aqui ele checa se o alvo cabe no range declarado no título do post
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(postTitle);
-      if (range && range.season !== targetSeason) return [];
+      if (!temporadaAlvoNoRange(range, targetSeason)) return [];
     }
 
     const metadata = this.extractPostMetadata($);

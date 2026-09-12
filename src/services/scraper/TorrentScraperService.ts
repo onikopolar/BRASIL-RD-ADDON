@@ -27,6 +27,7 @@ interface CommonTorrentParams {
   originalTitle?: string;
   year?: number;
   canonicalName?: string;
+  infoHash?: string;
   imdbConfirmed?: boolean;
   confidence?: number;
   relevanceScore?: number;
@@ -264,6 +265,7 @@ export class TorrentScraperService {
       originalTitle: params.originalTitle,
       year: params.year,
       canonicalName: params.canonicalName,
+      infoHash: params.infoHash,
       imdbConfirmed: params.imdbConfirmed,
     };
   }
@@ -295,7 +297,7 @@ export class TorrentScraperService {
     const magnetName = r.canonicalName || this.extractDnFromMagnet(r.magnet) || r.title;
     const quality = this.qualityDetector.extractQualityFromFilename(magnetName);
     const range = extrairRangeEpisodios(magnetName);
-    const season = r.season ?? range?.season ?? undefined;
+    const season = r.season ?? range?.seasonStart ?? undefined;
     const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
     const language = r.language ? this.mapHdrLanguage(r.language) : 'desconhecido';
 
@@ -315,6 +317,7 @@ export class TorrentScraperService {
       originalTitle: r.originalTitle,
       year: r.year,
       canonicalName: magnetName,
+      infoHash: r.infoHash,
       confidence: 0.70,
       relevanceScore: 0,
       sizeInBytes: this.calculateSizeInBytes(r.size),
@@ -348,7 +351,7 @@ export class TorrentScraperService {
     }
 
     const range = displayName ? extrairRangeEpisodios(displayName) : null;
-    const season = r.season ?? range?.season ?? undefined;
+    const season = r.season ?? range?.seasonStart ?? undefined;
     const episode = r.episode ?? (range && range.episodeStart > 0 ? range.episodeStart : undefined);
 
     const titleFinal = r.canonicalName || r.originalTitle || displayName || 'Starck Torrent';
@@ -368,6 +371,7 @@ export class TorrentScraperService {
       originalTitle: r.originalTitle,
       year: r.year,
       canonicalName: r.canonicalName || (temDn ? dnDoMagnet : undefined),
+      infoHash: r.infoHash,
       confidence: 0.70,
       relevanceScore: 0,
     });

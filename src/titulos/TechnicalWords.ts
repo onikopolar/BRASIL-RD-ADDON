@@ -82,7 +82,6 @@ export function normalizarTexto(texto: string): string {
     .toLowerCase()
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    // Emojis e pictogramas (Unicode 12+) — nunca são úteis em títulos de torrent
     .replace(/\p{Extended_Pictographic}/gu, ' ')
     .replace(/\p{Emoji_Presentation}/gu, ' ')
     .replace(/&#0*38;/g, '&')
@@ -139,9 +138,9 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
 
-const COLLECTION_WORDS = new Set([
+export const COLLECTION_WORDS = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
-  'coletanea', 'franquia', 'duologia', 'saga', 'todas as temporadas',
+  'coletanea', 'franquia', 'duologia', 'todas as temporadas',
   'temporada completa', 'season pack', 'pack completo',
 ]);
 
@@ -155,13 +154,11 @@ export function isCollectionTitle(title: string): boolean {
     const termoNorm = normalizarTexto(termo);
     if (!termoNorm) continue;
 
-    // Termos compostos: busca substring direta (o espaço já serve de delimitador).
     if (termoNorm.includes(' ')) {
       if (normalizado.includes(termoNorm)) return true;
       continue;
     }
 
-    // Termos de 1 palavra: exige boundary antes e depois pra evitar "sagaz" casar "saga".
     const escaped = termoNorm.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`);
     if (re.test(normalizado)) return true;
@@ -234,8 +231,8 @@ export function getTechnicalWordsStats() {
     internationalReleaseGroups: INTERNATIONAL_RELEASE_GROUPS.length,
     internationalTrackers: INTERNATIONAL_TRACKERS.length,
     brazilianReleaseGroups: BRAZILIAN_RELEASE_GROUPS.length,
-    version: '1.5.0',
-    description: 'Boundaries em SxxExx, S04 isolado, padrão Temp..(N) seguro, isCollectionTitle normalizado',
+    version: '1.6.0',
+    description: 'EpisodeRange agora modela temporada como intervalo (seasonStart/seasonEnd); suporte a ranges "1ª À 5ª", "Temporadas 1-5", "S01-S05"',
   };
 }
 
@@ -319,10 +316,47 @@ function _isAudioChannelInOriginal(originalTitle: string, num: number): boolean 
   return false;
 }
 
+/**
+ * Range de temporada/episódio extraído de um título.
+ *
+ * Semântica dos campos:
+ *   - `seasonStart` e `seasonEnd` — início e fim do intervalo de temporadas.
+ *     Quando `seasonStart === seasonEnd`, é uma temporada única.
+ *     Quando `seasonStart === 0`, o título não declara temporada (só episódio).
+ *   - `episodeStart` e `episodeEnd` — análogo, para episódios.
+ *     Quando ambos são 0, é um pack de temporada (sem episódio específico).
+ *
+ * Essa simetria (temporada como intervalo, não número solto) é o que permite
+ * que ranges como "1ª À 5ª TEMPORADA" sejam reconhecidos e aceitos para
+ * qualquer temporada dentro do intervalo.
+ */
 export interface EpisodeRange {
-  season: number;
+  seasonStart: number;
+  seasonEnd: number;
   episodeStart: number;
   episodeEnd: number;
+}
+
+/**
+ * Predicado único para "o alvo (temporada pedida) cabe no range?".
+ *
+ * Esta é a regra canônica. Todos os consumidores que antes comparavam
+ * `range.season !== targetSeason` devem usar esta função. Não duplicar.
+ *
+ * Regras:
+ *   - Alvo ausente (undefined/null) → aceita (sem filtro).
+ *   - Range ausente → aceita (sem informação).
+ *   - `seasonStart === 0` (sem temporada declarada) → aceita.
+ *   - Caso contrário: alvo deve estar em [seasonStart, seasonEnd].
+ */
+export function temporadaAlvoNoRange(
+  range: EpisodeRange | null | undefined,
+  targetSeason: number | undefined | null
+): boolean {
+  if (targetSeason === undefined || targetSeason === null) return true;
+  if (!range) return true;
+  if (range.seasonStart === 0) return true;
+  return targetSeason >= range.seasonStart && targetSeason <= range.seasonEnd;
 }
 
 // Extrai range de temporada/episódio de um título. Devolve null quando não há nada.
@@ -336,7 +370,6 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     .trim();
 
   // ═══ Padrão 1: SxxExx (com múltiplos episódios opcionais) ═══
-  // \b no início evita casar o "S" de "CLASS04"; \b no fim evita match parcial em E01123.
   const sxxExx = t.match(/\bs(\d{1,2})\s*e(\d{1,3})\b/i);
   if (sxxExx) {
     const season = parseInt(sxxExx[1]);
@@ -370,7 +403,12 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
 
     epNums.sort((a, b) => a - b);
     const unique = [...new Set(epNums)];
-    return { season, episodeStart: unique[0], episodeEnd: unique[unique.length - 1] };
+    return {
+      seasonStart: season,
+      seasonEnd: season,
+      episodeStart: unique[0],
+      episodeEnd: unique[unique.length - 1],
+    };
   }
 
   // ═══ Padrão 1b: Sxx (yy) ═══
@@ -379,45 +417,52 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     const season = parseInt(sComEpParenteses[1]);
     const episode = parseInt(sComEpParenteses[2]);
     if (![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
-      return { season, episodeStart: episode, episodeEnd: episode };
+      return { seasonStart: season, seasonEnd: season, episodeStart: episode, episodeEnd: episode };
+    }
+  }
+
+  // ═══ Padrão 1b-2: Sxx-Syy — range de temporadas (ex.: "S01-S05", "S01 a S05") ═══
+  // Precisa vir ANTES do Padrão 1c, senão "S01" em "S01-S05" casaria primeiro como temporada única.
+  // Exige o segundo "S" para não confundir com "S04-05" (ambíguo com episódio).
+  const sRange = t.match(/\bs(\d{1,2})\s*(?:a|ao|aos|ate|-|–|—|~)\s*s(\d{1,2})\b/i);
+  if (sRange) {
+    const start = parseInt(sRange[1]);
+    const end = parseInt(sRange[2]);
+    if (start > 0 && end >= start) {
+      return { seasonStart: start, seasonEnd: end, episodeStart: 0, episodeEnd: 0 };
     }
   }
 
   // ═══ Padrão 1c: Sxx isolado — season pack (ex.: "Reacher.S04.1080p") ═══
-  // \b antes impede "CLASS04"; \b depois impede "S04E01" (que já casou acima).
   const sIsolado = t.match(/\bs(\d{1,2})\b(?!\s*e\d)/i);
   if (sIsolado) {
-    return { season: parseInt(sIsolado[1]), episodeStart: 0, episodeEnd: 0 };
+    const season = parseInt(sIsolado[1]);
+    return { seasonStart: season, seasonEnd: season, episodeStart: 0, episodeEnd: 0 };
   }
 
   // ═══ Padrão 2: 2x04 ═══
   const seasonXEp = t.match(/\b(\d{1,2})x(\d{1,3})\b/i);
   if (seasonXEp) {
-    return {
-      season: parseInt(seasonXEp[1]),
-      episodeStart: parseInt(seasonXEp[2]),
-      episodeEnd: parseInt(seasonXEp[2]),
-    };
+    const season = parseInt(seasonXEp[1]);
+    const ep = parseInt(seasonXEp[2]);
+    return { seasonStart: season, seasonEnd: season, episodeStart: ep, episodeEnd: ep };
   }
 
   // ═══ Padrão 3: Season 2 Episode 4 ═══
   const seasonEpText = t.match(/\b(?:season|temporada)\s*(\d{1,2})\s*(?:episode|epis[oó]dio|ep|e)\s*(\d{1,3})\b/i);
   if (seasonEpText) {
-    return {
-      season: parseInt(seasonEpText[1]),
-      episodeStart: parseInt(seasonEpText[2]),
-      episodeEnd: parseInt(seasonEpText[2]),
-    };
+    const season = parseInt(seasonEpText[1]);
+    const ep = parseInt(seasonEpText[2]);
+    return { seasonStart: season, seasonEnd: season, episodeStart: ep, episodeEnd: ep };
   }
 
   // ═══ Padrão 3b: Temporada/Season/Temp N (M) — com gap controlado ═══
-  // [^\d(]{0,20} evita capturar parênteses aleatórios longe do season.
   const tempComEpParenteses = t.match(/\b(?:temporada|season|temp|s)\s*(\d{1,2})\b[^\d(]{0,20}\(\s*(\d{1,3})\s*\)/i);
   if (tempComEpParenteses) {
     const season = parseInt(tempComEpParenteses[1]);
     const episode = parseInt(tempComEpParenteses[2]);
     if (![1080, 720, 480, 2160, 1440, 4320].includes(episode)) {
-      return { season, episodeStart: episode, episodeEnd: episode };
+      return { seasonStart: season, seasonEnd: season, episodeStart: episode, episodeEnd: episode };
     }
   }
 
@@ -425,7 +470,8 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const episodioRangeWords = t.match(/\bepis[oó]dios?\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e)\s*(\d{1,3})\b/i);
   if (episodioRangeWords) {
     return {
-      season: 0,
+      seasonStart: 0,
+      seasonEnd: 0,
       episodeStart: parseInt(episodioRangeWords[1]),
       episodeEnd: parseInt(episodioRangeWords[2]),
     };
@@ -435,7 +481,8 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const episodioRangeHyphen = t.match(/\bepis[oó]dios?\s*(\d{1,3})\s*-\s*(\d{1,3})\b/i);
   if (episodioRangeHyphen) {
     return {
-      season: 0,
+      seasonStart: 0,
+      seasonEnd: 0,
       episodeStart: parseInt(episodioRangeHyphen[1]),
       episodeEnd: parseInt(episodioRangeHyphen[2]),
     };
@@ -445,7 +492,8 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const ptRangeComOrdinal = t.match(/(\d{1,3})\s*º\s*e\s*(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptRangeComOrdinal) {
     return {
-      season: 0,
+      seasonStart: 0,
+      seasonEnd: 0,
       episodeStart: parseInt(ptRangeComOrdinal[1]),
       episodeEnd: parseInt(ptRangeComOrdinal[2]),
     };
@@ -455,54 +503,93 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptSingleComOrdinal) {
     const ep = parseInt(ptSingleComOrdinal[1]);
-    return { season: 0, episodeStart: ep, episodeEnd: ep };
+    return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
   }
 
   // ═══ Padrão 5: Episódio N ═══
   const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
   if (episodioOnly) {
     const ep = parseInt(episodioOnly[1]);
-    return { season: 0, episodeStart: ep, episodeEnd: ep };
+    return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
   }
 
   // ═══ Padrão 6: S02 / Season02 / 2x sozinhos ═══
   const sOnly = t.match(/^s(\d{1,2})$/i);
-  if (sOnly) return { season: parseInt(sOnly[1]), episodeStart: 0, episodeEnd: 0 };
+  if (sOnly) {
+    const s = parseInt(sOnly[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
+  }
   const seasonOnly = t.match(/^season(\d{1,2})$/i);
-  if (seasonOnly) return { season: parseInt(seasonOnly[1]), episodeStart: 0, episodeEnd: 0 };
+  if (seasonOnly) {
+    const s = parseInt(seasonOnly[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
+  }
   const xOnly = t.match(/^(\d{1,2})x$/i);
-  if (xOnly) return { season: parseInt(xOnly[1]), episodeStart: 0, episodeEnd: 0 };
-
-  // ═══ Padrão 7: Nª temporada ═══
-  const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
-  if (tempPack) {
-    return { season: parseInt(tempPack[1]), episodeStart: 0, episodeEnd: 0 };
+  if (xOnly) {
+    const s = parseInt(xOnly[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
   }
 
-  // ═══ Padrão 8: Season N ═══
+  // ═══ Padrão 6.5: Nª À Mª TEMPORADA — range ordinal em PT ═══
+  // Ex.: "1ª À 5ª TEMPORADA", "1ª-5ª temporada", "2ª até 7ª temporada"
+  // Precisa vir ANTES do Padrão 7, que capturaria só o "5ª TEMPORADA" e descartaria o "1ª À".
+  const ordinalRange = t.match(/\b(\d{1,2})\s*[ªº°]?\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\s*[ªº°]?\s*temporadas?\b/i);
+  if (ordinalRange) {
+    const start = parseInt(ordinalRange[1]);
+    const end = parseInt(ordinalRange[2]);
+    if (start > 0 && end >= start) {
+      return { seasonStart: start, seasonEnd: end, episodeStart: 0, episodeEnd: 0 };
+    }
+  }
+
+  // ═══ Padrão 6.6: TEMPORADAS N-M / SEASONS N-M — range com palavra antes ═══
+  // Ex.: "Temporadas 1-5", "Seasons 2 a 7", "Temporada 1 até 4"
+  const wordBeforeRange = t.match(/\b(?:temporadas?|seasons?)\s*(\d{1,2})\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\b/i);
+  if (wordBeforeRange) {
+    const start = parseInt(wordBeforeRange[1]);
+    const end = parseInt(wordBeforeRange[2]);
+    if (start > 0 && end >= start) {
+      return { seasonStart: start, seasonEnd: end, episodeStart: 0, episodeEnd: 0 };
+    }
+  }
+
+  // ═══ Padrão 7: Nª temporada (temporada única) ═══
+  const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
+  if (tempPack) {
+    const s = parseInt(tempPack[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
+  }
+
+  // ═══ Padrão 8: Season N (temporada única) ═══
   const seasonTag = t.match(/\b(?:season|temporada)\s*(\d{1,2})\b/i);
-  if (seasonTag) return { season: parseInt(seasonTag[1]), episodeStart: 0, episodeEnd: 0 };
+  if (seasonTag) {
+    const s = parseInt(seasonTag[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
+  }
 
   // ═══ Padrão 9: temporada completa / complete season / season pack ═══
   const fullSeasonPattern = /\b(\d{1,2})\s*[ªº°]?\s*temporada\s*completa\b/i;
   const fullSeasonMatch = t.match(fullSeasonPattern);
   if (fullSeasonMatch) {
-    return { season: parseInt(fullSeasonMatch[1]), episodeStart: 0, episodeEnd: 0 };
+    const s = parseInt(fullSeasonMatch[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
   }
 
   const completeSeasonEn = /\b(?:complete\s+season|season\s+complete)\s*(\d{1,2})\b/i;
   const completeSeasonEnMatch = t.match(completeSeasonEn);
   if (completeSeasonEnMatch) {
-    return { season: parseInt(completeSeasonEnMatch[1]), episodeStart: 0, episodeEnd: 0 };
+    const s = parseInt(completeSeasonEnMatch[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
   }
 
-  const seasonPackEn = /\b(?:season\s*pack|complete\s*pack|pack\s*completo)\s*[:\-]?\s*(\d{1,2})\b/i;
+  const seasonPackEn = /\b(?:season\s*pack|complete\s*pack|pack\s+completo)\s*[:\-]?\s*(\d{1,2})\b/i;
   const seasonPackEnMatch = t.match(seasonPackEn);
   if (seasonPackEnMatch) {
-    return { season: parseInt(seasonPackEnMatch[1]), episodeStart: 0, episodeEnd: 0 };
+    const s = parseInt(seasonPackEnMatch[1]);
+    return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
   }
 
   return null;
 }
 
-console.log('[INFO] TechnicalWords carregado — v1.5.0');
+console.log('[INFO] TechnicalWords carregado — v1.6.0');

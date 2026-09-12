@@ -174,7 +174,7 @@ export class WordPressScraper {
     }
 
     const queryRange = extrairRangeEpisodios(searchQuery);
-    const querySeason = targetSeason ?? queryRange?.season;
+    const querySeason = targetSeason ?? queryRange?.seasonStart;
     if (querySeason) {
       logger.debug(`WP ${site.name}: temporada detectada na query: ${querySeason}`);
     }

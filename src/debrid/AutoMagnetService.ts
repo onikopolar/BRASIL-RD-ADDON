@@ -66,8 +66,7 @@ export class AutoMagnetService {
 
   constructor() { }
 
-  // ─── VALIDAÇÃO DE TÍTULO ─────────────────────────────────────────
-
+  //Valida o título reaproveitando o TitleFilter, com cache pra não repetir trabalho
   private async validateTitleWithCache(
     torrentTitle: string,
     imdbId: string,
@@ -90,12 +89,11 @@ export class AutoMagnetService {
     return result;
   }
 
-  // ─── HELPERS ─────────────────────────────────────────────────────
-
   private validateMagnetLink(magnet: string): boolean {
     return magnet.startsWith('magnet:') && magnet.includes('xt=urn:btih:') && magnet.length > 50;
   }
 
+  //Detecta o idioma pelo texto do título antes de cair no LanguageDetector
   private detectLanguage(title: string): string {
     const lower = title.toLowerCase();
     if (lower.includes('dublado') || lower.includes('dublada') || lower.includes('dublagem')) return 'pt-BR';
@@ -127,8 +125,7 @@ export class AutoMagnetService {
     return dados ? dados.infoHash : null;
   }
 
-  // ─── SALVAR NO BANCO ─────────────────────────────────────────────
-
+  //Grava o torrent no banco, traduzindo o range de temporada em imdbSeason + imdbSeasonEnd
   private async saveToDatabase(
     magnetData: MagnetData,
     titleMatchResult: TitleMatchResult,
@@ -154,15 +151,21 @@ export class AutoMagnetService {
       const rangeSource = htmlTitle || magnetData.title;
       const episodeRange = extrairRangeEpisodios(rangeSource);
 
-      let imdbSeason: number | null = magnetData.imdbSeason ?? null;
+      let imdbSeason: number | null = null;
+      let imdbSeasonEnd: number | null = null;
       let imdbEpisodeStart: number | null = null;
       let imdbEpisodeEnd: number | null = null;
 
-      if (magnetData.category === 'serie' && titleMatchResult.torrentMetadata.isCompleteSeason) {
-        imdbSeason = null;
-        imdbEpisodeStart = null;
-        imdbEpisodeEnd = null;
-      } else {
+      if (magnetData.category === 'serie') {
+        // Se o título declara o range, é ele quem manda. Senão cai no valor vindo do request.
+        if (episodeRange && episodeRange.seasonStart > 0) {
+          imdbSeason = episodeRange.seasonStart;
+          imdbSeasonEnd = episodeRange.seasonEnd;
+        } else if (magnetData.imdbSeason !== undefined && magnetData.imdbSeason !== null) {
+          imdbSeason = magnetData.imdbSeason;
+          imdbSeasonEnd = magnetData.imdbSeason;
+        }
+
         if (episodeRange && !(episodeRange.episodeStart === 0 && episodeRange.episodeEnd === 0)) {
           imdbEpisodeStart = episodeRange.episodeStart;
           imdbEpisodeEnd = episodeRange.episodeEnd;
@@ -185,6 +188,7 @@ export class AutoMagnetService {
         infoHash: magnetHash,
         imdbId: magnetData.imdbId,
         imdbSeason,
+        imdbSeasonEnd,
         imdbEpisodeStart,
         imdbEpisodeEnd,
         isCompleteSeason: titleMatchResult.torrentMetadata.isCompleteSeason,
@@ -198,6 +202,7 @@ export class AutoMagnetService {
         type: magnetData.category === 'serie' ? 'series' : 'movie',
         imdbId: magnetData.imdbId || null,
         imdbSeason,
+        imdbSeasonEnd,
         imdbEpisodeStart,
         imdbEpisodeEnd,
         seeders: magnetData.seeds || 0,
@@ -219,8 +224,7 @@ export class AutoMagnetService {
     }
   }
 
-  // ─── ADICIONAR MAGNET AUTOMATICAMENTE ───────────────────────────
-
+  //Ponto de entrada: valida o título e, se passar, grava no banco
   async autoAddMagnet(
     magnetLink: string,
     torrentTitle: string,
@@ -255,8 +259,8 @@ export class AutoMagnetService {
         return result;
       }
 
-      // Para séries, usamos o título completo do torrent (contém temporada/episódio)
-      // Para filmes, priorizamos o título original (mais limpo)
+      // Para séries priorizamos o título completo (tem temporada e episódio).
+      // Para filmes, o título original costuma ser mais limpo.
       const titleForValidation = type === 'series'
         ? (torrentTitle?.trim() || originalTitle?.trim() || '')
         : (originalTitle?.trim() || torrentTitle?.trim() || '');
@@ -284,7 +288,6 @@ export class AutoMagnetService {
         return result;
       }
 
-      // Título que será salvo no banco
       const effectiveTitle = titleForValidation;
 
       let torrentSeason = imdbSeason;
@@ -362,8 +365,7 @@ export class AutoMagnetService {
     }
   }
 
-  // ─── TORBOX ON CLICK ─────────────────────────────────────────────
-
+  //Resolve no Torbox sob demanda, criando o torrent na conta do usuário se ainda não existir
   async processTorboxOnClick(magnetData: MagnetData, apiKey: string): Promise<{ success: boolean; streamLink?: string; status: string; message?: string }> {
     try {
       const existingTorrent = await this.checkExistingTorrent(magnetData.magnet, apiKey);
@@ -428,8 +430,6 @@ export class AutoMagnetService {
     }
   }
 
-  // ─── CHECK EXISTING TORRENT ──────────────────────────────────────
-
   private async checkExistingTorrent(magnet: string, apiKey: string): Promise<{ found: boolean; torrentId?: string; status?: string; downloaded: boolean }> {
     try {
       const magnetHash = await this.extrairHashDoMagnet(magnet);
@@ -448,8 +448,6 @@ export class AutoMagnetService {
       return { found: false, downloaded: false };
     }
   }
-
-  // ─── CACHE CLEAR / STATS ─────────────────────────────────────────
 
   clearCache(): void {
     this.validationCache.clear();
