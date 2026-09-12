@@ -30,13 +30,25 @@ interface TorboxListResponse {
   success?: boolean;
 }
 
+// Resposta do endpoint /torrents/torrentinfo — devolve seeds/peers reais da rede BitTorrent.
+interface TorboxHashInfoResponse {
+  data?: {
+    hash?: string;
+    name?: string;
+    seeds?: number;
+    peers?: number;
+    size?: number;
+  };
+  success?: boolean;
+}
+
 export class TorboxService {
   private static instance: TorboxService | null = null;
 
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
-  /** Cache infoHash -> torrentId for queued torrents not yet in mylist */
+  // Cache infoHash -> torrentId pra torrents recém-adicionados que ainda não apareceram no mylist.
   private static queuedTorrentCache = new Map<string, string>();
   private readonly videoExtensions: string[] = [
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -45,7 +57,7 @@ export class TorboxService {
   private staticResponseService: StaticResponseService;
   private readonly episodeMatcher = EpisodeMatcher.getInstance();
 
-  /** Cache of target titles for each infoHash (e.g., ["Kung Fu Hustle", "Kung-Fusao"]) */
+  // Títulos alvo por infoHash, usados pra escolher o arquivo certo dentro do torrent.
   private titleCache = new Map<string, string[]>();
 
   public static getInstance(baseUrl?: string): TorboxService {
@@ -66,10 +78,8 @@ export class TorboxService {
     this.staticResponseService.setBaseUrl(baseUrl);
   }
 
-  /** Registers titles (PT and EN) that will be used to choose the correct file inside the torrent */
   public setTitlesForHash(infoHash: string, titles: string[]): void {
     if (infoHash && titles.length > 0) {
-      // Deduplica os títulos antes de armazenar
       const uniqueTitles = Array.from(new Set(titles));
       this.titleCache.set(infoHash.toLowerCase(), uniqueTitles);
       this.logger.debug('Títulos registrados para seleção de arquivo (únicos)', {
@@ -117,8 +127,6 @@ export class TorboxService {
 
     return client;
   }
-
-  // ── Public API (mesma interface do RealDebridService) ─────────────────
 
   async addMagnet(magnetLink: string, apiKey: string): Promise<string> {
     this.validateMagnetLink(magnetLink);
@@ -244,6 +252,42 @@ export class TorboxService {
     }
   }
 
+  // Consulta o /torrents/torrentinfo pra pegar seeds reais de qualquer hash — sem retry, senão 5s viram 18s.
+  async getTorrentInfoByHash(hash: string, apiKey: string, timeoutSec = 10): Promise<number> {
+    if (!hash || hash.length < 32) return 0;
+    const client = this.createHttpClient(apiKey);
+    const startTime = Date.now();
+    try {
+      const response = await client.get<TorboxHashInfoResponse>('/torrents/torrentinfo', {
+        params: { hash, timeout: timeoutSec },
+        timeout: (timeoutSec + 2) * 1000,   // vira 12s
+      });
+      const seeds = Number(response.data?.data?.seeds);
+      const durationMs = Date.now() - startTime;
+      if (!Number.isFinite(seeds) || seeds < 0) {
+        this.logger.debug('getTorrentInfoByHash: seeds inválidos na resposta', {
+          hash: hash.substring(0, 16),
+          rawSeeds: response.data?.data?.seeds,
+          durationMs,
+        });
+        return 0;
+      }
+      this.logger.debug('getTorrentInfoByHash: seeds obtidos', {
+        hash: hash.substring(0, 16),
+        seeds,
+        durationMs,
+      });
+      return seeds;
+    } catch (error) {
+      this.logger.debug('getTorrentInfoByHash: falha silenciosa (retorna 0)', {
+        hash: hash.substring(0, 16),
+        error: (error as Error).message,
+        durationMs: Date.now() - startTime,
+      });
+      return 0;
+    }
+  }
+
   async selectFiles(_torrentId: string, _apiKey: string, _fileIds: string = 'all'): Promise<void> {
     this.logger.debug('selectFiles: método não suportado (noop)');
   }
@@ -290,11 +334,6 @@ export class TorboxService {
     }
   }
 
-  /**
-   * Obtém o link de stream para um arquivo dentro do torrent.
-   * Agora exige correspondência exata de episódio quando informado.
-   * Prioriza a qualidade (targetQuality) na seleção do arquivo.
-   */
   async getStreamLinkForTorrent(
     torrentId: string,
     apiKey: string,
@@ -382,18 +421,16 @@ export class TorboxService {
         candidateFiles = episodeFiles;
       }
 
-      // Garante que targetTitles seja definido e único
       if (!targetTitles || targetTitles.length === 0) {
         const hash = info.hash?.toLowerCase();
         if (hash && this.titleCache.has(hash)) {
-          targetTitles = this.titleCache.get(hash)!; // já deduplicado no setTitlesForHash
+          targetTitles = this.titleCache.get(hash)!;
           this.logger.debug('Títulos recuperados do cache para seleção de arquivo', {
             hash,
             titles: targetTitles,
           });
         }
       } else {
-        // Deduplica títulos fornecidos diretamente
         targetTitles = Array.from(new Set(targetTitles));
         this.logger.debug('Títulos alvo fornecidos diretamente (únicos)', { targetTitles });
       }
@@ -415,7 +452,7 @@ export class TorboxService {
           titleScore = this.calculateTitleMatchScore(f.name, targetTitles);
           this.logger.debug('   titleScore calculado:', { titleScore });
           if (titleScore === -1) {
-            this.logger.debug('   ❌ Ano divergente, descartando arquivo');
+            this.logger.debug('   Ano divergente, descartando arquivo');
             continue;
           }
           score += titleScore * 50_000_000_000;
@@ -434,7 +471,7 @@ export class TorboxService {
 
             if (normalizedFile === normalizedTarget) {
               qualityScore = 100_000_000_000;
-              this.logger.debug('   ✅ Qualidade exata, qualityScore = 100B');
+              this.logger.debug('   Qualidade exata, qualityScore = 100B');
             } else {
               const qualityRank = ['2160p', '1080p', '720p', '480p'];
               const targetRank = qualityRank.indexOf(normalizedTarget);
@@ -473,13 +510,13 @@ export class TorboxService {
         });
 
         if (score > bestScore) {
-          this.logger.debug('   🏆 Novo melhor candidato!', { score, previousBest: bestScore });
+          this.logger.debug('   Novo melhor candidato!', { score, previousBest: bestScore });
           bestScore = score;
           bestFile = f;
         }
       }
 
-      this.logger.info('── Resumo da avaliação de candidatos ──', {
+      this.logger.info('Resumo da avaliação de candidatos', {
         scores: scoresLog,
         bestFile: bestFile?.name,
         bestScore: bestScore
@@ -611,12 +648,6 @@ export class TorboxService {
     }
   }
 
-  // ── Helpers ──────────────────────────────────────────────────────────
-
-  /**
-   * Calculates a similarity score between the file name and a list of target titles.
-   * Returns -1 if the file should be discarded (e.g., year mismatch).
-   */
   private calculateTitleMatchScore(fileName: string, targetTitles: string[]): number {
     this.logger.debug('── calculateTitleMatchScore ──', { fileName, targetTitles });
 
@@ -629,15 +660,15 @@ export class TorboxService {
     let bestSegmentScore = -1;
     let bestSegmentDetails: any = null;
 
-    // Função local para tokenizar, incluindo números de sequência (1 ou 2 dígitos)
+    // Tokeniza incluindo números curtos, senão "1" some e a match de sequência quebra.
     const tokenize = (texto: string): string[] => {
       const normalized = normalizarTexto(texto);
       return normalized
         .split(' ')
-        .filter(w => w.length > 2 || /^\d+$/.test(w)); // mantém palavras com >2 letras ou números
+        .filter(w => w.length > 2 || /^\d+$/.test(w));
     };
 
-    // Percorre do arquivo até a raiz, com prioridade para profundidade maior
+    // Varre da pasta do arquivo pra raiz, dando mais peso pros segmentos mais profundos.
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i];
       this.logger.debug(`   Avaliando segmento [índice ${i}]: "${seg}"`);
@@ -664,18 +695,16 @@ export class TorboxService {
         }
         this.logger.debug(`         wordScore: ${wordScore} (tokens correspondentes exatos: ${matchedWords.join(', ')})`);
 
-        // Verifica compatibilidade de anos
         let yearBonus = 0;
         if (segYears.length > 0 && titleYears.length > 0) {
           const hasCommonYear = titleYears.some(ty => segYears.includes(ty));
           if (!hasCommonYear) {
-            this.logger.debug(`         ❌ Anos divergentes (segmento: [${segYears.join(', ')}], título: [${titleYears.join(', ')}]), ignorando segmento`);
+            this.logger.debug(`         Anos divergentes (segmento: [${segYears.join(', ')}], título: [${titleYears.join(', ')}]), ignorando segmento`);
             continue;
           }
           yearBonus = 100;
         }
 
-        // Bônus de profundidade: arquivo (último segmento) recebe bônus alto
         const depthBonus = (i === segments.length - 1) ? 1000 : (i + 1) * 10;
         const total = wordScore * 1000 + depthBonus + yearBonus;
 
@@ -699,7 +728,6 @@ export class TorboxService {
       }
     }
 
-    // Fallback: usa basename se nenhum segmento adequado foi encontrado
     if (!bestSegment) {
       this.logger.debug('   Nenhum segmento adequado, usando fallback no basename');
       bestSegment = basename;
@@ -709,7 +737,6 @@ export class TorboxService {
 
       for (const title of targetTitles) {
         const titleYears = extrairAno(title) || [];
-        // Verifica ano se ambos tiverem
         if (fileYears.length > 0 && titleYears.length > 0) {
           const hasCommonYear = titleYears.some(ty => fileYears.includes(ty));
           if (!hasCommonYear) {
@@ -737,10 +764,6 @@ export class TorboxService {
     return bestSegmentScore;
   }
 
-  /**
-   * Extrai a qualidade do nome do arquivo.
-   * Retorna a qualidade normalizada (ex: "2160p", "1080p", "720p", "480p") ou null.
-   */
   private extractQualityFromFilename(filename: string): string | null {
     const match = filename.match(/\b(2160p|4k|uhd|1080p|720p|480p)\b/i);
     if (match) {
@@ -751,9 +774,6 @@ export class TorboxService {
     return null;
   }
 
-  /**
-   * Normaliza a qualidade para comparação (ex: "2160p", "1080p", "720p", "480p")
-   */
   private normalizeQuality(quality: string): string {
     const q = quality.toLowerCase().replace(/\s/g, '');
     if (q === '4k' || q === 'uhd') return '2160p';

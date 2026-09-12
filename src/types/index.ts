@@ -74,6 +74,10 @@ export interface TorboxTorrentInfo {
   created_at?: string;
   download_present?: boolean;
   active?: boolean;
+  // FIX 11a: campos devolvidos pelo endpoint /torrents/torrentinfo (não pelo mylist).
+  // Podem vir null/undefined quando o endpoint não consulta a rede.
+  seeds?: number;
+  peers?: number;
 }
 
 export interface CacheData<T = any> {

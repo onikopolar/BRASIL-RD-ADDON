@@ -90,7 +90,7 @@ export type PostMetadata = {
 
 export { BASE_URL, PROVIDER, AXIOS_OPTS };
 
-// FIX 7/7b: zero-pad em números de episódio ("Episódio 1" → "Episódio 01") e plural em ranges
+// FIX 7/7b: zero-pad em números de episódio ("Episódio 1" → "Episódio 01") e plural em ranges.
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
@@ -172,8 +172,7 @@ export class BludvScraper {
     const res = await axios.get(searchUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
-    // Quando a busca não acha nada, o WordPress marca o body com search-no-results
-    // e enche a página com posts recentes como fallback. Nada ali é resultado real.
+    // Quando a busca não acha nada, o WordPress marca o body com search-no-results e enche com posts recentes.
     if ($('body').hasClass('search-no-results')) {
       logger.debug('[BLUDV] busca sem resultados (search-no-results)');
       return [];
@@ -185,7 +184,7 @@ export class BludvScraper {
     $('a[href]').each((_, el) => {
       const href = ($(el).attr('href') || '').trim();
 
-      // Links com capa têm text() vazio — o título real está no alt da <img>.
+      // Links com capa têm text() vazio — o título real está no alt/title da <img>.
       const text = ($(el).text() || '').trim()
         || ($(el).find('img').attr('alt') || '').trim()
         || ($(el).find('img').attr('title') || '').trim();
@@ -219,7 +218,7 @@ export class BludvScraper {
 
     if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
 
-    //Aqui ele checa se o alvo cabe no range declarado pelo título
+    // Checa se o alvo cabe no range declarado pelo título.
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(item.title);
       if (!temporadaAlvoNoRange(range, targetSeason)) return false;
@@ -264,7 +263,7 @@ export class BludvScraper {
       }
     }
 
-    //Aqui ele checa se o alvo cabe no range declarado no título do post
+    // Checa se o alvo cabe no range declarado no título do post.
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(postTitle);
       if (!temporadaAlvoNoRange(range, targetSeason)) return [];
@@ -282,11 +281,9 @@ export class BludvScraper {
       return [];
     }
 
-    // Magnets diretos no HTML (<center> com <a href="magnet:...">).
     const directMagnets = this.extractDirectMagnets($, contentHtml, boundaries);
     logger.debug(`[BLUDV] magnets diretos na seção válida: ${directMagnets.length}`);
 
-    // Magnets atrás de protetor (systemads1.com) — resolvidos um a um.
     const protectorLinks = this.extractProtectorLinks($, contentHtml, boundaries);
     logger.debug(`[BLUDV] protector links na seção válida: ${protectorLinks.length}`);
 
@@ -316,7 +313,6 @@ export class BludvScraper {
       if (magnetsVistos.has(magnet)) continue;
       magnetsVistos.add(magnet);
 
-      // Mexi aqui pra pegar a fonte da qualidade e logar. Sem isso não dava pra saber por que 720p virava 1080p.
       const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeComFonte(
         canonicalName,
         link,
@@ -329,8 +325,7 @@ export class BludvScraper {
       const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
       const displayTitle = originalTitleFinal || canonicalName || postTitle;
 
-      // Mexi aqui porque magnet sem dn= deixava canonicalName vazio, e aí a stream caía no title genérico do post
-      // Se veio do magnet, preserva; se não, sintetiza com originalTitle + anos + qualidade
+      // Magnet sem dn= deixava canonicalName vazio e a stream caía no title genérico do post.
       const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
         originalTitleFinal || postTitle,
         metadata.years,
@@ -341,11 +336,9 @@ export class BludvScraper {
         logger.debug(`[BLUDV] canonicalName sintetizado | post="${postTitle.substring(0, 40)}" | canon="${canonicalFinal}"`);
       }
 
-      // Log rastreável da qualidade escolhida — mesma ideia do WP, ajuda a ver qual fonte ganhou em cada magnet
       logger.debug(`[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
 
-      // FIX 8: fallback de tamanho pelo fullContextText (ex: span "SERVIDOR... (16.43 GB)").
-      // Posts sem <em>Tamanho:</em> ou <b>Tamanho:</b> não tinham de onde puxar.
+      // FIX 8: fallback de tamanho pelo fullContextText quando o metadata não tem size.
       const size = metadata.size
         || this.extrairTamanhoDoContexto(link.fullContextText)
         || this.extrairTamanhoDoContexto(link.parentText)
@@ -359,7 +352,8 @@ export class BludvScraper {
         title: this.cleanTitle(displayTitle),
         htmlTitle: cleanedHtmlTitle || undefined,
         magnet,
-        seeders: this.estimateSeeders(),
+        // FIX 12: seeders reais vêm via Torbox depois; aqui fica 0 honesto.
+        seeders: 0,
         leechers: 0,
         size,
         quality,
@@ -383,15 +377,14 @@ export class BludvScraper {
     return results;
   }
 
-  // FIX 8: extrai o primeiro "X.YZ GB/MB/KB" de um texto — usado como fallback de tamanho
+  // FIX 8: extrai o primeiro "X.YZ GB/MB/KB" de um texto — usado como fallback de tamanho.
   private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
     if (!texto) return undefined;
     const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
     return m ? m[0] : undefined;
   }
 
-  // Mexi aqui pra montar nome descritivo quando o magnet não traz dn= próprio
-  // Formato: "Título Base <anos> <qualidade>", tipo "Ice Age 2002-2012 1080p"
+  // Monta nome descritivo quando o magnet não traz dn= próprio, tipo "Ice Age 2002-2012 1080p".
   private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
     const anos = years && years.length > 0
       ? (years.length === 1
@@ -402,8 +395,7 @@ export class BludvScraper {
     return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
-  // Percorre os <strong>/<b> dentro do conteúdo e acha as posições dos cabeçalhos
-  // "DUAL ÁUDIO" (ou similar) e "LEGENDADO". Rejeita trailers e textos longos.
+  // Percorre os <strong>/<b> dentro do conteúdo e acha as posições dos cabeçalhos DUAL e LEGENDADO.
   findSectionBoundaries($: any, contentHtml: string): SectionBoundaries {
     const strongEls = $('.content strong, .content b').toArray();
     let dualPos = -1;
@@ -430,8 +422,7 @@ export class BludvScraper {
     return { dualPos, legendadoPos };
   }
 
-  // Classifica um <strong>/<b> como cabeçalho de seção.
-  // Rejeita trailers, CTAs e textos longos que contenham a keyword por acaso.
+  // Classifica um <strong>/<b> como cabeçalho de seção — rejeita trailers, CTAs e textos longos.
   detectSectionType(text: string): SectionType {
     const t = normalizarTexto(text).trim();
 
@@ -452,23 +443,15 @@ export class BludvScraper {
   getSectionForPosition(pos: number, boundaries: SectionBoundaries): SectionType {
     const { dualPos, legendadoPos } = boundaries;
 
-    // Sem cabeçalhos: aceita tudo como "sem seção definida".
     if (dualPos === -1 && legendadoPos === -1) return 'NONE';
-
-    // Só legendado no post: nada presta.
     if (dualPos === -1) return 'LEGENDADO';
-
-    // Antes do cabeçalho DUAL: nada presta.
     if (pos < dualPos) return 'NONE';
-
-    // Depois do cabeçalho LEGENDADO: é legendado.
     if (legendadoPos !== -1 && pos >= legendadoPos) return 'LEGENDADO';
 
     return 'DUAL';
   }
 
-  // Extrai magnets diretos do HTML, filtrando por seção.
-  // Estrutura típica: <center><span>...1080p (2.88 GB)</span><br><a href="magnet:...">Magnet-Link</a></center>
+  // Extrai magnets diretos do HTML, filtrando por seção — estrutura típica <center><span>... (GB)</span><a href="magnet:...">.
   extractDirectMagnets($: any, contentHtml: string, boundaries: SectionBoundaries): ExtractedMagnet[] {
     const resultados: ExtractedMagnet[] = [];
 
@@ -572,11 +555,10 @@ export class BludvScraper {
     if (secao === 'DUAL') return 'Dual';
     if (secao === 'LEGENDADO') return 'Legendado';
 
-    // Sem seção: usa metadata do post, normalizando formatos compostos.
     if (!metaLanguage) return 'Desconhecido';
 
     const lower = metaLanguage.toLowerCase();
-    if (lower.includes('|')) return 'Dual'; // "Português | Inglês" = dual
+    if (lower.includes('|')) return 'Dual';
     if (lower.includes('nacional')) return 'Nacional';
     if (lower.includes('dual')) return 'Dual';
     if (lower.includes('dublado') || lower.includes('dublad')) return 'Dublado';
@@ -584,47 +566,38 @@ export class BludvScraper {
     return metaLanguage;
   }
 
-  // Mexi aqui porque a ordem antiga colocava metadataQuality (genérico do post) antes do
-  // fullContextText (específico do magnet). Numa quadrilogia com "Blu-ray Rip" no metadata,
-  // os dois magnets saíam como 1080p mesmo o de baixo tendo "720p" escrito no span.
-  // Ordem nova: específico do magnet vence genérico do post.
+  // Ordem de prioridade da qualidade: específico do magnet vence genérico do post.
   private resolverQualidadeComFonte(
     canonicalName: string | undefined,
     link: LinkContext,
     postTitle: string,
     metadataQuality?: string
   ): { qualidade: string; fonte: string } {
-    // 1. canonicalName do magnet (mais específico)
     if (canonicalName) {
       const q = this.qualityDetector.extractBestQuality(canonicalName);
       if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'canonicalName' };
     }
 
-    // 2. fullContextText (o span "SERVIDOR... 720p" que fica acima do magnet)
     if (link.fullContextText) {
       const q = this.qualityDetector.extractBestQuality(link.fullContextText);
       if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'fullContextText' };
     }
 
-    // 3. linkText
     if (link.linkText) {
       const q = this.qualityDetector.extractBestQuality(link.linkText);
       if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'linkText' };
     }
 
-    // 4. parentText
     if (link.parentText) {
       const q = this.qualityDetector.extractBestQuality(link.parentText);
       if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'parentText' };
     }
 
-    // 5. metadataQuality (do post — genérico, vem por último)
     if (metadataQuality) {
       const q = this.qualityDetector.extractBestQuality(metadataQuality);
       if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'metadataQuality' };
     }
 
-    // 6. postTitle
     if (postTitle) {
       const q = this.qualityDetector.extractBestQuality(postTitle);
       if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'postTitle' };
@@ -633,7 +606,7 @@ export class BludvScraper {
     return { qualidade: 'HD', fonte: 'fallback' };
   }
 
-  // Wrapper mantido pra compatibilidade — só devolve a qualidade sem a fonte
+  // Wrapper mantido pra compatibilidade — só devolve a qualidade sem a fonte.
   resolverQualidade(
     canonicalName: string | undefined,
     link: LinkContext,
@@ -659,14 +632,13 @@ export class BludvScraper {
     const epMatch = contexto.match(/EPISÓDIO\s*(\d+)/i);
     if (epMatch) {
       const ep = parseInt(epMatch[1], 10);
-      // FIX 7: zero-pad no fallback de regex cru
       return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
     }
 
     return {};
   }
 
-  // FIX 7 + 7b: zero-pad no número e plural quando é range
+  // FIX 7 + 7b: zero-pad no número e plural quando é range.
   formatarRange(range: { episodeStart: number; episodeEnd: number } | null | undefined): { episode: number; episodeRangeText: string } | null {
     if (!range || range.episodeStart <= 0) return null;
     const texto = range.episodeEnd > range.episodeStart
@@ -708,8 +680,8 @@ export class BludvScraper {
       .trim() || null;
   }
 
-  // FIX 8b: aceita labels em <em> (formato moderno) e <b> (posts antigos pré-2018).
-  // O formato antigo usa <b>Label:</b> Valor<br> — o valor é um text node, não está em <span>.
+  // FIX 8b: aceita labels em <em> (moderno) e <b> (pré-2018).
+  // FIX size: metadata.size só vale se tiver UM tamanho só — múltiplos indicam que o valor é do post inteiro.
   extractPostMetadata($: any): PostMetadata {
     const getMetaValue = (fieldName: string): string | undefined => {
       const target = fieldName.toLowerCase().replace(/:$/, '').trim();
@@ -735,7 +707,6 @@ export class BludvScraper {
       }
 
       // Caso 2: <p><b>Label:</b> Valor<br>... — formato antigo.
-      // Extrai o HTML do pai, acha o label, pega o que vem depois até <br>, <b> ou fim do <p>.
       const $parent = $label.parent();
       const parentHtml = $parent.html() || '';
       const labelHtml = $label.toString();
@@ -764,9 +735,17 @@ export class BludvScraper {
       years = yearRaw.match(/\b(19|20)\d{2}\b/g)?.map(y => parseInt(y)) || [];
     }
 
+    // Posts com múltiplas versões declaram vários tamanhos no metadata — nesse caso o valor é genérico e não serve.
+    const sizeRaw = getMetaValue('Tamanho:');
+    let size: string | undefined;
+    if (sizeRaw) {
+      const tamanhos = sizeRaw.match(/([\d.,]+)\s*(GB|MB|KB)/gi) || [];
+      if (tamanhos.length === 1) size = tamanhos[0];
+    }
+
     return {
       quality: getMetaValue('Qualidade:'),
-      size: getMetaValue('Tamanho:'),
+      size,
       language: getMetaValue('Áudio:'),
       originalTitle,
       year: years.length > 0 ? years[0] : undefined,
@@ -795,7 +774,6 @@ export class BludvScraper {
   }
 
   // Sobe pelos ancestrais buscando o primeiro nó com só UMA menção de qualidade.
-  // Duas ou mais = container grande, não serve como contexto individual.
   getFullContextText($el: any): string {
     const prevSpan = $el.parent().prev('span');
     if (prevSpan.length) {
@@ -844,9 +822,7 @@ export class BludvScraper {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  estimateSeeders(): number {
-    return Math.floor(30 + Math.random() * 60);
-  }
+  // FIX 12: estimateSeeders removido — seeders reais vêm via Torbox depois.
 
   parseSize(sizeStr: string): number {
     if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;

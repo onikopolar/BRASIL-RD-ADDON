@@ -14,6 +14,7 @@ const logger = new Logger('TorrentScraperService');
 
 interface CommonTorrentParams {
   title: string;
+  htmlTitle?: string;
   magnet: string;
   seeders: number;
   leechers?: number;
@@ -248,6 +249,7 @@ export class TorrentScraperService {
   private buildTorrentResult(params: CommonTorrentParams): TorrentResult {
     return {
       title: params.title,
+      htmlTitle: params.htmlTitle,
       magnet: params.magnet,
       seeders: params.seeders,
       leechers: params.leechers ?? 0,
@@ -281,6 +283,7 @@ export class TorrentScraperService {
   private mapHdrResult(
     r: {
       title: string;
+      htmlTitle?: string;
       magnet: string;
       infoHash: string;
       seeders: number;
@@ -312,6 +315,7 @@ export class TorrentScraperService {
 
     return this.buildTorrentResult({
       title: r.title,
+      htmlTitle: r.htmlTitle,
       magnet: r.magnet,
       seeders: r.seeders,
       leechers: 0,

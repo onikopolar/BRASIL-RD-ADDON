@@ -17,6 +17,7 @@ const HDR_BASE = 'https://hdrtorrents.net';
 
 export interface HdrTorrent {
   title: string;
+  htmlTitle?: string;
   magnet: string;
   infoHash: string;
   seeders: number;
@@ -41,7 +42,6 @@ const axiosConfig = {
   },
 };
 
-//Aqui ele extrai o range de temporada/episódio do texto, preservando intervalos como "1ª à 5ª"
 export function detectSeasonRange(text: string): EpisodeRange | null {
   const range = extrairRangeEpisodios(text);
   if (range) return range;
@@ -54,8 +54,6 @@ export function detectSeasonRange(text: string): EpisodeRange | null {
   return null;
 }
 
-//Regra única do HDR: com alvo definido, aceita se houver range que contenha o alvo,
-//ou se nenhum dos textos declarar temporada mas indicar coleção/pack da série
 export function passaFiltroTemporada(textos: string[], targetSeason?: number): boolean {
   if (targetSeason === undefined) return true;
 
@@ -68,7 +66,6 @@ export function passaFiltroTemporada(textos: string[], targetSeason?: number): b
   return textos.some(t => isCollectionTitle(t));
 }
 
-//Aqui ele filtra links que não são posts (menu, categoria, feed, etc)
 export function isLikelyPostLink(href: string, text: string): boolean {
   if (!href || !text) return false;
 
@@ -109,11 +106,6 @@ export function isLikelyPostLink(href: string, text: string): boolean {
   return containsTorrentWord || !!slugMatch;
 }
 
-//Aqui ele detecta o idioma do magnet pelo texto do parágrafo.
-//Ordem importa: "dublado" e "nacional" são mais específicos que "dual";
-//um arquivo "Dublado e Dual Áudio" traz as duas faixas e ainda é dual.
-//Mantemos "dual" em primeiro pra preservar o comportamento atual —
-//o rótulo "Dual Áudio" já engloba dublado + original.
 export function extractLanguage(parentText: string): string {
   const t = parentText.toLowerCase();
   if (t.includes('dual') && /áudio|audio/.test(t)) return 'Dual Áudio';
@@ -123,7 +115,6 @@ export function extractLanguage(parentText: string): string {
   return '';
 }
 
-//Aqui ele extrai título original, ano e idioma do parágrafo de metadados do post
 export function extractHdrMetadata($: any): { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } {
   const result: { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } = {};
 
@@ -158,7 +149,6 @@ export function extractHdrMetadata($: any): { originalTitle?: string; originalTi
   return result;
 }
 
-//Aqui ele pega o título base que aparece no link logo depois do link do IMDb
 export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   const imdbLink = paragrafo.find('a[href*="imdb.com/title/"]').first();
   if (!imdbLink.length) return null;
@@ -176,13 +166,11 @@ export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null 
   return null;
 }
 
-//Aqui ele extrai um ano de 4 dígitos do texto
 export function extrairAno(texto: string): number | undefined {
   const m = texto.match(/\b(19|20)\d{2}\b/);
   return m ? parseInt(m[0]) : undefined;
 }
 
-//Aqui ele extrai o dn= do magnet, decodificado
 function extrairDnDoMagnet(magnet: string): string | undefined {
   const m = magnet.match(/[&?]dn=([^&]+)/i);
   if (!m) return undefined;
@@ -198,7 +186,6 @@ interface SearchResultItem {
   postUrl: string;
 }
 
-//Aqui ele busca os posts no site e filtra pelo range de temporada do título
 export async function searchHdrLinks(query: string, targetSeason?: number): Promise<SearchResultItem[]> {
   const searchUrl = `${HDR_BASE}/index.php?s=${encodeURIComponent(query)}`;
 
@@ -231,7 +218,6 @@ export async function searchHdrLinks(query: string, targetSeason?: number): Prom
   }
 }
 
-//Aqui ele extrai os magnets do post, filtrando por range de temporada e idioma
 export async function extractMagnetsFromPost(
   html: string,
   postTitle: string,
@@ -241,13 +227,33 @@ export async function extractMagnetsFromPost(
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
 
-  // FIX H5: prefere o <h1> (título real do post) antes do <title> da aba.
-  // O <title> às vezes tem sufixo do site que sobra depois do replace.
   const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
   const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
   const pageTitle = h1Title || titleTag || postTitle;
 
   const metadata = extractHdrMetadata($);
+
+  // FIX H6: detecta seções ::VERSÃO DUAL ÁUDIO:: / ::VERSÃO LEGENDADA:: por posição no HTML.
+  // Sem isso o filtro de idioma dependia só do texto do parentText — funcionava por sorte.
+  const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
+  $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
+    const texto = $(el).text().trim();
+    if (!texto) return;
+    if (!/vers[ãa]o\s+(dual|legendad)/i.test(texto)) return;
+    const pos = html.indexOf($(el).toString());
+    if (pos === -1) return;
+    sectionHeaders.push({ pos, type: /legendad/i.test(texto) ? 'LEGENDADO' : 'DUAL' });
+  });
+  sectionHeaders.sort((a, b) => a.pos - b.pos);
+
+  const detectarSecaoPorPosicao = (pos: number): 'DUAL' | 'LEGENDADO' | 'NONE' => {
+    let secao: 'DUAL' | 'LEGENDADO' | 'NONE' = 'NONE';
+    for (const sh of sectionHeaders) {
+      if (pos > sh.pos) secao = sh.type;
+      else break;
+    }
+    return secao;
+  };
 
   const rawMagnets: {
     href: string;
@@ -257,7 +263,6 @@ export async function extractMagnetsFromPost(
     sizeMatch?: string;
   }[] = [];
 
-  //Aqui ele coleta os magnets crus do HTML, descartando legendado puro
   $('a[href^="magnet:"]').each((_i: number, el: any) => {
     const href = $(el).attr('href');
     if (!href) return;
@@ -266,9 +271,15 @@ export async function extractMagnetsFromPost(
     const parentText = parentP.text().trim();
     const linkText = $(el).text().trim();
 
+    // FIX H6: se o post declara seções, elas têm prioridade. Magnet na seção LEGENDADO
+    // é descartado — sem depender do texto do parentText.
+    const posMagnet = html.indexOf($(el).toString());
+    const secaoPosicional = posMagnet !== -1 ? detectarSecaoPorPosicao(posMagnet) : 'NONE';
+    if (secaoPosicional === 'LEGENDADO') return;
+
+    // Fallback por texto — mantém o comportamento atual pra posts sem seção declarada.
     const isLegendado = /legendado|legendada|legenda/i.test(parentText);
     const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(parentText);
-
     if (isLegendado && !isDualOuDublado) return;
 
     if (!passaFiltroTemporada([parentText, postTitle, pageTitle], targetSeason)) return;
@@ -276,9 +287,6 @@ export async function extractMagnetsFromPost(
     const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i)?.[0];
     let sizeMatch = parentText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
 
-    // FIX H3: fallback de tamanho pelo dn= do magnet quando o parentText não tem.
-    // No formato "#lista_download", o <p> só tem "NNº EPISÓDIO ... QUALIDADE" e o
-    // tamanho real às vezes viaja no dn. Se não tiver em nenhum, fica vazio mesmo.
     if (!sizeMatch) {
       const dn = extrairDnDoMagnet(href);
       if (dn) {
@@ -291,7 +299,6 @@ export async function extractMagnetsFromPost(
 
   logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalMagnetsBrutos=${rawMagnets.length}`);
 
-  //Aqui ele processa cada magnet bruto e monta o resultado final
   for (const raw of rawMagnets) {
     try {
       const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
@@ -305,9 +312,6 @@ export async function extractMagnetsFromPost(
       let canonicalName: string | undefined;
       let hashNormalizado = false;
 
-      // FIX H1+H2: o analisarMagnet já normaliza base32 → hex.
-      // Antes só o nome era capturado e o hash base32 (32 chars) do HDR vazava pro
-      // pipeline, quebrando dedup e resolve. Agora o hash também é reusado.
       try {
         const dados = await analisarMagnet(raw.href);
         canonicalName = dados?.nome ?? undefined;
@@ -335,7 +339,6 @@ export async function extractMagnetsFromPost(
 
       const language = extractLanguage(raw.parentText) || metadata.language || extractLanguage(pageTitle);
 
-      //Aqui ele reextrai o range pra montar o rótulo da temporada
       const range =
         detectSeasonRange(raw.parentText) ??
         detectSeasonRange(postTitle) ??
@@ -355,7 +358,6 @@ export async function extractMagnetsFromPost(
       const qualityMatch = raw.qualityMatch;
       const sizeMatch = raw.sizeMatch;
 
-      //Aqui ele preserva o range no rótulo quando é intervalo, tipo "1ª à 5ª Temporada"
       const seasonLabel = range && range.seasonStart > 0
         ? (range.seasonStart === range.seasonEnd
             ? `${range.seasonStart}ª Temporada`
@@ -366,8 +368,16 @@ export async function extractMagnetsFromPost(
         ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
         : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
 
+      // FIX H6: passa o parentText limpo como htmlTitle — o StreamFormatter anexa como
+      // sufixo entre parênteses. Diferencia magnets com o mesmo dn= (ex: "SEM COMPACTAÇÃO").
+      const htmlTitleLimpo = raw.parentText
+        .replace(/MAGNET LINK/gi, '')
+        .replace(/\s+/g, ' ')
+        .trim() || undefined;
+
       results.push({
         title: magnetTitle,
+        htmlTitle: htmlTitleLimpo,
         magnet: raw.href,
         infoHash,
         seeders: 0,
@@ -390,7 +400,6 @@ export async function extractMagnetsFromPost(
   return results;
 }
 
-//Aqui é o entrypoint do scraper HDR: monta queries, busca posts e extrai magnets
 export async function searchHdr(
   query: string,
   type: 'movie' | 'series' = 'movie',
@@ -410,7 +419,6 @@ export async function searchHdr(
     if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
   }
 
-  //Aqui ele adiciona a variação sem "temporada N" pra pegar packs
   for (const q of queriesBase) {
     if (type === 'series') {
       const tituloSemTemporada = q
@@ -443,7 +451,6 @@ export async function searchHdr(
         continue;
       }
 
-      //Aqui ele filtra por frase base ou coleção, aproveitando fallback de packs
       const filtrados = links.filter(link => {
         const tituloNorm = normalizarTexto(link.title);
         const contemFrase = frasesValidas.some(frase => tituloNorm.includes(frase));
@@ -481,7 +488,7 @@ export async function searchHdr(
             }
           }
         } catch {
-          //Aqui ele ignora erro de um post individual pra não derrubar a busca toda
+          // ignora erro de post individual
         }
       }
 

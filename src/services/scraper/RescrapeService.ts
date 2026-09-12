@@ -2,27 +2,15 @@ import { Torrent } from '../../database/models.js';
 import { TorrentScraperService } from './TorrentScraperService.js';
 import { ImdbScraperService, ImdbTitles } from '../../catalogo/ImdbScraperService.js';
 import { AutoMagnetService } from '../../debrid/AutoMagnetService.js';
+import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import { Logger } from '../../utils/logger.js';
 import { Op } from 'sequelize';
 
 const logger = new Logger('RescrapeService');
 
-/**
- * Intervalos de re-scraping por tipo de fonte no título.
- * Detectado via regex no nome do torrent (dn do magnet).
- * Agora cada entrada também carrega um `rank` para ordenação de melhor resultado.
- *
- * LÓGICA:
- * - CAM/TS/Workprint → 3 dias
- * - HDCAM/HDTS/Telecine → 5 dias
- * - HDTV/HDRip → 7 dias
- * - DVDSCR/SCREENER/HC → 10 dias
- * - WEBRip → 14 dias
- * - BluRay/WEB-DL/Remux/2160p → NUNCA (final)
- * - Sem padrão conhecido → 7 dias (conservador)
- */
+// Fonte → dias até re-scrape + rank. null = nunca re-scrapea (versão final).
 const SOURCE_PATTERNS: Array<{ regex: RegExp; days: number | null; rank: number }> = [
-  // Qualidades FINAIS (null = nunca re-scrape)
+  // Qualidades FINAIS
   { regex: /\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i, days: null, rank: 9 },
   { regex: /\b(2160p|4k|uhd)\b/i, days: null, rank: 10 },
   { regex: /\b(dv|hdr10\+?|dolby\s*vision)\b/i, days: null, rank: 10 },
@@ -39,10 +27,7 @@ const SOURCE_PATTERNS: Array<{ regex: RegExp; days: number | null; rank: number 
   { regex: /\b(camrip|cam-rip|cam\.rip|cam\b|ts\b|workprint|wp\b)\b/i, days: 3, rank: 1 },
 ];
 
-/**
- * Ranking adicional para strings de qualidade que podem vir no campo `quality`,
- * sem correspondência direta nas fontes acima.
- */
+// Ranking extra pra strings de qualidade sem match direto em SOURCE_PATTERNS.
 const QUALITY_RANK_EXTRA: Record<string, number> = {
   '2160p': 10,
   '4k': 10,
@@ -55,13 +40,16 @@ const QUALITY_RANK_EXTRA: Record<string, number> = {
   'sd': 2,
 };
 
-/** Delay entre cada re-scrape (evita flood nos scrapers) */
-const DELAY_BETWEEN_RESCRAPES = 60000; // 1 min
+// Regex restrita — sem "cam"/"ts"/"wp" soltos pra não dar falso positivo em tracker e título.
+const CAM_LIKE_REGEX = /\b(cam(?:[\s._-]?rip)?|hdcam|hd[\s._-]?cam|hd[\s._-]?ts|ts[\s._-]?rip|telecine|telesync|workprint)\b/i;
 
-/** Máximo de títulos por batch (evita sobrecarga) */
+// Delay entre cada re-scrape pra não floodar os scrapers.
+const DELAY_BETWEEN_RESCRAPES = 60000;
+
+// Máximo de títulos por batch.
 const MAX_RESCRAPE_PER_BATCH = 5;
 
-/** Tempo entre execuções do job de verificação (30 minutos) */
+// Intervalo entre execuções do job de verificação.
 const RESCRAPE_CHECK_INTERVAL = 30 * 60 * 1000;
 
 export class RescrapeService {
@@ -118,7 +106,7 @@ export class RescrapeService {
 
     const titleLower = (title || '').toLowerCase();
 
-    // 1. Verifica padrões de fonte no título
+    // Padrões de fonte no título decidem primeiro.
     for (const { regex, days } of SOURCE_PATTERNS) {
       if (regex.test(titleLower)) {
         if (days === null) return null;
@@ -126,14 +114,14 @@ export class RescrapeService {
       }
     }
 
-    // 2. Fallback pela qualidade informada
+    // Fallback pela qualidade informada.
     if (qualidade) {
       const q = qualidade.toLowerCase();
       if (q === '2160p' || q === '4k') return null;
       if (q === '1080p') return null;
     }
 
-    // 3. Desconhecido
+    // Desconhecido — 7 dias conservador.
     return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
   }
 
@@ -243,12 +231,6 @@ export class RescrapeService {
       return true;
     });
 
-    if (allResults.length === 0) {
-      logger.debug(`Nenhum resultado novo para ${imdbId}`);
-      await this.updateRescrapeAt(imdbId, new Date(Date.now() + 12 * 60 * 60 * 1000));
-      return 0;
-    }
-
     let newTorrents = 0;
     for (const result of allResults) {
       try {
@@ -271,8 +253,17 @@ export class RescrapeService {
           logger.info(`🆕 Novo torrent: ${result.title.substring(0, 60)} (${result.quality})`);
         }
       } catch {
-        // continua com o próximo
+        // Continua com o próximo resultado.
       }
+    }
+
+    // Subi a chamada — limpa CAM obsoleto sempre, mesmo quando não veio resultado novo.
+    await this.removeCamIfBetterExists(imdbId);
+
+    if (allResults.length === 0) {
+      logger.debug(`Nenhum resultado novo para ${imdbId}`);
+      await this.updateRescrapeAt(imdbId, new Date(Date.now() + 12 * 60 * 60 * 1000));
+      return 0;
     }
 
     const best = this.findBestResult(allResults);
@@ -281,6 +272,47 @@ export class RescrapeService {
 
     logger.info(`✅ Re-scrape ${imdbId}: ${newTorrents} novos de ${allResults.length} resultados`);
     return newTorrents;
+  }
+
+  // Usa o analisarMagnet (mesmo canonical que o stream exibe) — title só como fallback.
+  private async isCamLike(torrent: any): Promise<boolean> {
+    if (torrent.magnet) {
+      const dados = await analisarMagnet(torrent.magnet).catch(() => null);
+      if (dados?.nome) return CAM_LIKE_REGEX.test(dados.nome);
+    }
+    return CAM_LIKE_REGEX.test(torrent.title || '');
+  }
+
+  // Remove CAM/TS/etc quando já tem algo melhor pro mesmo IMDb no banco.
+  private async removeCamIfBetterExists(imdbId: string): Promise<number> {
+    const torrents = await Torrent.findAll({
+      attributes: ['infoHash', 'title', 'magnet'],
+      where: { imdbId },
+      raw: true,
+    });
+
+    // Roda o parse dos magnets em paralelo — cada isCamLike faz uma chamada.
+    const flags = await Promise.all(torrents.map((t: any) => this.isCamLike(t)));
+
+    const cams: any[] = [];
+    const nonCams: any[] = [];
+    torrents.forEach((t: any, i: number) => {
+      if (flags[i]) cams.push(t);
+      else nonCams.push(t);
+    });
+
+    // Sem CAM pra limpar, ou só tem CAM — não mexe.
+    if (cams.length === 0 || nonCams.length === 0) return 0;
+
+    const hashes = cams.map((t: any) => t.infoHash).filter(Boolean);
+    if (hashes.length === 0) return 0;
+
+    const destroyed = await Torrent.destroy({
+      where: { imdbId, infoHash: { [Op.in]: hashes } },
+    });
+
+    logger.info(`🗑️ Removidos ${destroyed} torrent(s) CAM/TS de ${imdbId} — já tem qualidade melhor`);
+    return destroyed;
   }
 
   private async updateRescrapeAt(imdbId: string, rescrapeAt: Date | null): Promise<void> {
@@ -309,14 +341,14 @@ export class RescrapeService {
     const titleLower = title.toLowerCase();
     let rank = 0;
 
-    // Avalia padrões de fonte no título
+    // Avalia padrões de fonte no título.
     for (const { regex, rank: ruleRank } of SOURCE_PATTERNS) {
       if (regex.test(titleLower) && ruleRank > rank) {
         rank = ruleRank;
       }
     }
 
-    // Adiciona ranking extra da qualidade informada
+    // Ranking extra da qualidade informada.
     if (quality) {
       const q = quality.toLowerCase();
       if (QUALITY_RANK_EXTRA[q] && QUALITY_RANK_EXTRA[q] > rank) {

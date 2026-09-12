@@ -568,15 +568,6 @@ export class WordPressScraper {
         return this.estaEntreSecoes(hrefPos, dualIndex, legendadoIndex);
       });
 
-    // DEBUG: quantos parentTexts únicos existem?
-    // Se for 1 pra N magnets → todos no mesmo <p> → size/qualidade vazam entre eles.
-    const parentTextsUnicos = new Set<string>(
-      filteredElements.map((el: any) => String($(el).parent().text().trim()))
-    );
-    const parentPreview = [...parentTextsUnicos]
-      .slice(0, 3)
-      .map((t: string) => t.substring(0, 60).replace(/\s+/g, ' '));
-
     const results: TorrentResult[] = [];
 
     const batchSize = 5;
@@ -751,7 +742,8 @@ export class WordPressScraper {
       title: this.cleanTitle(displayTitle),
       htmlTitle: cleanedHtmlTitle || undefined,
       magnet,
-      seeders: this.estimateSeeders(provider),
+      // FIX 12: seeders reais vêm via Torbox (getTorrentInfoByHash) depois; aqui fica 0 honesto.
+      seeders: 0,
       leechers: 0,
       size,
       quality,
@@ -933,10 +925,8 @@ export class WordPressScraper {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  estimateSeeders(provider: string): number {
-    const base: Record<string, number> = { 'Comando Torrents': 50, default: 20 };
-    return Math.floor((base[provider] || base.default) * (0.6 + Math.random() * 0.8));
-  }
+  // FIX 12: estimateSeeders removido. Seeders reais vêm via Torbox (getTorrentInfoByHash).
+  // Até lá, o valor é 0 — honesto e sinaliza "sem dado".
 
   // Cabeçalho de seção: começa com "VERSÃO" ou é bem curto. Rejeita trailers, CTAs
   // e rótulos de metadado (substantivo "legenda" sem particípio).

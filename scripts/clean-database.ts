@@ -21,10 +21,18 @@ async function main() {
     process.exit(1);
   }
 
+  // Filtro único — pega tudo que não é Curadoria, incluindo provider NULL.
+  const filtroNaoCuradoria = {
+    [Op.or]: [
+      { provider: { [Op.ne]: 'Curadoria' } },
+      { provider: { [Op.is]: null } },
+    ],
+  };
+
   // Conta antes
   const totalAntes = await Torrent.count();
   const curadoriaAntes = await Torrent.count({ where: { provider: 'Curadoria' } });
-  const naoCuradoriaAntes = totalAntes - curadoriaAntes;
+  const naoCuradoriaAntes = await Torrent.count({ where: filtroNaoCuradoria });
 
   console.log(`\n📊 ANTES:`);
   console.log(`   Total: ${totalAntes} torrents`);
@@ -61,9 +69,7 @@ async function main() {
   console.log('\n🧹 Removendo torrents não-curados...');
   const startTime = Date.now();
 
-  const deleted = await Torrent.destroy({
-    where: { provider: { [Op.ne]: 'Curadoria' } }
-  });
+  const deleted = await Torrent.destroy({ where: filtroNaoCuradoria });
 
   // Conta depois
   const totalDepois = await Torrent.count();

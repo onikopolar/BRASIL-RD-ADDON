@@ -134,8 +134,12 @@ export class AutoMagnetService {
     htmlTitle?: string
   ): Promise<boolean> {
     try {
-      const magnetHash = infoHash || await this.extrairHashDoMagnet(magnetData.magnet);
+      // Troquei — agora uso o dn= do magnet (nome bruto) pro computeRescrapeAt em vez do title limpo.
+      const parsedMagnet = await analisarMagnet(magnetData.magnet);
+      const magnetHash = infoHash || parsedMagnet?.infoHash || null;
       if (!magnetHash) throw new Error('Não foi possível extrair infoHash');
+
+      const dnMagnet = parsedMagnet?.nome || magnetData.title;
 
       const existingTorrent = await getTorrent(magnetHash);
       if (existingTorrent) {
@@ -211,7 +215,7 @@ export class AutoMagnetService {
         magnet: magnetData.magnet,
         uploadDate: new Date(),
         lastSeen: new Date(),
-        rescrapeAt: RescrapeService.computeRescrapeAt(magnetData.title, magnetData.quality)
+        rescrapeAt: RescrapeService.computeRescrapeAt(dnMagnet, magnetData.quality)
       });
 
       return true;
@@ -250,6 +254,18 @@ export class AutoMagnetService {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Link magnet inválido' };
         this.validationCache.set(cacheKey, result, this.cacheTTL);
         return result;
+      }
+
+      // Short-circuit por hash — se já tá no banco, só atualiza seeders e sai antes da validação pesada.
+      const hashRapido = infoHash || await this.extrairHashDoMagnet(magnetLink);
+      if (hashRapido) {
+        const existente = await getTorrent(hashRapido);
+        if (existente) {
+          await upsertTorrent(hashRapido, { seeders: seeds || 0, lastSeen: new Date() });
+          const result: AutoMagnetResult = { success: true, magnetAdded: false, message: 'Já existe no banco' };
+          this.validationCache.set(cacheKey, result, this.cacheTTL);
+          return result;
+        }
       }
 
       const imdbTitles = await imdbScraper.getTitlesFromImdbId(imdbId);
@@ -330,7 +346,7 @@ export class AutoMagnetService {
         matchedLanguage: titleMatchResult.matchedLanguage
       };
 
-      const saved = await this.saveToDatabase(magnetData, titleMatchResult, infoHash, provider, htmlTitle);
+      const saved = await this.saveToDatabase(magnetData, titleMatchResult, hashRapido || undefined, provider, htmlTitle);
 
       if (!saved) {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Já existe no banco' };

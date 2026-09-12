@@ -178,6 +178,7 @@ class TorrentScraperService {
     buildTorrentResult(params) {
         return {
             title: params.title,
+            htmlTitle: params.htmlTitle,
             magnet: params.magnet,
             seeders: params.seeders,
             leechers: params.leechers ?? 0,
@@ -219,6 +220,7 @@ class TorrentScraperService {
         logger.debug(`HDR_MAP | temDn=${temDn} | canon="${(r.canonicalName || '').substring(0, 40)}" | dn="${(dnDoMagnet || '').substring(0, 40)}" | fallbackTitle="${r.title.substring(0, 40)}" | escolhido="${magnetName.substring(0, 50)}"`);
         return this.buildTorrentResult({
             title: r.title,
+            htmlTitle: r.htmlTitle,
             magnet: r.magnet,
             seeders: r.seeders,
             leechers: 0,
