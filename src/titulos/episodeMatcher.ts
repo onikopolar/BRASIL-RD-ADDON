@@ -25,7 +25,9 @@ export class EpisodeMatcher {
   ): boolean {
     if (!this.ehArquivoDeVideo(caminhoCompleto)) return false;
 
-    const range = extrairRangeEpisodios(caminhoCompleto);
+    // Extrai só o nome do arquivo — senão o primeiro SxxExx vem da pasta (pack S01E01-02-03)
+    const nomeArquivo = this.extrairNomeArquivo(caminhoCompleto);
+    const range = extrairRangeEpisodios(nomeArquivo);
     return (
       range !== null &&
       range.seasonStart === temporadaAlvo &&

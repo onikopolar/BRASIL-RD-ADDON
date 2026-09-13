@@ -215,7 +215,13 @@ export class StreamFormatter {
     titles?: string[],
     imdbId?: string
   ): Promise<Stream[]> {
-    let tituloFonte = torrent.canonicalName || torrent.title;
+    // R9: parseia o magnet uma única vez — serve pra extrair dn= e infoHash sem repetir chamada.
+    const dadosMagnet = torrent.magnet
+      ? await analisarMagnet(torrent.magnet).catch(() => null)
+      : null;
+
+    // Prioridade do título fonte: canonicalName do scraper (Catalog) > dn= do magnet (DB) > title do banco.
+    let tituloFonte = torrent.canonicalName || dadosMagnet?.nome || torrent.title;
 
     if (torrent.htmlTitle && torrent.htmlTitle.trim().length > 0) {
       const htmlClean = torrent.htmlTitle.trim();
@@ -268,6 +274,7 @@ export class StreamFormatter {
           tamanho,
           idiomaBruto,
           requestId: request.id,
+          dadosMagnet,
         });
       streams.push(stream);
     }
@@ -301,17 +308,19 @@ export class StreamFormatter {
     tamanho?: string | number;
     idiomaBruto: string;
     requestId: string;
+    dadosMagnet?: { nome: string | null; infoHash: string } | null;
   }): Promise<Stream> {
     const {
       tituloFonte, magnet, apiKey, provider, qualidade,
       tipo, temporada, episodio, fileIdx, titles, imdbId,
-      seeds, tamanho, idiomaBruto, requestId,
+      seeds, tamanho, idiomaBruto, requestId, dadosMagnet,
     } = params;
 
-    const dadosMagnet = await analisarMagnet(magnet);
-    const magnetHash = dadosMagnet?.infoHash;
+    // R9: reusa o parse que veio de cima; só parseia de novo se não tiver sido passado.
+    const dados = dadosMagnet ?? await analisarMagnet(magnet).catch(() => null);
+    const magnetHash = dados?.infoHash;
 
-    const qualidadeReal = this.determinarQualidadeReal(qualidade, dadosMagnet?.nome);
+    const qualidadeReal = this.determinarQualidadeReal(qualidade, dados?.nome);
 
     const tituloComQualidade = this.atualizarQualidadeNoTitulo(tituloFonte, qualidadeReal);
     const tituloFinal = this.formatTitleCorreto(

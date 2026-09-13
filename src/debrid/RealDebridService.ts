@@ -399,17 +399,32 @@ export class TorboxService {
 
       if (targetSeason !== undefined && targetEpisode !== undefined) {
         const epData = episodeTitles?.find(ep => ep.episodeNumber === targetEpisode);
-        this.logger.info(`Episódio alvo: ${targetSeason}x${targetEpisode}${epData ? ` | PT: ${epData.namePt} | EN: ${epData.nameEn}` : ''}`);
+        const statusEp = !episodeTitles ? 'AUSENTE' : (episodeTitles.length === 0 ? 'VAZIO' : `${episodeTitles.length} eps`);
+
+        this.logger.info('🎯 Episódio alvo', {
+          alvo: `${targetSeason}x${targetEpisode}`,
+          episodeTitles: statusEp,
+          namePt: epData?.namePt || '-',
+          nameEn: epData?.nameEn || '-',
+        });
+
         const episodeFiles = candidateFiles.filter(f =>
           this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(f.name, targetSeason, targetEpisode, episodeTitles)
         );
 
-        this.logger.debug('getStreamLinkForTorrent: após filtro de episódio', {
-          episodeCandidateCount: episodeFiles.length,
-          episodeCandidates: episodeFiles.map(f => f.name)
+        this.logger.info('📁 Filtro episódio', {
+          alvo: `${targetSeason}x${targetEpisode}`,
+          antes: candidateFiles.length,
+          depois: episodeFiles.length,
+          match: episodeFiles.map(f => f.name.split(/[\\/]/).pop()).slice(0, 5),
         });
 
         if (episodeFiles.length === 0) {
+          this.logger.warn('❌ Nenhum arquivo pro episódio', {
+            alvo: `${targetSeason}x${targetEpisode}`,
+            candidatos: candidateFiles.map(f => f.name.split(/[\\/]/).pop()).slice(0, 10),
+          });
+
           throw new StreamStatusException(
             StaticResponse.FAILED_UNEXPECTED,
             info.download_state,

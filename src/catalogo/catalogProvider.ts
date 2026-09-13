@@ -63,10 +63,6 @@ export class CatalogProvider {
   private readonly STREAM_EMPTY_TTL = 10 * 1000;
   private readonly MAX_STREAM_CACHE_SIZE = 5000;
 
-  private readonly tmdbDataCache = new Map<string, CacheEntry<TmdbSearchData>>();
-  private readonly TMDB_CACHE_TTL = 5 * 60 * 1000;
-  private readonly MAX_TMDB_CACHE_SIZE = 1000;
-
   private readonly inFlightScraping: Set<string> = new Set();
 
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -83,7 +79,7 @@ export class CatalogProvider {
     this.startCacheCleanup();
   }
 
-  //Limpa caches de streams e TMDB em intervalo fixo
+  //Limpa o cache de streams em intervalo fixo — o cache TMDB agora é do ImdbScraperService
   private startCacheCleanup(): void {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
@@ -93,12 +89,6 @@ export class CatalogProvider {
         const ttl = entry.isEmpty ? this.STREAM_EMPTY_TTL : this.STREAM_TTL;
         if (now - entry.timestamp > ttl) {
           this.streamCache.delete(key);
-        }
-      }
-
-      for (const [key, entry] of this.tmdbDataCache.entries()) {
-        if (now - entry.timestamp > this.TMDB_CACHE_TTL) {
-          this.tmdbDataCache.delete(key);
         }
       }
     }, this.CACHE_CLEANUP_INTERVAL);
@@ -132,12 +122,8 @@ export class CatalogProvider {
     map.set(key, { data, timestamp: Date.now() });
   }
 
-  //Busca títulos no TMDB por imdbId e temporada, com cache local
+  //Delega o cache inteiro pro ImdbScraperService (memória + banco) — sem camada extra aqui
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
-    const cacheKey = season !== undefined ? `${imdbId}:s${season}` : imdbId;
-    const cached = this.getFromMap(this.tmdbDataCache, cacheKey, this.TMDB_CACHE_TTL);
-    if (cached) return cached;
-
     let imdbTitles: ImdbTitles | null = null;
     let searchTitle = '';
     let seasonYear: number | null = null;
@@ -154,9 +140,7 @@ export class CatalogProvider {
       this.logger.warn('Erro ao obter dados TMDB', { imdbId, season, error: error instanceof Error ? error.message : 'Erro' });
     }
 
-    const data: TmdbSearchData = { searchTitle, imdbTitles, seasonYear, mediaType };
-    this.setToMap(this.tmdbDataCache, cacheKey, data, this.MAX_TMDB_CACHE_SIZE);
-    return data;
+    return { searchTitle, imdbTitles, seasonYear, mediaType };
   }
 
   async getSeasonYear(imdbId: string, season: number): Promise<number | null> {
@@ -222,6 +206,19 @@ export class CatalogProvider {
     if (!tmdb || !tmdb.searchTitle) {
       this.logger.warn('Sem título para scraping', { imdbId });
       return [];
+    }
+
+    //Log objetivo do episodeTitles — valida que os nomes PT/EN chegaram antes do scraping
+    if (finalSeason !== undefined && tmdb.imdbTitles?.episodeTitles) {
+      const lista = tmdb.imdbTitles.episodeTitles;
+      const statusEp = lista.length === 0 ? 'VAZIO' : `${lista.length} eps`;
+      const epAlvo = finalEpisode !== undefined ? lista.find(e => e.episodeNumber === finalEpisode) : undefined;
+      this.logger.info('🎯 Episódio alvo (scraping)', {
+        alvo: finalEpisode !== undefined ? `${finalSeason}x${finalEpisode}` : `S${finalSeason}`,
+        episodeTitles: statusEp,
+        namePt: epAlvo?.namePt || '-',
+        nameEn: epAlvo?.nameEn || '-',
+      });
     }
 
     let searchQuery = tmdb.searchTitle;
@@ -594,15 +591,15 @@ export class CatalogProvider {
     return m ? m[1] : null;
   }
 
+  //Limpa o cache TMDB — delega pro ImdbScraperService, que é o dono agora
   clearTmdbCache(): void {
-    this.tmdbDataCache.clear();
+    ImdbScraperService.clearGlobalCache();
   }
 
   getStats() {
     return {
       cacheSize: this.streamCache.size,
       inFlightScraping: this.inFlightScraping.size,
-      tmdbCacheSize: this.tmdbDataCache.size
     };
   }
 }
