@@ -135,12 +135,16 @@ export class TorrentScraperService {
       const detalhes = runs.map(r => `${r.nome}=${r.results.length}(${r.duration}ms)`).join(', ');
       logger.debug(`📊 ${allResults.length} torrents em ${duration}ms | ${detalhes}`);
 
-      if (duration > 5000) {
-        logger.warn('Coleta de torrents lenta', {
-          tempo: `${duration}ms`,
-          resultados: allResults.length,
-          queries: searchQueries.length,
-        });
+      // Aviso por scraper: isola qual provedor degradou. Ignora scrapers que voltaram vazios
+      // (vazio ≠ lento, é "não tem o título").
+      const LIMIAR_SCRAPER_MS = 8000;
+      for (const r of runs) {
+        if (r.results.length > 0 && r.duration > LIMIAR_SCRAPER_MS) {
+          logger.warn(`Scraper lento: ${r.nome}`, {
+            tempo: `${r.duration}ms`,
+            resultados: r.results.length,
+          });
+        }
       }
 
       return allResults;

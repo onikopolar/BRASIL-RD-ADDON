@@ -132,6 +132,13 @@ export class QualityDetector {
     return this.extractBestQuality(name);
   }
 
+  //Retorna null quando não acha qualidade real — consumidores que precisam saber se existe qualidade explícita usam esse.
+  extractQualityOrNull(text: string): string | null {
+    if (!text) return null;
+    const q = this.extractBestQuality(text);
+    return q === 'HD' ? null : q;
+  }
+
   isValidQuality(quality: string): boolean {
     return this.allowedQualities.has(quality);
   }

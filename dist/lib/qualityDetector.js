@@ -111,6 +111,12 @@ class QualityDetector {
             return 'HD';
         return this.extractBestQuality(name);
     }
+    extractQualityOrNull(text) {
+        if (!text)
+            return null;
+        const q = this.extractBestQuality(text);
+        return q === 'HD' ? null : q;
+    }
     isValidQuality(quality) {
         return this.allowedQualities.has(quality);
     }

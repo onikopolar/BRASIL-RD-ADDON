@@ -25,15 +25,12 @@ const resolveLogger = new Logger('🔄RESOLVE');
 
 const emVoo = new Map<string, Promise<any>>();
 
-// Cache local de títulos por infoHash
 const titlesCache = new Map<string, string[]>();
 const episodeTitlesCache = new Map<string, Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null>();
 
-// Cache de torrents em processamento (evita re-chamadas ao Torbox)
 const pendingTorrentCache = new Map<string, { timestamp: number; status: string; torrentId?: string }>();
 const PENDING_TTL_MS = 5 * 60 * 1000;
 
-// TTL do cache em banco (7 dias)
 const DB_TITLE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 function createStreamFromStaticResponse(
@@ -296,9 +293,9 @@ async function processMagnetWithTorbox(
             };
         }
 
-        const info = await torboxService.getTorrentInfo(torrentId, apiKey);
+        // Reusa a info que o processTorrent já buscou — sem segunda chamada.
+        const info = resultado.info ?? await torboxService.getTorrentInfo(torrentId, apiKey);
 
-        // Grava seeders reais no banco — /stream/ consulta direto, sem chamar Torbox.
         void gravarSeeders(infoHash, info.seeds);
 
         let streamLink: string | undefined;

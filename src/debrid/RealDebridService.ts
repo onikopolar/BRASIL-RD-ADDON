@@ -7,6 +7,7 @@ import { StreamStatusException } from '../stream/StreamStatusException.js';
 import { EpisodeMatcher } from '../titulos/episodeMatcher.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { normalizarTexto, extrairAno } from '../titulos/TechnicalWords.js';
+import { QualityDetector } from '../lib/qualityDetector.js';
 
 interface TorboxError {
   error?: string;
@@ -30,7 +31,6 @@ interface TorboxListResponse {
   success?: boolean;
 }
 
-// Resposta do endpoint /torrents/torrentinfo — devolve seeds/peers reais da rede BitTorrent.
 interface TorboxHashInfoResponse {
   data?: {
     hash?: string;
@@ -48,7 +48,6 @@ export class TorboxService {
   private readonly logger: Logger;
   private readonly maxRetries: number = 3;
   private readonly baseDelay: number = 1000;
-  // Cache infoHash -> torrentId pra torrents recém-adicionados que ainda não apareceram no mylist.
   private static queuedTorrentCache = new Map<string, string>();
   private readonly videoExtensions: string[] = [
     '.mp4', '.mkv', '.avi', '.mov', '.wmv', '.flv', '.webm', '.m4v',
@@ -56,8 +55,8 @@ export class TorboxService {
   ];
   private staticResponseService: StaticResponseService;
   private readonly episodeMatcher = EpisodeMatcher.getInstance();
+  private readonly qualityDetector = QualityDetector.getInstance();
 
-  // Títulos alvo por infoHash, usados pra escolher o arquivo certo dentro do torrent.
   private titleCache = new Map<string, string[]>();
 
   public static getInstance(baseUrl?: string): TorboxService {
@@ -260,7 +259,7 @@ export class TorboxService {
     try {
       const response = await client.get<TorboxHashInfoResponse>('/torrents/torrentinfo', {
         params: { hash, timeout: timeoutSec },
-        timeout: (timeoutSec + 2) * 1000,   // vira 12s
+        timeout: (timeoutSec + 2) * 1000,
       });
       const seeds = Number(response.data?.data?.seeds);
       const durationMs = Date.now() - startTime;
@@ -293,45 +292,13 @@ export class TorboxService {
   }
 
   async unrestrictLink(_link: string, _apiKey: string): Promise<string> {
-    throw new Error('Torbox não suporta unrestrictLink. Use getStreamLinkForFile/getStreamLinkForTorrent.');
+    throw new Error('Torbox não suporta unrestrictLink. Use getStreamLinkForTorrent.');
   }
 
   buildStreamPermalink(torrentId: string | number, fileId: number, apiKey: string): string {
     const url = `https://api.torbox.app/v1/api/torrents/requestdl?token=${encodeURIComponent(apiKey)}&torrent_id=${torrentId}&file_id=${fileId}&redirect=true`;
     this.logger.debug('buildStreamPermalink', { torrentId, fileId, url });
     return url;
-  }
-
-  async getStreamLinkForFile(torrentId: string, fileId: number, apiKey: string): Promise<string | null> {
-    this.logger.debug('getStreamLinkForFile: início', { torrentId, fileId });
-    try {
-      const info = await this.getTorrentInfo(torrentId, apiKey);
-
-      const staticResponse = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
-      if (staticResponse) {
-        this.logger.debug('getStreamLinkForFile: status não ready', { status: info.download_state, staticResponse });
-        throw new StreamStatusException(staticResponse, info.download_state, Math.round(info.progress * 100), `Status: ${info.download_state}`);
-      }
-
-      if (!this.isReadyStatus(info.download_state)) {
-        this.logger.debug('getStreamLinkForFile: ainda baixando', { status: info.download_state, progress: info.progress });
-        throw new StreamStatusException(StaticResponse.DOWNLOADING, info.download_state, Math.round(info.progress * 100), 'Aguardando download');
-      }
-
-      const file = (info.files || []).find(f => f.id === fileId);
-      if (!file) {
-        this.logger.error('getStreamLinkForFile: arquivo não encontrado', { fileId, files: info.files });
-        throw new StreamStatusException(StaticResponse.FAILED_UNEXPECTED, info.download_state, undefined, 'Arquivo não encontrado');
-      }
-
-      const link = this.buildStreamPermalink(torrentId, fileId, apiKey);
-      this.logger.debug('getStreamLinkForFile: link gerado', { link });
-      return link;
-    } catch (error) {
-      if (error instanceof StreamStatusException) throw error;
-      this.logger.error('Falha ao obter stream para arquivo', { torrentId, fileId });
-      return null;
-    }
   }
 
   async getStreamLinkForTorrent(
@@ -477,7 +444,7 @@ export class TorboxService {
         }
 
         if (targetQuality) {
-          const fileQuality = this.extractQualityFromFilename(f.name);
+          const fileQuality = this.qualityDetector.extractQualityOrNull(f.name);
           this.logger.debug('   Qualidade extraída do arquivo:', { fileQuality });
           if (fileQuality) {
             const normalizedTarget = this.normalizeQuality(targetQuality);
@@ -558,38 +525,6 @@ export class TorboxService {
     }
   }
 
-  async getStreamLinkWithStatus(
-    torrentId: string, apiKey: string, targetSeason?: number, targetEpisode?: number
-  ): Promise<{
-    url: string | null; status: string; staticResponse?: StaticResponse; progress?: number;
-  }> {
-    this.logger.debug('getStreamLinkWithStatus: início', { torrentId, targetSeason, targetEpisode });
-    try {
-      const info = await this.getTorrentInfo(torrentId, apiKey);
-      const sr = this.staticResponseService.getResponseForTorboxStatus(info.download_state);
-      if (sr) {
-        this.logger.debug('getStreamLinkWithStatus: status não ready', { status: info.download_state, staticResponse: sr });
-        return { url: null, status: info.download_state, staticResponse: sr, progress: Math.round(info.progress * 100) };
-      }
-      if (this.isReadyStatus(info.download_state)) {
-        const hash = info.hash?.toLowerCase();
-        const targetTitles = hash ? this.titleCache.get(hash) : undefined;
-        const link = await this.getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode, undefined, undefined, targetTitles);
-        this.logger.debug('getStreamLinkWithStatus: link obtido', { link });
-        return { url: link, status: 'cached', progress: 100 };
-      }
-      this.logger.debug('getStreamLinkWithStatus: baixando', { status: info.download_state, progress: info.progress });
-      return { url: null, status: info.download_state, progress: Math.round(info.progress * 100) };
-    } catch (error) {
-      if (error instanceof StreamStatusException) {
-        this.logger.debug('getStreamLinkWithStatus: StreamStatusException', { error });
-        return { url: null, status: 'downloading', staticResponse: error.staticResponse, progress: error.progress };
-      }
-      this.logger.error('getStreamLinkWithStatus: erro inesperado', { error: (error as Error).message });
-      return { url: null, status: 'error' };
-    }
-  }
-
   async getTorrentFiles(torrentId: string, apiKey: string): Promise<TorboxFile[]> {
     this.logger.debug('getTorrentFiles: início', { torrentId });
     return (await this.getTorrentInfo(torrentId, apiKey)).files || [];
@@ -618,28 +553,31 @@ export class TorboxService {
     }
   }
 
-  async processTorrent(magnetLink: string, apiKey: string) {
+  //Fluxo: cache local → addMagnet (único jeito confiável de obter torrent_id) → getTorrentInfo.
+  //Retorna info junto pra evitar segundo getTorrentInfo em quem consome.
+  async processTorrent(magnetLink: string, apiKey: string): Promise<{
+    added: boolean;
+    ready: boolean;
+    status: string;
+    torrentId?: string;
+    progress?: number;
+    info?: TorboxTorrentInfo;
+  }> {
     const hash = await this.extrairMagnetHash(magnetLink);
-    this.logger.debug('processTorrent: início', { magnetHash: hash.substring(0, 16) });
+    const hashLower = hash.toLowerCase();
+    this.logger.debug('processTorrent: início', { magnetHash: hashLower.substring(0, 16) });
     try {
-      const cachedId = hash !== 'unknown' ? TorboxService.queuedTorrentCache.get(hash.toLowerCase()) : undefined;
+      const cachedId = hash !== 'unknown' ? TorboxService.queuedTorrentCache.get(hashLower) : undefined;
       if (cachedId) {
         this.logger.debug('processTorrent: ID cacheado encontrado', { torrentId: cachedId });
         try {
           const info = await this.getTorrentInfo(cachedId, apiKey);
           const ready = this.isReadyStatus(info.download_state);
           this.logger.info('Usando torrent cacheado', { torrentId: cachedId, status: info.download_state, ready });
-          return { added: true, ready, status: info.download_state, torrentId: cachedId, progress: Math.round(info.progress * 100) };
+          return { added: true, ready, status: info.download_state, torrentId: cachedId, progress: Math.round(info.progress * 100), info };
         } catch (err) {
           this.logger.warn('Falha ao obter info do cache, tentando adicionar novamente', { torrentId: cachedId, error: (err as Error).message });
         }
-      }
-
-      const existing = await this.findExistingTorrent(hash, apiKey);
-      if (existing) {
-        const ready = this.isReadyStatus(existing.download_state);
-        this.logger.info('Torrent já existente', { torrentId: existing.id, status: existing.download_state, ready });
-        return { added: true, ready, status: existing.download_state, torrentId: String(existing.id), progress: Math.round(existing.progress * 100) };
       }
 
       this.logger.debug('processTorrent: adicionando magnet');
@@ -648,7 +586,7 @@ export class TorboxService {
         const info = await this.getTorrentInfo(id, apiKey);
         const ready = this.isReadyStatus(info.download_state);
         this.logger.info('Magnet processado e info obtida', { torrentId: id, status: info.download_state, ready });
-        return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100) };
+        return { added: true, ready, status: info.download_state, torrentId: id, progress: Math.round(info.progress * 100), info };
       } catch (infoErr) {
         this.logger.warn('getTorrentInfo falhou, torrent provavelmente em fila', {
           torrentId: id,
@@ -658,7 +596,7 @@ export class TorboxService {
       }
     } catch (error) {
       if (error instanceof StreamStatusException) throw error;
-      this.logger.error('processTorrent: erro geral', { magnetHash: hash.substring(0, 16), error: (error as Error).message });
+      this.logger.error('processTorrent: erro geral', { magnetHash: hashLower.substring(0, 16), error: (error as Error).message });
       return { added: false, ready: false, status: 'error' };
     }
   }
@@ -675,7 +613,6 @@ export class TorboxService {
     let bestSegmentScore = -1;
     let bestSegmentDetails: any = null;
 
-    // Tokeniza incluindo números curtos, senão "1" some e a match de sequência quebra.
     const tokenize = (texto: string): string[] => {
       const normalized = normalizarTexto(texto);
       return normalized
@@ -683,7 +620,6 @@ export class TorboxService {
         .filter(w => w.length > 2 || /^\d+$/.test(w));
     };
 
-    // Varre da pasta do arquivo pra raiz, dando mais peso pros segmentos mais profundos.
     for (let i = segments.length - 1; i >= 0; i--) {
       const seg = segments[i];
       this.logger.debug(`   Avaliando segmento [índice ${i}]: "${seg}"`);
@@ -779,16 +715,6 @@ export class TorboxService {
     return bestSegmentScore;
   }
 
-  private extractQualityFromFilename(filename: string): string | null {
-    const match = filename.match(/\b(2160p|4k|uhd|1080p|720p|480p)\b/i);
-    if (match) {
-      const q = match[1].toLowerCase();
-      if (q === '4k' || q === 'uhd') return '2160p';
-      return q;
-    }
-    return null;
-  }
-
   private normalizeQuality(quality: string): string {
     const q = quality.toLowerCase().replace(/\s/g, '');
     if (q === '4k' || q === 'uhd') return '2160p';
@@ -799,9 +725,7 @@ export class TorboxService {
   }
 
   private isReadyStatus(status: string): boolean {
-    const ready = ['completed', 'cached', 'uploading', 'seeding'];
-    const s = status?.toLowerCase() || '';
-    return ready.some(r => s.includes(r));
+    return this.staticResponseService.getResponseForTorboxStatus(status) === null;
   }
 
   private async retryableRequest<T>(

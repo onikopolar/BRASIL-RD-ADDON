@@ -74,6 +74,9 @@ export function isLikelyPostLink(href: string, text: string): boolean {
     href.includes('#') ||
     href.includes('/categoria/') ||
     href.includes('/tag/') ||
+    href.includes('/etiqueta/') ||
+    href.includes('/genero/') ||
+    href.includes('/qualidade/') ||
     href.includes('/page/') ||
     href.includes('sitemap') ||
     href.includes('feed') ||
@@ -115,36 +118,111 @@ export function extractLanguage(parentText: string): string {
   return '';
 }
 
-export function extractHdrMetadata($: any): { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } {
-  const result: { originalTitle?: string; originalTitleBruto?: string; year?: number; language?: string } = {};
-
-  const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
-  if (!paragrafo.length) return result;
-
-  paragrafo.find('b').each((_i: number, el: any) => {
-    const rotulo = $(el).text().trim();
-    const html = $(el).parent().html() || '';
-    const elHtml = $(el).toString();
-    const idx = html.indexOf(elHtml);
-    if (idx === -1) return;
-
-    const after = html.substring(idx + elHtml.length);
-    const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
-    if (!match) return;
-    const valor = match[1].replace(/<[^>]+>/g, '').trim();
-
-    if (/t[íi]tulo\s+original/i.test(rotulo)) {
-      result.originalTitleBruto = valor.replace(/\s*S\d{1,2}$/i, '').trim();
-    } else if (/lan[çc]amento/i.test(rotulo)) {
-      const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
-      if (yearMatch) result.year = parseInt(yearMatch[0]);
-    } else if (/idiomas?/i.test(rotulo)) {
-      result.language = valor;
-    }
+// Leitura genérica de <dl class="item-specs"><div><dt>Rótulo</dt><dd>Valor</dd></div></dl> — layout novo.
+function parseSpecsList($: any): Record<string, string> {
+  const specs: Record<string, string> = {};
+  $('dl.item-specs > div').each((_i: number, el: any) => {
+    const dt = $(el).find('dt').first();
+    const dd = $(el).find('dd').first();
+    if (!dt.length || !dd.length) return;
+    const rotulo = normalizarTexto(dt.text().trim());
+    const valor = dd.text().replace(/\s+/g, ' ').trim();
+    if (rotulo && valor) specs[rotulo] = valor;
   });
+  return specs;
+}
 
-  const tituloBase = extrairTituloBasePosImdb($, paragrafo);
-  result.originalTitle = tituloBase || result.originalTitleBruto;
+// Remove sufixos do título original — "We Bare Bears - Complete S01", "Temporada Completa", etc.
+function limparTituloOriginal(titulo: string): string {
+  return titulo
+    .replace(/\s*[-–—]\s*(complete|completa?)\s*s\d{1,2}$/i, '')
+    .replace(/\s*temporada\s+completa\s*(s\d{1,2})?$/i, '')
+    .replace(/\s*complete\s+season\s*\d*$/i, '')
+    .replace(/\s*s\d{1,2}$/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+export function extractHdrMetadata($: any): {
+  originalTitle?: string;
+  originalTitleBruto?: string;
+  year?: number;
+  language?: string;
+  quality?: string;
+  size?: string;
+  format?: string;
+  duration?: string;
+} {
+  const result: {
+    originalTitle?: string;
+    originalTitleBruto?: string;
+    year?: number;
+    language?: string;
+    quality?: string;
+    size?: string;
+    format?: string;
+    duration?: string;
+  } = {};
+
+  // Layout ANTIGO: <p><b>Rótulo</b> Valor<br>...</p>
+  const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
+
+  if (paragrafo.length) {
+    paragrafo.find('b').each((_i: number, el: any) => {
+      const rotulo = $(el).text().trim();
+      const html = $(el).parent().html() || '';
+      const elHtml = $(el).toString();
+      const idx = html.indexOf(elHtml);
+      if (idx === -1) return;
+
+      const after = html.substring(idx + elHtml.length);
+      const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
+      if (!match) return;
+      const valor = match[1].replace(/<[^>]+>/g, '').trim();
+
+      if (/t[íi]tulo\s+original/i.test(rotulo)) {
+        result.originalTitleBruto = valor;
+      } else if (/lan[çc]amento/i.test(rotulo)) {
+        const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
+        if (yearMatch) result.year = parseInt(yearMatch[0]);
+      } else if (/idiomas?/i.test(rotulo)) {
+        result.language = valor;
+      }
+    });
+
+    const tituloBase = extrairTituloBasePosImdb($, paragrafo);
+    const originalFinal = tituloBase || result.originalTitleBruto;
+    if (originalFinal) result.originalTitle = limparTituloOriginal(originalFinal);
+
+    const specsFallback = parseSpecsList($);
+    result.quality = result.quality || specsFallback['qualidade'];
+    result.size = result.size || specsFallback['tamanho'];
+    result.format = result.format || specsFallback['formato'];
+    result.duration = result.duration || specsFallback['duracao'] || specsFallback['duração'];
+
+    return result;
+  }
+
+  // Layout NOVO: <dl class="item-specs">
+  const specs = parseSpecsList($);
+  if (Object.keys(specs).length === 0) return result;
+
+  if (specs['titulo original']) {
+    result.originalTitleBruto = specs['titulo original'];
+    result.originalTitle = limparTituloOriginal(specs['titulo original']);
+  }
+  if (specs['lancamento']) {
+    const yearMatch = specs['lancamento'].match(/\b(19|20)\d{2}\b/);
+    if (yearMatch) result.year = parseInt(yearMatch[0]);
+  }
+  if (specs['idiomas']) {
+    result.language = specs['idiomas'];
+  }
+  if (specs['qualidade']) result.quality = specs['qualidade'];
+  if (specs['tamanho']) result.size = specs['tamanho'].trim();
+  if (specs['formato']) result.format = specs['formato'];
+  if (specs['duracao']) result.duration = specs['duracao'];
+  if (specs['duração']) result.duration = specs['duração'];
 
   return result;
 }
@@ -181,13 +259,67 @@ function extrairDnDoMagnet(magnet: string): string | undefined {
   }
 }
 
+// Encontra o container de texto do magnet — layout novo (.download-row) ou antigo (<p>).
+function getContainerText($: any, el: any): string {
+  const row = $(el).closest('.download-row');
+  if (row.length) {
+    const nome = row.find('.download-name').first().text().trim();
+    return nome || row.text().replace(/\s+/g, ' ').trim();
+  }
+
+  const parentP = $(el).closest('p');
+  if (parentP.length) return parentP.text().trim();
+
+  return $(el).text().trim();
+}
+
+// Classifica cabeçalho de seção — cobre "VERSÃO MKV DUAL ÁUDIO", "VERSÃO MP4 LEGENDADO", "::DUBLADO::".
+function classificarSecao(texto: string): 'DUAL' | 'LEGENDADO' | 'NONE' {
+  const t = normalizarTexto(texto).trim();
+  if (!t || t.length > 60) return 'NONE';
+  if (/^(trailer|assistir|baixar|download|ver)\b/i.test(t)) return 'NONE';
+
+  const temDual = /\bdual\b/.test(t) && /\baudio\b/.test(t);
+  const temDublado = /\bdublado\b|\bdublada\b|\bdublagem\b|\bnacional\b/.test(t);
+  const temLegendado = /\blegendado\b|\blegendada\b/.test(t);
+
+  // Legendado puro vence.
+  if (temLegendado && !temDual && !temDublado) return 'LEGENDADO';
+  // DUAL/Dublado puro vence.
+  if ((temDual || temDublado) && !temLegendado) return 'DUAL';
+  return 'NONE';
+}
+
 interface SearchResultItem {
   title: string;
   postUrl: string;
 }
 
+// Extrai o título "limpo" de um <a> de resultado, cobrindo:
+//  - layout novo (media-card): meta[itemprop="name"] > .media-card-title > title
+//  - layout antigo: texto direto do link
+function extrairTituloDoLink($: any, el: any): string {
+  const metaName = $(el).find('meta[itemprop="name"]').attr('content');
+  if (metaName && metaName.trim()) return metaName.trim();
+
+  const cardTitle = $(el).find('.media-card-title').first();
+  if (cardTitle.length) {
+    const clone = cardTitle.clone();
+    clone.find('.media-card-year').remove();
+    const t = clone.text().replace(/\s+/g, ' ').trim();
+    if (t) return t;
+  }
+
+  const titleAttr = $(el).attr('title');
+  if (titleAttr && titleAttr.trim()) {
+    return titleAttr.replace(/\s*Torrent\s*$/i, '').trim();
+  }
+
+  return $(el).text().replace(/\s+/g, ' ').trim();
+}
+
 export async function searchHdrLinks(query: string, targetSeason?: number): Promise<SearchResultItem[]> {
-  const searchUrl = `${HDR_BASE}/index.php?s=${encodeURIComponent(query)}`;
+  const searchUrl = `${HDR_BASE}/index.php?busca=${encodeURIComponent(query)}`;
 
   try {
     const res = await axios.get(searchUrl, axiosConfig);
@@ -198,8 +330,10 @@ export async function searchHdrLinks(query: string, targetSeason?: number): Prom
 
     $('a[href]').each((_i: number, el: any) => {
       const href = $(el).attr('href');
-      const text = $(el).text().trim();
-      if (!href || !text || text.length < 10) return;
+      if (!href) return;
+
+      const text = extrairTituloDoLink($, el);
+      if (!text || text.length < 3) return;
       if (!isLikelyPostLink(href, text)) return;
 
       const absoluteHref = href.startsWith('http') ? href : `${HDR_BASE}${href}`;
@@ -233,20 +367,15 @@ export async function extractMagnetsFromPost(
 
   const metadata = extractHdrMetadata($);
 
-  // FIX H6 + R19: detecta seções ::VERSÃO DUAL ÁUDIO:: / ::VERSÃO LEGENDADA:: / ::DUBLADO:: por posição no HTML.
-  // Sem isso o filtro de idioma dependia só do texto do parentText — funcionava por sorte.
+  // Detecta cabeçalhos de seção (DUAL/LEGENDADO) por posição no HTML.
   const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
   $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
     const texto = $(el).text().trim();
     if (!texto) return;
-    // R19: ::DUBLADO:: e ::VERSÃO DUAL ÁUDIO:: contam como DUAL; ::VERSÃO LEGENDADA:: como LEGENDADO.
-    const ehVersao = /vers[ãa]o\s+(dual|legendad)/i.test(texto);
-    const ehDubladoHeader = /::\s*dublado\s*::/i.test(texto);
-    const ehLegendadoHeader = /::\s*legendad/i.test(texto);
-    if (!ehVersao && !ehDubladoHeader && !ehLegendadoHeader) return;
+    const tipo = classificarSecao(texto);
+    if (tipo === 'NONE') return;
     const pos = html.indexOf($(el).toString());
     if (pos === -1) return;
-    const tipo = (ehVersao && /legendad/i.test(texto)) || ehLegendadoHeader ? 'LEGENDADO' : 'DUAL';
     sectionHeaders.push({ pos, type: tipo });
   });
   sectionHeaders.sort((a, b) => a.pos - b.pos);
@@ -260,9 +389,9 @@ export async function extractMagnetsFromPost(
     return secao;
   };
 
-  const rawMagnets: {
+  const rawLinks: {
     href: string;
-    parentText: string;
+    containerText: string;
     linkText: string;
     qualityMatch?: string;
     sizeMatch?: string;
@@ -272,84 +401,66 @@ export async function extractMagnetsFromPost(
     const href = $(el).attr('href');
     if (!href) return;
 
-    const parentP = $(el).closest('p');
-    const parentText = parentP.text().trim();
+    const containerText = getContainerText($, el);
     const linkText = $(el).text().trim();
 
-    // FIX H6: se o post declara seções, elas têm prioridade. Magnet na seção LEGENDADO
-    // é descartado — sem depender do texto do parentText.
     const posMagnet = html.indexOf($(el).toString());
     const secaoPosicional = posMagnet !== -1 ? detectarSecaoPorPosicao(posMagnet) : 'NONE';
     if (secaoPosicional === 'LEGENDADO') return;
 
-    // Fallback por texto — mantém o comportamento atual pra posts sem seção declarada.
-    const isLegendado = /legendado|legendada|legenda/i.test(parentText);
-    const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(parentText);
+    const isLegendado = /legendado|legendada|legenda/i.test(containerText);
+    const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(containerText);
     if (isLegendado && !isDualOuDublado) return;
 
-    if (!passaFiltroTemporada([parentText, postTitle, pageTitle], targetSeason)) return;
+    if (!passaFiltroTemporada([containerText, postTitle, pageTitle], targetSeason)) return;
 
-    const qualityMatch = parentText.match(/(\d{3,4}p|4K|HD|FullHD)/i)?.[0];
-    let sizeMatch = parentText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
+    const qualityMatch = containerText.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
+    let sizeMatch = containerText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
 
     if (!sizeMatch) {
       const dn = extrairDnDoMagnet(href);
-      if (dn) {
-        sizeMatch = dn.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
-      }
+      if (dn) sizeMatch = dn.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
     }
 
-    rawMagnets.push({ href, parentText, linkText, qualityMatch, sizeMatch });
+    rawLinks.push({ href, containerText, linkText, qualityMatch, sizeMatch });
   });
 
-  logger.debug(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalMagnetsBrutos=${rawMagnets.length}`);
-
-  for (const raw of rawMagnets) {
+  for (const raw of rawLinks) {
     try {
       const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
       let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
 
       if (!infoHash) {
-        logger.warn(`HDR extractMagnetsFromPost | magnet sem infoHash | magnet=${raw.href.substring(0, 60)}`);
+        logger.warn(`HDR: magnet sem infoHash`, { magnet: raw.href.substring(0, 60) });
         continue;
       }
 
       let canonicalName: string | undefined;
-      let hashNormalizado = false;
 
       try {
         const dados = await analisarMagnet(raw.href);
         canonicalName = dados?.nome ?? undefined;
         if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
           infoHash = dados.infoHash.toLowerCase();
-          hashNormalizado = true;
         }
       } catch {
         canonicalName = undefined;
       }
 
-      if (hashNormalizado) {
-        logger.debug(`HDR | hash base32 → hex | magnet=${raw.href.substring(0, 40)}... | hash=${infoHash.substring(0, 12)}`);
-      } else {
-        logger.debug(`HDR | hash mantido do regex | magnet=${raw.href.substring(0, 40)}... | hash=${infoHash.substring(0, 12)} | len=${infoHash.length}`);
-      }
-
       let year = metadata.year;
       const originalTitle = metadata.originalTitle || metadata.originalTitleBruto;
 
-      const anoDoMagnet = extrairAno(raw.parentText) || (canonicalName ? extrairAno(canonicalName) : undefined);
-      if (anoDoMagnet) {
-        year = anoDoMagnet;
-      }
+      const anoDoMagnet = extrairAno(raw.containerText) || (canonicalName ? extrairAno(canonicalName) : undefined);
+      if (anoDoMagnet) year = anoDoMagnet;
 
-      const language = extractLanguage(raw.parentText) || metadata.language || extractLanguage(pageTitle);
+      const language = extractLanguage(raw.containerText) || metadata.language || extractLanguage(pageTitle);
 
       const range =
-        detectSeasonRange(raw.parentText) ??
+        detectSeasonRange(raw.containerText) ??
         detectSeasonRange(postTitle) ??
         detectSeasonRange(pageTitle);
 
-      const rangeEp = extrairRangeEpisodios(raw.parentText);
+      const rangeEp = extrairRangeEpisodios(raw.containerText);
       let episodeStart = rangeEp?.episodeStart ?? undefined;
       let episodeEnd = rangeEp?.episodeEnd ?? undefined;
 
@@ -360,8 +471,10 @@ export async function extractMagnetsFromPost(
       }
 
       const episode = episodeStart;
-      const qualityMatch = raw.qualityMatch;
-      const sizeMatch = raw.sizeMatch;
+
+      // Qualidade/tamanho: prioriza o que veio junto do link; se faltar, usa o bloco de specs da página inteira.
+      const qualityMatch = raw.qualityMatch || metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
+      const sizeMatch = raw.sizeMatch || metadata.size?.trim();
 
       const seasonLabel = range && range.seasonStart > 0
         ? (range.seasonStart === range.seasonEnd
@@ -373,9 +486,8 @@ export async function extractMagnetsFromPost(
         ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
         : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
 
-      // FIX H6: passa o parentText limpo como htmlTitle — o StreamFormatter anexa como
-      // sufixo entre parênteses. Diferencia magnets com o mesmo dn= (ex: "SEM COMPACTAÇÃO").
-      const htmlTitleLimpo = raw.parentText
+      // Passa o containerText limpo como htmlTitle — o StreamFormatter anexa como sufixo entre parênteses.
+      const htmlTitleLimpo = raw.containerText
         .replace(/MAGNET LINK/gi, '')
         .replace(/\s+/g, ' ')
         .trim() || undefined;
@@ -394,15 +506,47 @@ export async function extractMagnetsFromPost(
         season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
         episode,
       });
-
-      logger.info(`HDR extractMagnetsFromPost | magnet OK | infoHash=${infoHash.substring(0, 12)} | language=${language} | year=${year} | quality=${qualityMatch || 'N/A'} | size=${sizeMatch || 'N/A'}`);
     } catch (err) {
-      logger.warn(`HDR extractMagnetsFromPost | erro ao processar magnet | magnet=${raw.href.substring(0, 60)} | error=${(err as Error).message}`);
+      logger.warn(`HDR: erro ao processar magnet`, { magnet: raw.href.substring(0, 60), error: (err as Error).message });
     }
   }
 
-  logger.info(`HDR extractMagnetsFromPost | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
+  if (results.length > 0) {
+    logger.debug(`HDR post | "${postTitle.substring(0, 45)}" → ${results.length} magnets`);
+  }
+
   return results;
+}
+
+// Busca um único post do HDR: faz o GET, valida IMDb (se aplicável) e extrai os magnets.
+// Retorna sempre — erro vira lista vazia — para não derrubar o Promise.all.
+async function processarPostHdr(
+  item: SearchResultItem,
+  imdbId: string | undefined,
+  targetSeason: number | undefined
+): Promise<{ torrents: HdrTorrent[]; imdbConfirmed: boolean }> {
+  try {
+    const res = await axios.get(item.postUrl, axiosConfig);
+
+    let imdbConfirmed = false;
+    if (imdbId) {
+      const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+      if (imdbIdDoPost) {
+        const isCollection = isCollectionTitle(item.title);
+        if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+          return { torrents: [], imdbConfirmed: false };
+        }
+        if (!isCollection) {
+          imdbConfirmed = true;
+        }
+      }
+    }
+
+    const torrents = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
+    return { torrents, imdbConfirmed };
+  } catch {
+    return { torrents: [], imdbConfirmed: false };
+  }
 }
 
 export async function searchHdr(
@@ -417,11 +561,11 @@ export async function searchHdr(
 
   const queriesBase = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
 
+  // Queries = apenas o que veio de fora (nome base + nome com ano).
+  // Sem variantes "4k" — HDR não indexa 4k como termo próprio e multiplicava buscas sem retorno.
   const queriesParaBusca: string[] = [];
   for (const q of queriesBase) {
     if (!queriesParaBusca.includes(q)) queriesParaBusca.push(q);
-    const q4k = `${q} 4k`;
-    if (!queriesParaBusca.includes(q4k)) queriesParaBusca.push(q4k);
   }
 
   for (const q of queriesBase) {
@@ -448,11 +592,10 @@ export async function searchHdr(
     const seenInfoHashes = new Set<string>();
 
     for (const q of queriesParaBusca) {
-      logger.debug(`HDR: tentando busca com query "${q}"`);
       const links = await searchHdrLinks(q, targetSeason);
 
       if (links.length === 0) {
-        logger.debug(`HDR: query "${q}" não retornou links, tentando próxima...`);
+        logger.debug(`HDR: "${q}" sem links`);
         continue;
       }
 
@@ -464,36 +607,27 @@ export async function searchHdr(
         return contemFrase || isCollection;
       });
 
-      logger.debug(`HDR: ${links.length} links → ${filtrados.length} após filtro local para query "${q}"`);
+      // Se a query base não achou nada relevante, HDR não tem o título — encerra.
+      if (filtrados.length === 0) {
+        logger.debug(`HDR: "${q}" → ${links.length} links, 0 relevantes — encerrando`);
+        break;
+      }
 
-      if (filtrados.length === 0) continue;
+      logger.debug(`HDR: "${q}" → ${links.length} links, ${filtrados.length} relevantes`);
 
-      for (const item of filtrados) {
-        try {
-          const res = await axios.get(item.postUrl, axiosConfig);
-          let imdbConfirmed = false;
-          if (imdbId) {
-            const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
-            if (imdbIdDoPost) {
-              const isCollection = isCollectionTitle(item.title);
-              if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
-                continue;
-              }
-              if (!isCollection) {
-                imdbConfirmed = true;
-              }
-            }
+      // Busca todos os posts em paralelo — cada um é independente (GET + parse + analisarMagnet).
+      // A dedup por infoHash roda depois, em série, sobre o resultado agregado.
+      const respostas = await Promise.all(
+        filtrados.map(item => processarPostHdr(item, imdbId, targetSeason))
+      );
+
+      for (const { torrents, imdbConfirmed } of respostas) {
+        for (const r of torrents) {
+          if (imdbConfirmed) r.imdbConfirmed = true;
+          if (!seenInfoHashes.has(r.infoHash)) {
+            seenInfoHashes.add(r.infoHash);
+            allResults.push(r);
           }
-          const magnets = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
-          for (const r of magnets) {
-            if (imdbConfirmed) r.imdbConfirmed = true;
-            if (!seenInfoHashes.has(r.infoHash)) {
-              seenInfoHashes.add(r.infoHash);
-              allResults.push(r);
-            }
-          }
-        } catch {
-          // ignora erro de post individual
         }
       }
 
