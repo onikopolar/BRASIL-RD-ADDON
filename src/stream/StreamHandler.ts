@@ -35,13 +35,11 @@ export class StreamHandler {
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
 
-  // FIX 12b: cache local de seeders por infoHash.
-  // TTL curto pra refletir swarm atual mas evitar bater no Torbox a cada request.
-  private readonly seedsCache = new Map<string, { seeds: number; timestamp: number }>();
-  private readonly SEEDS_CACHE_TTL = 5 * 60 * 1000;
-  private readonly SEEDS_FETCH_CONCURRENCY = 8;
-  private readonly SEEDS_FETCH_TIMEOUT_SEC = 3;
-  private readonly MAX_SEEDS_CACHE_SIZE = 2000;
+  // Hashes checados em background — evita re-checar o mesmo por 1h.
+  private readonly seedsCheckedAt = new Map<string, number>();
+  private readonly SEEDS_RECHECK_TTL = 60 * 60 * 1000;
+  private readonly SEEDS_BG_CONCURRENCY = 5;
+  private readonly SEEDS_BG_TIMEOUT_SEC = 5;
 
   private stats = {
     totalRequests: 0,
@@ -154,81 +152,47 @@ export class StreamHandler {
     }
   }
 
-  // FIX 12b: enriquece torrents com seeders REAIS via Torbox.
-  // - Consulta cache local primeiro (TTL 5min)
-  // - Depois busca o que falta via getTorrentInfoByHash, em lotes paralelos
-  // - Falha vira 0 (nunca lança)
-  // - GC: se o cache passar do tamanho, remove os mais antigos
-  private async enrichTorrentsWithSeeders(torrents: any[], apiKey: string): Promise<void> {
-    if (torrents.length === 0) return;
-
+  //Dispara em background a checagem de seeders via torrentinfo. Não bloqueia a resposta.
+  private fireAndForgetSeeders(torrents: any[], apiKey: string): void {
     const hashes = [...new Set(
       torrents
         .map(t => (t.infoHash || '').toLowerCase())
         .filter((h): h is string => typeof h === 'string' && h.length >= 32)
     )];
 
-    if (hashes.length === 0) return;
+    const now = Date.now();
+    const paraChecar = hashes.filter(h => {
+      const ultima = this.seedsCheckedAt.get(h);
+      return !ultima || (now - ultima) > this.SEEDS_RECHECK_TTL;
+    });
 
-    const seedsByHash = new Map<string, number>();
-    const toFetch: string[] = [];
+    if (paraChecar.length === 0) return;
+    for (const h of paraChecar) this.seedsCheckedAt.set(h, now);
 
-    // 1. Cache local
-    for (const hash of hashes) {
-      const cached = this.seedsCache.get(hash);
-      if (cached && (Date.now() - cached.timestamp) < this.SEEDS_CACHE_TTL) {
-        seedsByHash.set(hash, cached.seeds);
-      } else {
-        toFetch.push(hash);
-      }
+    void this.enrichSeedersEmBackground(paraChecar, apiKey).catch(() => {});
+  }
+
+  //Busca seeds reais de cada hash em lotes paralelos e grava no banco. Nunca lança.
+  private async enrichSeedersEmBackground(hashes: string[], apiKey: string): Promise<void> {
+    const start = Date.now();
+    let atualizados = 0;
+
+    for (let i = 0; i < hashes.length; i += this.SEEDS_BG_CONCURRENCY) {
+      const batch = hashes.slice(i, i + this.SEEDS_BG_CONCURRENCY);
+      await Promise.all(batch.map(async hash => {
+        const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC).catch(() => 0);
+        if (seeds > 0) {
+          await Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => {});
+          atualizados++;
+        }
+      }));
     }
 
-    // 2. Busca o que falta via Torbox, em lotes paralelos
-    const startTime = Date.now();
-    for (let i = 0; i < toFetch.length; i += this.SEEDS_FETCH_CONCURRENCY) {
-      const batch = toFetch.slice(i, i + this.SEEDS_FETCH_CONCURRENCY);
-      const results = await Promise.all(
-        batch.map(hash =>
-          this.torboxService
-            .getTorrentInfoByHash(hash, apiKey, this.SEEDS_FETCH_TIMEOUT_SEC)
-            .catch(() => 0)
-        )
-      );
-      for (let j = 0; j < batch.length; j++) {
-        const seeds = results[j] || 0;
-        seedsByHash.set(batch[j], seeds);
-        this.seedsCache.set(batch[j], { seeds, timestamp: Date.now() });
-      }
-    }
-
-    if (toFetch.length > 0) {
-      this.logger.debug('SEEDERS_ENRICH', {
-        totalHashes: hashes.length,
-        fromCache: hashes.length - toFetch.length,
-        fetched: toFetch.length,
-        durationMs: Date.now() - startTime,
-      });
-    }
-
-    // 3. Garbage collect se cache passar do limite
-    if (this.seedsCache.size > this.MAX_SEEDS_CACHE_SIZE) {
-      const entries = [...this.seedsCache.entries()]
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      const toRemove = entries.slice(0, Math.floor(this.MAX_SEEDS_CACHE_SIZE / 2));
-      for (const [hash] of toRemove) this.seedsCache.delete(hash);
-      this.logger.debug('SEEDERS_CACHE_GC', {
-        removed: toRemove.length,
-        remaining: this.seedsCache.size,
-      });
-    }
-
-    // 4. Aplica aos torrents
-    for (const t of torrents) {
-      const hash = (t.infoHash || '').toLowerCase();
-      if (hash && seedsByHash.has(hash)) {
-        t.seeders = seedsByHash.get(hash)!;
-      }
-    }
+    this.logger.debug('SEEDERS_BG', {
+      hashes: hashes.length,
+      atualizados,
+      durationMs: Date.now() - start,
+    });
   }
 
   //Guarda os títulos TMDB no cache do Torbox pra usar no fallback de nome de arquivo
@@ -339,10 +303,9 @@ export class StreamHandler {
         raw: true
       });
 
-      // FIX 12b: enriquece com seeders reais antes de montar os streams.
-      // Cache local + Torbox tornam o custo baixo após o primeiro hit.
-      if (request.apiKey) {
-        await this.enrichTorrentsWithSeeders(torrents, request.apiKey);
+      // Dispara em background — não bloqueia a resposta. Próxima request já pega seeds reais.
+      if (request.apiKey && torrents.length > 0) {
+        this.fireAndForgetSeeders(torrents, request.apiKey);
       }
 
       const streams: Stream[] = [];
@@ -385,7 +348,7 @@ export class StreamHandler {
       const magnetCompleto = torrent.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`;
 
       const torrentWithMagnet = {
-        ...torrent,   // seeders já vem enriquecido do enrichTorrentsWithSeeders
+        ...torrent,   // seeders vem do banco — populado em background pelo SEEDERS_BG
         magnet: magnetCompleto,
         magnet_link: magnetCompleto,
         quality,
@@ -431,7 +394,7 @@ export class StreamHandler {
   public clearCache(): void {
     this.cacheService.clear();
     this.catalogProvider.clearTmdbCache();
-    this.seedsCache.clear();
+    this.seedsCheckedAt.clear();
   }
 
   public getStats() {
@@ -441,7 +404,7 @@ export class StreamHandler {
       servedFromCatalog: this.stats.servedFromCatalog,
       servedInformativeStreams: this.stats.servedInformativeStreams,
       duplicatesRemoved: this.stats.duplicatesRemoved,
-      seedsCacheSize: this.seedsCache.size
+      seedsCheckedHashes: this.seedsCheckedAt.size,
     };
   }
 }

@@ -125,26 +125,64 @@ export class AutoMagnetService {
     return dados ? dados.infoHash : null;
   }
 
-  //Grava o torrent no banco, traduzindo o range de temporada em imdbSeason + imdbSeasonEnd
+  //Escolhe a fonte primária de range: htmlTitle > dn= do magnet > title. Pega o primeiro que dá range útil.
+  private escolherRangeSource(htmlTitle: string | undefined, dn: string | null, title: string): string | undefined {
+    const fontes = [htmlTitle, dn, title];
+    for (const fonte of fontes) {
+      if (!fonte) continue;
+      const r = extrairRangeEpisodios(fonte);
+      if (r && (r.seasonStart > 0 || r.episodeStart > 0)) return fonte;
+    }
+    return htmlTitle || dn || title;
+  }
+
+  //Ponto único: recebe o contexto completo e devolve o range que vale. htmlTitle > dn= > title.
+  private calcularRangeDoContexto(
+    htmlTitle: string | undefined,
+    dn: string | null,
+    title: string
+  ): { range: ReturnType<typeof extrairRangeEpisodios>; fonte: string | null } {
+    const source = this.escolherRangeSource(htmlTitle, dn, title);
+    if (!source) return { range: null, fonte: null };
+    return { range: extrairRangeEpisodios(source), fonte: source };
+  }
+
+  //Decide seeds finais: valor novo > 0 vence; senão preserva o que já tá no banco.
+  private resolverSeedsFinais(
+    seedsNovos: number | undefined,
+    seedsExistentes: number | null | undefined,
+    contexto: string
+  ): number {
+    const novo = seedsNovos || 0;
+    if (novo > 0) return novo;
+
+    const preservado = seedsExistentes ?? 0;
+    if (preservado > 0) {
+      logger.debug('SEEDS_PRESERVADOS', { contexto, valor: preservado });
+    }
+    return preservado;
+  }
+
+  //Grava o torrent no banco. Só isso — a decisão de S/E vem pronta do autoAddMagnet.
   private async saveToDatabase(
     magnetData: MagnetData,
     titleMatchResult: TitleMatchResult,
     infoHash?: string,
-    provider?: string,
-    htmlTitle?: string
+    provider?: string
   ): Promise<boolean> {
     try {
-      // Troquei — agora uso o dn= do magnet (nome bruto) pro computeRescrapeAt em vez do title limpo.
       const parsedMagnet = await analisarMagnet(magnetData.magnet);
       const magnetHash = infoHash || parsedMagnet?.infoHash || null;
       if (!magnetHash) throw new Error('Não foi possível extrair infoHash');
 
       const dnMagnet = parsedMagnet?.nome || magnetData.title;
 
-      const existingTorrent = await getTorrent(magnetHash);
+      const existingTorrent: any = await getTorrent(magnetHash);
       if (existingTorrent) {
+        //Scraper manda seeds=0 quando não sabe — não sobrescreve o valor real que já tá no banco.
+        const seedsFinais = this.resolverSeedsFinais(magnetData.seeds, existingTorrent.seeders, 'saveToDatabase');
         await upsertTorrent(magnetHash, {
-          seeders: magnetData.seeds || 0,
+          seeders: seedsFinais,
           lastSeen: new Date()
         });
         return false;
@@ -152,39 +190,20 @@ export class AutoMagnetService {
 
       if (!titleMatchResult.matches) return false;
 
-      const rangeSource = htmlTitle || magnetData.title;
-      const episodeRange = extrairRangeEpisodios(rangeSource);
-
+      // Decision passada pronta pelo autoAddMagnet — não recalcula aqui.
       let imdbSeason: number | null = null;
       let imdbSeasonEnd: number | null = null;
       let imdbEpisodeStart: number | null = null;
       let imdbEpisodeEnd: number | null = null;
 
       if (magnetData.category === 'serie') {
-        // Se o título declara o range, é ele quem manda. Senão cai no valor vindo do request.
-        if (episodeRange && episodeRange.seasonStart > 0) {
-          imdbSeason = episodeRange.seasonStart;
-          imdbSeasonEnd = episodeRange.seasonEnd;
-        } else if (magnetData.imdbSeason !== undefined && magnetData.imdbSeason !== null) {
+        if (magnetData.imdbSeason !== undefined && magnetData.imdbSeason !== null) {
           imdbSeason = magnetData.imdbSeason;
           imdbSeasonEnd = magnetData.imdbSeason;
         }
-
-        if (episodeRange && !(episodeRange.episodeStart === 0 && episodeRange.episodeEnd === 0)) {
-          imdbEpisodeStart = episodeRange.episodeStart;
-          imdbEpisodeEnd = episodeRange.episodeEnd;
-        }
-
-        if (magnetData.imdbSeason && magnetData.imdbEpisode !== undefined) {
-          const rangeMultiplo = imdbEpisodeStart !== null && imdbEpisodeEnd !== null && imdbEpisodeEnd > imdbEpisodeStart;
-
-          if (magnetData.imdbEpisode === null) {
-            imdbEpisodeStart = null;
-            imdbEpisodeEnd = null;
-          } else if (!rangeMultiplo) {
-            imdbEpisodeStart = magnetData.imdbEpisode;
-            imdbEpisodeEnd = magnetData.imdbEpisode;
-          }
+        if (magnetData.imdbEpisode !== undefined && magnetData.imdbEpisode !== null) {
+          imdbEpisodeStart = magnetData.imdbEpisode;
+          imdbEpisodeEnd = magnetData.imdbEpisode;
         }
       }
 
@@ -256,12 +275,17 @@ export class AutoMagnetService {
         return result;
       }
 
-      // Short-circuit por hash — se já tá no banco, só atualiza seeders e sai antes da validação pesada.
-      const hashRapido = infoHash || await this.extrairHashDoMagnet(magnetLink);
+      // Parse único — usado pra hash, dn= e range.
+      const parsedMagnet = await analisarMagnet(magnetLink).catch(() => null);
+      const hashRapido = infoHash || parsedMagnet?.infoHash || null;
+
+      // Short-circuit por hash — se já tá no banco, só atualiza seeders e sai.
       if (hashRapido) {
-        const existente = await getTorrent(hashRapido);
+        const existente: any = await getTorrent(hashRapido);
         if (existente) {
-          await upsertTorrent(hashRapido, { seeders: seeds || 0, lastSeen: new Date() });
+          //Scraper manda seeds=0 quando não sabe — não sobrescreve o valor real que já tá no banco.
+          const seedsFinais = this.resolverSeedsFinais(seeds, existente.seeders, 'short-circuit');
+          await upsertTorrent(hashRapido, { seeders: seedsFinais, lastSeen: new Date() });
           const result: AutoMagnetResult = { success: true, magnetAdded: false, message: 'Já existe no banco' };
           this.validationCache.set(cacheKey, result, this.cacheTTL);
           return result;
@@ -305,23 +329,66 @@ export class AutoMagnetService {
       }
 
       const effectiveTitle = titleForValidation;
+      const category = type === 'series' ? 'serie' : 'filme';
 
-      let torrentSeason = imdbSeason;
-      let torrentEpisode = imdbEpisode;
+      // ── Decisão única de S/E ──────────────────────────────────────
+      // Ordem: range do contexto (htmlTitle > dn= > title) vence tudo.
+      // Se não tem range útil, cai no que o request mandou, depois em fallbacks.
+      let finalSeason: number | undefined = imdbSeason;
+      let finalEpisode: number | null | undefined = imdbEpisode;
+      let fonteDecisao = 'request';
 
       if (type === 'series') {
-        const torrentMetadata = titleFilter.extrairMetadados(effectiveTitle);
+        const { range: rangeDoContexto, fonte: rangeFonte } = this.calcularRangeDoContexto(
+          htmlTitle, parsedMagnet?.nome ?? null, effectiveTitle
+        );
+        const metadata = titleFilter.extrairMetadados(effectiveTitle);
         const multiplos = episodeMatcher.temMultiplosEpisodios(effectiveTitle);
         const ehPack = episodeMatcher.ehPackTemporadaCompleta(effectiveTitle);
 
-        if (torrentSeason === undefined && torrentMetadata.season) torrentSeason = torrentMetadata.season;
-        if (ehPack) torrentEpisode = null;
-        else if (multiplos.temMultiplos) {
-          if (torrentEpisode === undefined && imdbEpisode !== undefined && imdbEpisode !== null) torrentEpisode = imdbEpisode;
-        } else if (torrentEpisode === undefined && torrentMetadata.episode) torrentEpisode = torrentMetadata.episode;
+        // Season: range explícito > request > metadata
+        if (finalSeason === undefined && rangeDoContexto?.seasonStart) {
+          finalSeason = rangeDoContexto.seasonStart;
+          fonteDecisao = 'range_contexto';
+        }
+        if (finalSeason === undefined && metadata.season) {
+          finalSeason = metadata.season;
+          fonteDecisao = 'metadata';
+        }
+
+        // Episode: range explícito > request (número) > request (null=pack) > fallbacks
+        if (rangeDoContexto && rangeDoContexto.episodeStart > 0) {
+          finalEpisode = rangeDoContexto.episodeStart;
+          fonteDecisao = 'range_contexto';
+        } else if (imdbEpisode === null) {
+          finalEpisode = null;
+          fonteDecisao = 'request_null';
+        } else if (finalEpisode === undefined) {
+          if (multiplos.temMultiplos) {
+            fonteDecisao = 'multi_ep_sem_alvo';
+          } else if (metadata.episode) {
+            finalEpisode = metadata.episode;
+            fonteDecisao = 'metadata';
+          } else if (ehPack) {
+            finalEpisode = null;
+            fonteDecisao = 'ehpack';
+          }
+        }
+
+        //Log objetivo da decisão — rastreia de onde veio cada S/E
+        logger.debug('AUTO_MAGNET_DECISAO', {
+          title: effectiveTitle.substring(0, 50),
+          htmlTitle: htmlTitle?.substring(0, 40) || '-',
+          dn: parsedMagnet?.nome?.substring(0, 40) || '-',
+          rangeFonte: rangeFonte?.substring(0, 40) || '-',
+          reqS: imdbSeason ?? '-',
+          reqE: imdbEpisode === null ? 'null' : (imdbEpisode ?? '-'),
+          finalS: finalSeason ?? '-',
+          finalE: finalEpisode === null ? 'null' : (finalEpisode ?? '-'),
+          fonte: fonteDecisao,
+        });
       }
 
-      const category = type === 'series' ? 'serie' : 'filme';
       const language = this.detectLanguage(effectiveTitle);
 
       const allQualities = qualityDetector.extractAllQualities(effectiveTitle);
@@ -339,14 +406,14 @@ export class AutoMagnetService {
         category,
         language,
         addedAt: new Date().toISOString(),
-        imdbSeason: torrentSeason,
-        imdbEpisode: torrentEpisode,
+        imdbSeason: finalSeason,
+        imdbEpisode: finalEpisode,
         imdbTitle: imdbTitles.originalTitle,
         matchedImdbTitle: titleMatchResult.matchedTitle,
         matchedLanguage: titleMatchResult.matchedLanguage
       };
 
-      const saved = await this.saveToDatabase(magnetData, titleMatchResult, hashRapido || undefined, provider, htmlTitle);
+      const saved = await this.saveToDatabase(magnetData, titleMatchResult, hashRapido || undefined, provider);
 
       if (!saved) {
         const result: AutoMagnetResult = { success: false, magnetAdded: false, message: 'Já existe no banco' };
@@ -360,8 +427,8 @@ export class AutoMagnetService {
         magnetData,
         validation: {
           titleMatches: true,
-          seasonMatches: torrentSeason !== undefined,
-          episodeMatches: torrentEpisode !== undefined && torrentEpisode !== null,
+          seasonMatches: finalSeason !== undefined,
+          episodeMatches: finalEpisode !== undefined && finalEpisode !== null,
           matchedTitle: magnetData.matchedImdbTitle,
           matchedLanguage: magnetData.matchedLanguage,
           reason: 'Título validado'

@@ -233,16 +233,21 @@ export async function extractMagnetsFromPost(
 
   const metadata = extractHdrMetadata($);
 
-  // FIX H6: detecta seções ::VERSÃO DUAL ÁUDIO:: / ::VERSÃO LEGENDADA:: por posição no HTML.
+  // FIX H6 + R19: detecta seções ::VERSÃO DUAL ÁUDIO:: / ::VERSÃO LEGENDADA:: / ::DUBLADO:: por posição no HTML.
   // Sem isso o filtro de idioma dependia só do texto do parentText — funcionava por sorte.
   const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
   $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
     const texto = $(el).text().trim();
     if (!texto) return;
-    if (!/vers[ãa]o\s+(dual|legendad)/i.test(texto)) return;
+    // R19: ::DUBLADO:: e ::VERSÃO DUAL ÁUDIO:: contam como DUAL; ::VERSÃO LEGENDADA:: como LEGENDADO.
+    const ehVersao = /vers[ãa]o\s+(dual|legendad)/i.test(texto);
+    const ehDubladoHeader = /::\s*dublado\s*::/i.test(texto);
+    const ehLegendadoHeader = /::\s*legendad/i.test(texto);
+    if (!ehVersao && !ehDubladoHeader && !ehLegendadoHeader) return;
     const pos = html.indexOf($(el).toString());
     if (pos === -1) return;
-    sectionHeaders.push({ pos, type: /legendad/i.test(texto) ? 'LEGENDADO' : 'DUAL' });
+    const tipo = (ehVersao && /legendad/i.test(texto)) || ehLegendadoHeader ? 'LEGENDADO' : 'DUAL';
+    sectionHeaders.push({ pos, type: tipo });
   });
   sectionHeaders.sort((a, b) => a.pos - b.pos);
 
@@ -360,8 +365,8 @@ export async function extractMagnetsFromPost(
 
       const seasonLabel = range && range.seasonStart > 0
         ? (range.seasonStart === range.seasonEnd
-            ? `${range.seasonStart}ª Temporada`
-            : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
+          ? `${range.seasonStart}ª Temporada`
+          : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
         : '';
 
       const magnetTitle = seasonLabel

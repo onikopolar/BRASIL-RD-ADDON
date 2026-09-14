@@ -31,7 +31,7 @@ const episodeTitlesCache = new Map<string, Array<{ episodeNumber: number; namePt
 
 // Cache de torrents em processamento (evita re-chamadas ao Torbox)
 const pendingTorrentCache = new Map<string, { timestamp: number; status: string; torrentId?: string }>();
-const PENDING_TTL_MS = 5 * 60 * 1000; // 5 minutos
+const PENDING_TTL_MS = 5 * 60 * 1000;
 
 // TTL do cache em banco (7 dias)
 const DB_TITLE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -61,7 +61,6 @@ function createStreamFromStaticResponse(
     };
 }
 
-// NOVO helper central para criação de stream de status baseado no resultado do Torbox
 function createStatusStreamForTorboxResult(
     baseUrl: string,
     tbResult: { success: boolean; status: string; message?: string; streamLink?: string },
@@ -76,7 +75,6 @@ function createStatusStreamForTorboxResult(
     if (tbResult.success) {
         const readyStatuses = ['ready', 'completed', 'cached', 'uploading', 'seeding'];
         if (readyStatuses.some(s => (tbResult.status || '').toLowerCase().includes(s)) && tbResult.streamLink) {
-            // Se já tem streamLink, não deve chamar esse helper; mas mantemos por segurança
             return null;
         }
 
@@ -109,9 +107,15 @@ function createStatusStreamForTorboxResult(
     return stream;
 }
 
-async function extrairInfoHashDoMagnet(magnet: string): Promise<string | null> {
-    const dados = await analisarMagnet(magnet);
-    return dados ? dados.infoHash : null;
+// Atualiza seeders no banco — /stream/ vai ler daqui sem bater no Torbox.
+async function gravarSeeders(infoHash: string, seeds: number | undefined): Promise<void> {
+    if (seeds === undefined || seeds === null) return;
+    try {
+        await Torrent.update({ seeders: seeds }, { where: { infoHash: infoHash.toLowerCase() } });
+        resolveLogger.debug('SEEDERS_GRAVADOS', { infoHash: infoHash.substring(0, 16), seeds });
+    } catch {
+        // silencioso
+    }
 }
 
 async function getEnrichedTitlesForHash(
@@ -149,7 +153,7 @@ async function getEnrichedTitlesForHash(
             resolveLogger.info('🎯 imdbId recebido da URL de resolução', { infoHash, imdbId, season });
         }
 
-        const seasonKey = season ?? 0; // 0 para filmes
+        const seasonKey = season ?? 0;
 
         const cachedTitle = await ImdbTitleCache.findOne({
             where: { imdbId, season: seasonKey },
@@ -168,7 +172,7 @@ async function getEnrichedTitlesForHash(
                 const allTitles = [...titlesPtArr, ...titlesEnArr];
                 const enriched = year ? allTitles.map(t => `${t} ${year}`) : allTitles;
                 titlesCache.set(infoHash, enriched);
-                const episodeTitlesCached = cachedTitle.episodeTitles; // já é array/objeto
+                const episodeTitlesCached = cachedTitle.episodeTitles;
                 episodeTitlesCache.set(infoHash, episodeTitlesCached);
                 resolveLogger.info('🗄️ TÍTULOS DO BANCO (cache DB)', {
                     infoHash,
@@ -213,7 +217,7 @@ async function getEnrichedTitlesForHash(
             titlesPt: titles,
             titlesEn: titles,
             year: year ?? null,
-            episodeTitles: episodeTitles, // já JSONB
+            episodeTitles: episodeTitles,
             updatedAt: new Date()
         });
         episodeTitlesCache.set(infoHash, episodeTitles);
@@ -235,7 +239,6 @@ async function getEnrichedTitlesForHash(
     }
 }
 
-// ── Processa magnet usando TorboxService.processTorrent (cache/existente/fila) ──
 async function processMagnetWithTorbox(
     magnet: string, apiKey: string, infoHash: string,
     season?: number, episode?: number, type: string = 'movie', quality?: string,
@@ -245,7 +248,6 @@ async function processMagnetWithTorbox(
     try {
         const hashKey = infoHash.toLowerCase();
 
-        // 1. Cache de processamento recente (evita repetições)
         const pending = pendingTorrentCache.get(hashKey);
         if (pending && Date.now() - pending.timestamp < PENDING_TTL_MS) {
             resolveLogger.info('⏳ Torrent em processamento recente (cache local)', {
@@ -261,12 +263,10 @@ async function processMagnetWithTorbox(
             };
         }
 
-        // Registra os títulos no TorboxService para fallback do nome do magnet
         if (titles && titles.length > 0) {
             torboxService.setTitlesForHash(infoHash, titles);
         }
 
-        // 2. Usa o fluxo completo do TorboxService
         const resultado = await torboxService.processTorrent(magnet, apiKey);
 
         if (!resultado.added) {
@@ -296,8 +296,11 @@ async function processMagnetWithTorbox(
             };
         }
 
-        // 3. Se pronto, obtém o stream link
         const info = await torboxService.getTorrentInfo(torrentId, apiKey);
+
+        // Grava seeders reais no banco — /stream/ consulta direto, sem chamar Torbox.
+        void gravarSeeders(infoHash, info.seeds);
+
         let streamLink: string | undefined;
 
         if (titles && titles.length > 0) {
@@ -386,7 +389,6 @@ export const setupResolveRoutes = (app: any) => {
             return res.redirect(302, cachedDirectLink);
         }
 
-        // CORREÇÃO: dedupKey inclui season/episode
         const dedupKey = `${apiKey.substring(0, 8)}:${infoHash}:${season || 'all'}:${episode || 'all'}`;
         let promiseEmVoo = emVoo.get(dedupKey);
         if (!promiseEmVoo) {
@@ -401,7 +403,6 @@ export const setupResolveRoutes = (app: any) => {
                         throw new Error('Parâmetros inválidos');
                     }
 
-                    // Usa o magnet completo da URL, se disponível; senão reconstrói com o infoHash
                     const magnetLink = magnetFromUrl || `magnet:?xt=urn:btih:${infoHash.toLowerCase()}`;
 
                     const enrichedTitles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
@@ -463,7 +464,6 @@ export const setupResolveRoutes = (app: any) => {
         return sendStatusVideo(res, resolveLogger, req._ultraDebugId, streamResponse.url);
     });
 
-    // Rota original (magnet em base64)
     app.get('/resolve/:magnet', async (req: any, res: any) => {
         const apiKey = req.query.apiKey as string;
         const season = req.query.season ? parseInt(req.query.season as string) : undefined;
@@ -481,7 +481,7 @@ export const setupResolveRoutes = (app: any) => {
             const magnet = Buffer.from(req.params.magnet, 'base64').toString();
             if (!apiKey) throw new Error('API key obrigatória');
 
-            const magnetHash = await extrairInfoHashDoMagnet(magnet);
+            const magnetHash = (await analisarMagnet(magnet))?.infoHash;
             if (!magnetHash) throw new Error('Magnet inválido');
 
             const enrichedTitles = await getEnrichedTitlesForHash(magnetHash, imdbId, season);
@@ -517,7 +517,7 @@ export const setupResolveRoutes = (app: any) => {
             const apiKey = req.query.apiKey as string;
             if (!apiKey) return res.status(400).json({ success: false, error: 'API key obrigatória' });
 
-            const magnetHash = await extrairInfoHashDoMagnet(magnet);
+            const magnetHash = (await analisarMagnet(magnet))?.infoHash;
             if (!magnetHash) return res.status(400).json({ success: false, error: 'Magnet inválido' });
 
             const existing = await torboxService.findExistingTorrent(magnetHash, apiKey);
