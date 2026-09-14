@@ -20,16 +20,51 @@ jobs:
         with:
           node-version: 22
 
+      - name: Verificar se versão mudou
+        id: check
+        run: |
+          # Pega a versão do package.json
+          CURRENT=$(node -p "require('./package.json').version")
+          echo "Versão no package.json: $CURRENT"
+
+          # Pega a maior tag existente
+          LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -1 | sed 's/^v//')
+          echo "Maior tag existente: v${LATEST_TAG:-nenhuma}"
+
+          # Se não tem tag, primeira release
+          if [ -z "$LATEST_TAG" ]; then
+            echo "Primeira release — prosseguindo"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "version=$CURRENT" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          # Compara versões: só prossegue se package.json for maior que a maior tag
+          MAIOR=$(printf "%s\n%s" "$CURRENT" "$LATEST_TAG" | sort -V | tail -1)
+
+          if [ "$MAIOR" = "$CURRENT" ] && [ "$CURRENT" != "$LATEST_TAG" ]; then
+            echo "package.json ($CURRENT) > última tag ($LATEST_TAG) — prosseguindo"
+            echo "should_release=true" >> $GITHUB_OUTPUT
+            echo "version=$CURRENT" >> $GITHUB_OUTPUT
+          else
+            echo "package.json ($CURRENT) <= última tag ($LATEST_TAG) — pulando release"
+            echo "should_release=false" >> $GITHUB_OUTPUT
+          fi
+
       - name: Build
+        if: steps.check.outputs.should_release == 'true'
         run: npm install --ignore-scripts && node build.js
 
       - name: Instalar zip
+        if: steps.check.outputs.should_release == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zip
 
       - name: Zip
+        if: steps.check.outputs.should_release == 'true'
         run: zip -r dist.zip dist/
 
       - name: Changelog
+        if: steps.check.outputs.should_release == 'true'
         run: |
           LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
           if [ -z "$LAST_TAG" ]; then
@@ -40,57 +75,23 @@ jobs:
             git log ${LAST_TAG}..HEAD --pretty=format:"- %s" >> CHANGELOG.md
           fi
 
-      - name: Bump e tag
+      - name: Tag
+        if: steps.check.outputs.should_release == 'true'
         run: |
           git config user.name "github-actions"
           git config user.email "actions@github.com"
 
-          # Pega a versao atual do package.json
-          CURRENT=$(node -p "require('./package.json').version")
-          echo "Versao atual no package.json: $CURRENT"
+          NEW="${{ steps.check.outputs.version }}"
+          echo "Criando tag v$NEW"
 
-          # Encontra a MAIOR tag existente (nao apenas a do CURRENT)
-          LATEST_TAG=$(git tag -l "v*" --sort=-v:refname | head -1 | sed 's/^v//')
-          echo "Maior tag existente: v${LATEST_TAG:-nenhuma}"
-
-          # Decide a nova versao: max(package.json, latest_tag) + 1 patch
-          if [ -n "$LATEST_TAG" ]; then
-            # Usa o maior entre CURRENT e LATEST_TAG
-            if printf "%s\n%s" "$CURRENT" "$LATEST_TAG" | sort -V | tail -1 | grep -q "$LATEST_TAG"; then
-              BASE="$LATEST_TAG"
-            else
-              BASE="$CURRENT"
-            fi
-          else
-            BASE="$CURRENT"
-          fi
-
-          IFS='.' read -r MAJ MIN PAT <<< "$BASE"
-          NEW="$MAJ.$MIN.$((PAT + 1))"
-          echo "Nova versao: $NEW"
-
-          # Atualiza package.json com a nova versao
-          node -e "
-            const pkg = require('./package.json');
-            pkg.version = '$NEW';
-            require('fs').writeFileSync('./package.json', JSON.stringify(pkg, null, 2) + '\n');
-          "
-
-          # Commit e push da atualizacao do package.json
-          git add package.json
-          git commit -m "chore: bump version to $NEW [skip ci]" || echo "Sem mudancas no package.json"
-          git push origin master
-
-          # Cria a tag
           git tag "v$NEW"
           git push origin "v$NEW"
 
-          echo "VERSION=$NEW" >> $GITHUB_ENV
-
       - name: Release
+        if: steps.check.outputs.should_release == 'true'
         run: |
-          gh release create "v$VERSION" dist.zip \
-            --title "v$VERSION" \
+          gh release create "v${{ steps.check.outputs.version }}" dist.zip \
+            --title "v${{ steps.check.outputs.version }}" \
             --notes-file CHANGELOG.md
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
