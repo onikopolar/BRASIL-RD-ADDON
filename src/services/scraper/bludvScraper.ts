@@ -18,10 +18,8 @@ const LEGENDADO_REGEX = new RegExp(
 
 const logger = new Logger('BludvScraper');
 
-// Força Google/Cloudflare no lookup — o DNS do site é instável em alguns ambientes.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-// Agent HTTPS que resolve o domínio manualmente e conecta no IP com SNI correto.
 class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
     const hostname = options.hostname || options.host || '';
@@ -62,9 +60,12 @@ const AXIOS_OPTS = {
 
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
 
-export type SectionBoundaries = {
-  dualPos: number;
-  legendadoPos: number;
+// Seção contígua do HTML — [start, end). Cada header abre uma seção que vai
+// até o próximo header (ou até o fim do conteúdo).
+export type Section = {
+  type: SectionType;
+  start: number;
+  end: number;
 };
 
 export type LinkContext = {
@@ -90,12 +91,10 @@ export type PostMetadata = {
 
 export { BASE_URL, PROVIDER, AXIOS_OPTS };
 
-// FIX 7/7b: zero-pad em números de episódio ("Episódio 1" → "Episódio 01") e plural em ranges.
 function pad2(n: number): string {
   return String(n).padStart(2, '0');
 }
 
-// Remove magnets duplicados mantendo a ordem de entrada.
 function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
   const vistos = new Set<string>();
   return magnets.filter(m => {
@@ -172,7 +171,6 @@ export class BludvScraper {
     const res = await axios.get(searchUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
-    // Quando a busca não acha nada, o WordPress marca o body com search-no-results e enche com posts recentes.
     if ($('body').hasClass('search-no-results')) {
       logger.debug('[BLUDV] busca sem resultados (search-no-results)');
       return [];
@@ -184,7 +182,6 @@ export class BludvScraper {
     $('a[href]').each((_, el) => {
       const href = ($(el).attr('href') || '').trim();
 
-      // Links com capa têm text() vazio — o título real está no alt/title da <img>.
       const text = ($(el).text() || '').trim()
         || ($(el).find('img').attr('alt') || '').trim()
         || ($(el).find('img').attr('title') || '').trim();
@@ -218,7 +215,6 @@ export class BludvScraper {
 
     if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
 
-    // Checa se o alvo cabe no range declarado pelo título.
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(item.title);
       if (!temporadaAlvoNoRange(range, targetSeason)) return false;
@@ -263,7 +259,6 @@ export class BludvScraper {
       }
     }
 
-    // Checa se o alvo cabe no range declarado no título do post.
     if (targetSeason !== undefined) {
       const range = extrairRangeEpisodios(postTitle);
       if (!temporadaAlvoNoRange(range, targetSeason)) return [];
@@ -271,25 +266,34 @@ export class BludvScraper {
 
     const metadata = this.extractPostMetadata($);
 
-    // Acha os cabeçalhos de seção (DUAL / LEGENDADO) uma vez só e usa pra filtrar tudo.
-    const boundaries = this.findSectionBoundaries($, contentHtml);
-    logger.debug(`[BLUDV] boundaries: dualPos=${boundaries.dualPos}, legendadoPos=${boundaries.legendadoPos}`);
+    // Monta as seções contíguas a partir dos headers. Cada header abre uma seção
+    // [start, end) que vai até o próximo header (ou até o fim do conteúdo).
+    const sections = this.findSections($, contentHtml);
 
-    // Se o post só tem seção LEGENDADO (sem DUAL), ignora — não queremos legendado.
-    if (boundaries.dualPos === -1 && boundaries.legendadoPos !== -1) {
-      logger.debug('[BLUDV] post apenas legendado — descartado');
+    // Log objetivo: só o nome de cada seção e o range.
+    logger.debug(
+      `[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`
+    );
+
+    // Se só existem seções LEGENDADO (nenhuma DUAL), descarta o post inteiro.
+    const temDual = sections.some(s => s.type === 'DUAL');
+    if (!temDual) {
+      logger.debug('[BLUDV] post sem nenhuma seção DUAL — descartado');
       return [];
     }
 
-    const directMagnets = this.extractDirectMagnets($, contentHtml, boundaries);
-    logger.debug(`[BLUDV] magnets diretos na seção válida: ${directMagnets.length}`);
+    const directMagnets = this.extractDirectMagnets($, contentHtml, sections);
+    const protectorLinks = this.extractProtectorLinks($, contentHtml, sections);
 
-    const protectorLinks = this.extractProtectorLinks($, contentHtml, boundaries);
-    logger.debug(`[BLUDV] protector links na seção válida: ${protectorLinks.length}`);
+    // Contagem por seção de origem — visibilidade de onde cada magnet caiu.
+    const dirDual = directMagnets.filter(m => m.secao === 'DUAL').length;
+    const proDual = protectorLinks.filter(l => l.secao === 'DUAL').length;
+    logger.debug(
+      `[BLUDV] magnets | diretos DUAL=${dirDual} | protetores DUAL=${proDual}`
+    );
 
     const protectorMagnets = await this.resolverMagnetsDoProtetor(protectorLinks);
 
-    // Junta tudo e dedup por URL do magnet.
     const allMagnets = dedupByMagnet([...directMagnets, ...protectorMagnets]);
 
     if (allMagnets.length === 0) return [];
@@ -325,20 +329,16 @@ export class BludvScraper {
       const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
       const displayTitle = originalTitleFinal || canonicalName || postTitle;
 
-      // Magnet sem dn= deixava canonicalName vazio e a stream caía no title genérico do post.
       const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
         originalTitleFinal || postTitle,
         metadata.years,
         quality
       );
 
-      if (!canonicalName) {
-        logger.debug(`[BLUDV] canonicalName sintetizado | post="${postTitle.substring(0, 40)}" | canon="${canonicalFinal}"`);
-      }
+      logger.debug(
+        `[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade} | secao=${secao}`
+      );
 
-      logger.debug(`[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
-
-      // FIX 8: fallback de tamanho pelo fullContextText quando o metadata não tem size.
       const size = metadata.size
         || this.extrairTamanhoDoContexto(link.fullContextText)
         || this.extrairTamanhoDoContexto(link.parentText)
@@ -352,7 +352,6 @@ export class BludvScraper {
         title: this.cleanTitle(displayTitle),
         htmlTitle: cleanedHtmlTitle || undefined,
         magnet,
-        // FIX 12: seeders reais vêm via Torbox depois; aqui fica 0 honesto.
         seeders: 0,
         leechers: 0,
         size,
@@ -377,14 +376,12 @@ export class BludvScraper {
     return results;
   }
 
-  // FIX 8: extrai o primeiro "X.YZ GB/MB/KB" de um texto — usado como fallback de tamanho.
   private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
     if (!texto) return undefined;
     const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
     return m ? m[0] : undefined;
   }
 
-  // Monta nome descritivo quando o magnet não traz dn= próprio, tipo "Ice Age 2002-2012 1080p".
   private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
     const anos = years && years.length > 0
       ? (years.length === 1
@@ -395,11 +392,12 @@ export class BludvScraper {
     return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
-  // Percorre os <strong>/<b> dentro do conteúdo e acha as posições dos cabeçalhos DUAL e LEGENDADO.
-  findSectionBoundaries($: any, contentHtml: string): SectionBoundaries {
+  // Monta seções contíguas do HTML a partir dos headers DUAL/LEGENDADO.
+  // Cada header abre uma seção [start, end) que vai até o próximo header (ou fim).
+  // Conteúdo antes do primeiro header vira uma seção NONE.
+  findSections($: any, contentHtml: string): Section[] {
     const strongEls = $('.content strong, .content b').toArray();
-    let dualPos = -1;
-    let legendadoPos = -1;
+    const headers: { pos: number; type: 'DUAL' | 'LEGENDADO' }[] = [];
 
     for (const el of strongEls) {
       const texto = $(el).text().trim();
@@ -411,18 +409,42 @@ export class BludvScraper {
       const pos = contentHtml.indexOf($(el).toString());
       if (pos === -1) continue;
 
-      if (tipo === 'DUAL' && dualPos === -1) {
-        dualPos = pos;
-      } else if (tipo === 'LEGENDADO' && dualPos !== -1 && pos > dualPos && legendadoPos === -1) {
-        legendadoPos = pos;
-        break;
-      }
+      headers.push({ pos, type: tipo });
     }
 
-    return { dualPos, legendadoPos };
+    headers.sort((a, b) => a.pos - b.pos);
+
+    const contentLength = contentHtml.length;
+    const sections: Section[] = [];
+
+    if (headers.length === 0) {
+      // Sem headers, todo o conteúdo é NONE.
+      return [{ type: 'NONE', start: 0, end: contentLength }];
+    }
+
+    // Conteúdo antes do primeiro header vira seção NONE.
+    if (headers[0].pos > 0) {
+      sections.push({ type: 'NONE', start: 0, end: headers[0].pos });
+    }
+
+    for (let i = 0; i < headers.length; i++) {
+      const start = headers[i].pos;
+      const end = i + 1 < headers.length ? headers[i + 1].pos : contentLength;
+      sections.push({ type: headers[i].type, start, end });
+    }
+
+    return sections;
   }
 
-  // Classifica um <strong>/<b> como cabeçalho de seção — rejeita trailers, CTAs e textos longos.
+  // Devolve a seção que contém a posição. Retorna null se a posição cai fora
+  // de todas as seções (não deveria acontecer, mas é defensivo).
+  findSectionForPosition(pos: number, sections: Section[]): Section | null {
+    for (const s of sections) {
+      if (pos >= s.start && pos < s.end) return s;
+    }
+    return null;
+  }
+
   detectSectionType(text: string): SectionType {
     const t = normalizarTexto(text).trim();
 
@@ -439,35 +461,40 @@ export class BludvScraper {
     return 'NONE';
   }
 
-  // Dado o offset de um elemento no HTML, diz em qual seção ele cai.
-  getSectionForPosition(pos: number, boundaries: SectionBoundaries): SectionType {
-    const { dualPos, legendadoPos } = boundaries;
-
-    if (dualPos === -1 && legendadoPos === -1) return 'NONE';
-    if (dualPos === -1) return 'LEGENDADO';
-    if (pos < dualPos) return 'NONE';
-    if (legendadoPos !== -1 && pos >= legendadoPos) return 'LEGENDADO';
-
-    return 'DUAL';
-  }
-
-  // Extrai magnets diretos do HTML, filtrando por seção — estrutura típica <center><span>... (GB)</span><a href="magnet:...">.
-  extractDirectMagnets($: any, contentHtml: string, boundaries: SectionBoundaries): ExtractedMagnet[] {
+  // Extrai magnets diretos. Cada magnet é classificado pela sua PRÓPRIA posição
+  // no HTML, não pela posição do container — evita que o <center> externo
+  // (que envolve múltiplas seções) contamine a classificação.
+  extractDirectMagnets($: any, contentHtml: string, sections: Section[]): ExtractedMagnet[] {
     const resultados: ExtractedMagnet[] = [];
+    const stats: Record<SectionType, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
 
+    // Pré-calcula a posição de cada <center> para reaproveitar no spanText.
+    const centerSpanCache = new Map<any, string>();
     for (const centerEl of $('center').toArray()) {
-      const magnetLink = $(centerEl).find('a[href^="magnet:"]').first();
-      if (!magnetLink.length) continue;
+      centerSpanCache.set(centerEl, $(centerEl).find('span').first().text().trim());
+    }
 
-      const magnet = magnetLink.attr('href')?.trim();
+    // Itera todos os <a href="magnet:"> dentro do conteúdo.
+    const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
+
+    for (const el of allMagnetAnchors) {
+      const magnet = $(el).attr('href')?.trim();
       if (!magnet) continue;
 
-      const pos = contentHtml.indexOf($(centerEl).toString());
-      const secao = this.getSectionForPosition(pos, boundaries);
-      if (secao === 'LEGENDADO') continue;
+      const pos = contentHtml.indexOf($(el).toString());
+      if (pos === -1) continue;
 
-      const spanText = $(centerEl).find('span').first().text().trim();
-      const ctx = this.buildLinkContext($, magnetLink[0]);
+      const section = this.findSectionForPosition(pos, sections);
+      const secao: SectionType = section?.type ?? 'NONE';
+      stats[secao]++;
+
+      if (secao !== 'DUAL') continue;
+
+      // Monta contexto. Se o <a> tem um <center> ancestral, usa o span dele.
+      const $el = $(el);
+      const closestCenter = $el.closest('center').get(0);
+      const spanText = closestCenter ? (centerSpanCache.get(closestCenter) ?? '') : '';
+      const ctx = this.buildLinkContext($, el);
 
       resultados.push({
         magnet,
@@ -480,29 +507,15 @@ export class BludvScraper {
       });
     }
 
-    // Fallback: se a estrutura <center> mudou, varre todos os magnets diretos.
-    if (resultados.length === 0) {
-      for (const el of $('a[href^="magnet:"]').toArray() as any[]) {
-        const magnet = $(el).attr('href')?.trim();
-        if (!magnet) continue;
-
-        const pos = contentHtml.indexOf($(el).toString());
-        const secao = this.getSectionForPosition(pos, boundaries);
-        if (secao === 'LEGENDADO') continue;
-
-        resultados.push({
-          magnet,
-          link: this.buildLinkContext($, el),
-          secao,
-        });
-      }
-    }
+    // Log interno (uma linha) — quantos magnets de cada tipo foram vistos.
+    logger.debug(
+      `[BLUDV] magnets por seção | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`
+    );
 
     return resultados;
   }
 
-  // Extrai links de protetor (systemads1.com), filtrando por seção.
-  extractProtectorLinks($: any, contentHtml: string, boundaries: SectionBoundaries): ProtectorLink[] {
+  extractProtectorLinks($: any, contentHtml: string, sections: Section[]): ProtectorLink[] {
     const allLinks = $('a[href*="systemads1.com"]').toArray();
     if (!allLinks.length) return [];
 
@@ -511,8 +524,9 @@ export class BludvScraper {
       const pos = contentHtml.indexOf($(el).toString());
       if (pos === -1) continue;
 
-      const secao = this.getSectionForPosition(pos, boundaries);
-      if (secao === 'LEGENDADO') continue;
+      const section = this.findSectionForPosition(pos, sections);
+      const secao: SectionType = section?.type ?? 'NONE';
+      if (secao !== 'DUAL') continue;
 
       result.push({
         url: $(el).attr('href') as string,
@@ -523,7 +537,6 @@ export class BludvScraper {
     return result;
   }
 
-  // Resolve os links do protetor em lotes, devolvendo os magnets prontos.
   async resolverMagnetsDoProtetor(links: ProtectorLink[]): Promise<ExtractedMagnet[]> {
     const resultado: ExtractedMagnet[] = [];
     for (let i = 0; i < links.length; i += this.BATCH_SIZE) {
@@ -550,7 +563,6 @@ export class BludvScraper {
     return resultado;
   }
 
-  // Decide o idioma final do stream: seção tem prioridade sobre o metadata.
   resolverIdioma(secao: SectionType, metaLanguage?: string): string {
     if (secao === 'DUAL') return 'Dual';
     if (secao === 'LEGENDADO') return 'Legendado';
@@ -566,7 +578,6 @@ export class BludvScraper {
     return metaLanguage;
   }
 
-  // Ordem de prioridade da qualidade: específico do magnet vence genérico do post.
   private resolverQualidadeComFonte(
     canonicalName: string | undefined,
     link: LinkContext,
@@ -606,7 +617,6 @@ export class BludvScraper {
     return { qualidade: 'HD', fonte: 'fallback' };
   }
 
-  // Wrapper mantido pra compatibilidade — só devolve a qualidade sem a fonte.
   resolverQualidade(
     canonicalName: string | undefined,
     link: LinkContext,
@@ -638,7 +648,6 @@ export class BludvScraper {
     return {};
   }
 
-  // FIX 7 + 7b: zero-pad no número e plural quando é range.
   formatarRange(range: { episodeStart: number; episodeEnd: number } | null | undefined): { episode: number; episodeRangeText: string } | null {
     if (!range || range.episodeStart <= 0) return null;
     const texto = range.episodeEnd > range.episodeStart
@@ -680,8 +689,6 @@ export class BludvScraper {
       .trim() || null;
   }
 
-  // FIX 8b: aceita labels em <em> (moderno) e <b> (pré-2018).
-  // FIX size: metadata.size só vale se tiver UM tamanho só — múltiplos indicam que o valor é do post inteiro.
   extractPostMetadata($: any): PostMetadata {
     const getMetaValue = (fieldName: string): string | undefined => {
       const target = fieldName.toLowerCase().replace(/:$/, '').trim();
@@ -694,7 +701,6 @@ export class BludvScraper {
 
       const $label = $(label);
 
-      // Caso 1: <span><em>Label:</em> Valor</span> — formato moderno.
       const parentSpan = $label.closest('span');
       if (parentSpan.length) {
         const fullText = parentSpan.text().trim();
@@ -706,7 +712,6 @@ export class BludvScraper {
         }
       }
 
-      // Caso 2: <p><b>Label:</b> Valor<br>... — formato antigo.
       const $parent = $label.parent();
       const parentHtml = $parent.html() || '';
       const labelHtml = $label.toString();
@@ -735,7 +740,6 @@ export class BludvScraper {
       years = yearRaw.match(/\b(19|20)\d{2}\b/g)?.map(y => parseInt(y)) || [];
     }
 
-    // Posts com múltiplas versões declaram vários tamanhos no metadata — nesse caso o valor é genérico e não serve.
     const sizeRaw = getMetaValue('Tamanho:');
     let size: string | undefined;
     if (sizeRaw) {
@@ -773,7 +777,6 @@ export class BludvScraper {
     }
   }
 
-  // Sobe pelos ancestrais buscando o primeiro nó com só UMA menção de qualidade.
   getFullContextText($el: any): string {
     const prevSpan = $el.parent().prev('span');
     if (prevSpan.length) {
@@ -821,8 +824,6 @@ export class BludvScraper {
   cleanTitle(title: string): string {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
-
-  // FIX 12: estimateSeeders removido — seeders reais vêm via Torbox depois.
 
   parseSize(sizeStr: string): number {
     if (!sizeStr || sizeStr === 'Desconhecido' || sizeStr === '–') return 0;

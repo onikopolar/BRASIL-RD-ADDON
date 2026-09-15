@@ -17,23 +17,15 @@ const LEGENDADO_REGEX = new RegExp(
   'i'
 );
 
-// Cabeçalho de seção precisa do particípio ("legendado"/"legendada"), não do substantivo
-// ("legenda"). O substantivo aparece em rótulos tipo "Legenda: PT-BR" e links pro opensubtitles.
 const LEGENDADO_CABECALHO_REGEX = /\blegendad[ao]s?\b/i;
-
-// Irmão anterior só conta como marcador de qualidade se for qualidade pura
-// "720p" casa, "A Era do Gelo 1-4 720p/1080p" não casa
 const QUALIDADE_PURA_REGEX = /^\s*(?:qualidade:?\s*)?(\d{3,4}p|4k|uhd|full\s*hd)\s*$/i;
 
 const logger = new Logger('WordPressScraper');
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
-// Mexi aqui porque a API do WP retorna entidades HTML cruas (&#8211;, &amp;, &nbsp;) no title.rendered
-// Sem decodificar, títulos com endash apareciam como "A Era do Gelo 2 &#8211; (2005)" no stream final
 function decodeHtmlEntities(texto: string): string {
   if (!texto || (!texto.includes('&') && !texto.includes('&#'))) return texto;
-
   return texto
     .replace(/&#(\d+);/g, (_m, cod) => String.fromCharCode(parseInt(cod, 10)))
     .replace(/&#x([0-9a-f]+);/gi, (_m, cod) => String.fromCharCode(parseInt(cod, 16)))
@@ -63,7 +55,6 @@ class DnsAgent extends https.Agent {
 }
 
 const dnsAgent = new DnsAgent({ keepAlive: true });
-
 export const agenteHttps = dnsAgent;
 
 export function criarLookup() {
@@ -111,7 +102,15 @@ export type InfoBlock = {
   years?: number[];
   size?: string;
 };
-export type SectionBoundaries = { dualIndex: number | null; legendadoIndex: number | null };
+
+// Seção é um intervalo [start, end) dentro do HTML, delimitado por cabeçalhos.
+// Não assume ordem entre DUAL e LEGENDADO.
+export type Secao = {
+  tipo: 'DUAL' | 'LEGENDADO';
+  start: number;
+  end: number;
+};
+
 export type IdiomaFlags = {
   temNacional: boolean;
   temDual: boolean;
@@ -120,9 +119,9 @@ export type IdiomaFlags = {
   temLegendado: boolean;
   temLegendaSubstantivo: boolean;
 };
+
 export type TamanhoNumerico = { valor: number; unidade: 'GB' | 'MB' | 'KB' };
 
-// Contexto local de um link de magnet, extraído no momento em que o elemento está na mão
 export type ContextoLocalMagnet = {
   altDaImg: string | null;
   textoIrmaoAnterior: string | null;
@@ -133,7 +132,7 @@ export class WordPressScraper {
   public readonly magnetCache: CacheService;
   public readonly POST_BATCH_SIZE = 3;
   public readonly PROTECTOR_BATCH_SIZE = 5;
-  public readonly MAGNET_CACHE_TTL = 30 * 60 * 1000; // 30min
+  public readonly MAGNET_CACHE_TTL = 30 * 60 * 1000;
 
   constructor() {
     this.qualityDetector = new QualityDetector();
@@ -193,7 +192,6 @@ export class WordPressScraper {
     for (const post of posts) {
       if (!post.id || !post.title?.rendered || !post.link) continue;
 
-      // Mexi aqui porque title.rendered vem com entidades HTML cruas da API do WP
       const titleBruto = post.title.rendered as string;
       const titleLimpo = decodeHtmlEntities(titleBruto);
 
@@ -309,8 +307,6 @@ export class WordPressScraper {
     return true;
   }
 
-  // Classifica texto em flags de idioma. Separa "legendado/legendada" (particípio, cabeçalho)
-  // de "legenda" (substantivo, rótulo de metadado ou link de site externo).
   classificarTextoIdioma(texto: string): IdiomaFlags {
     const t = normalizarTexto(texto);
     return {
@@ -370,13 +366,8 @@ export class WordPressScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
-  // Extrai o contexto local do link do magnet no momento em que ele está na mão.
-  // Duas fontes específicas do Comando Torrents:
-  //   - alt da <img> dentro do <a> (Zodíaco)
-  //   - texto do irmão anterior quando é qualidade pura, tipo <p><strong>720p</strong></p> (Ice Age)
   private extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
     const $el = $(el);
-
     const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
 
     let textoIrmaoAnterior: string | null = null;
@@ -391,9 +382,6 @@ export class WordPressScraper {
     return { altDaImg, textoIrmaoAnterior };
   }
 
-  // Resolve a qualidade específica DESTE magnet, olhando em ordem do mais específico ao mais genérico.
-  // Mexi aqui porque o WP Comando guarda qualidade em lugares diferentes por post:
-  // Zodíaco guarda no alt da img, Ice Age guarda num <p><strong>720p</strong></p> antes do link.
   private resolverQualidadeEspecifica(
     canonicalName: string | null,
     ctxLocal: ContextoLocalMagnet,
@@ -403,46 +391,118 @@ export class WordPressScraper {
     postTitle: string,
     html: string
   ): { qualidade: string; fonte: string } {
-    // 1. canonicalName do próprio magnet (dn=). ESSA É A FONTE DE VERDADE.
     if (canonicalName) {
       const q = this.extractQualityFromText(canonicalName);
       if (q) return { qualidade: q, fonte: 'canonicalName' };
     }
 
-    // 2. alt da imagem dentro do link (Zodíaco)
     if (ctxLocal.altDaImg) {
       const q = this.extractQualityFromText(ctxLocal.altDaImg);
       if (q) return { qualidade: q, fonte: 'altDaImg' };
     }
 
-    // 3. Irmão anterior com qualidade pura (Ice Age)
     if (ctxLocal.textoIrmaoAnterior) {
       const q = this.extractQualityFromText(ctxLocal.textoIrmaoAnterior);
       if (q) return { qualidade: q, fonte: 'textoIrmaoAnterior' };
     }
 
-    // 4. linkText
     const qLink = this.extractQualityFromText(linkText);
     if (qLink) return { qualidade: qLink, fonte: 'linkText' };
 
-    // 5. fullContextText (ancestral que tenha UMA única menção)
     const qCtx = this.extractQualityFromText(fullContextText);
     if (qCtx) return { qualidade: qCtx, fonte: 'fullContextText' };
 
-    // 6. parentText
     const qParent = this.extractQualityFromText(parentText);
     if (qParent) return { qualidade: qParent, fonte: 'parentText' };
 
-    // 7. postTitle
     const qPost = this.extractQualityFromText(postTitle);
     if (qPost) return { qualidade: qPost, fonte: 'postTitle' };
 
-    // 8. HTML inteiro
     const qHtml = this.extractQualityFromText(html);
     if (qHtml) return { qualidade: qHtml, fonte: 'html' };
 
     return { qualidade: 'HD', fonte: 'fallback' };
   }
+
+  // ═══════════════════════════════════════════════════════════════
+  // DETECÇÃO DE SEÇÕES — sem assumir ordem, coleta TODAS as posições
+  // ═══════════════════════════════════════════════════════════════
+
+  detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
+    const t = normalizarTexto(text).trim();
+
+    if (/^(assistir|baixar|download|ver|trailer)\b/i.test(t)) return 'OUTRO';
+
+    const pareceCabecalho = /^versao\b/i.test(t) || t.length <= 25;
+    if (!pareceCabecalho) return 'OUTRO';
+
+    const f = this.classificarTextoIdioma(text);
+    const temDualCompleto = f.temDual && f.temAudio;
+    const temLegendadoCabecalho = f.temLegendado;
+
+    if (temLegendadoCabecalho && !temDualCompleto && !f.temDublado) return 'LEGENDADO';
+    if ((temDualCompleto || f.temDublado || f.temNacional) && !temLegendadoCabecalho) return 'DUAL';
+    return 'OUTRO';
+  }
+
+  // Nova API: devolve lista de seções com [start, end). Cada cabeçalho inicia uma seção;
+  // o próximo cabeçalho (de qualquer tipo) encerra a anterior.
+  findSections($: any, content: string): Secao[] {
+    const selectors = ['strong', 'b'];
+    const cabecalhos: Array<{ tipo: 'DUAL' | 'LEGENDADO'; pos: number }> = [];
+
+    for (const sel of selectors) {
+      const elements = $(sel);
+      for (let i = 0; i < elements.length; i++) {
+        const text = $(elements[i]).text().trim();
+        if (!text) continue;
+
+        const tipo = this.detectSectionType(text);
+        if (tipo === 'OUTRO') continue;
+
+        const pos = content.indexOf($(elements[i]).toString());
+        if (pos === -1) continue;
+
+        cabecalhos.push({ tipo, pos });
+      }
+    }
+
+    cabecalhos.sort((a, b) => a.pos - b.pos);
+
+    const secoes: Secao[] = [];
+    for (let i = 0; i < cabecalhos.length; i++) {
+      const cab = cabecalhos[i];
+      const proximo = cabecalhos[i + 1];
+      secoes.push({
+        tipo: cab.tipo,
+        start: cab.pos,
+        end: proximo ? proximo.pos : content.length,
+      });
+    }
+
+    return secoes;
+  }
+
+  // Compat: devolve os boundaries no formato antigo (para quem ainda chama)
+  findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
+    const secoes = this.findSections($, content);
+    return {
+      dualIndex: secoes.find(s => s.tipo === 'DUAL')?.start ?? null,
+      legendadoIndex: secoes.find(s => s.tipo === 'LEGENDADO')?.start ?? null,
+    };
+  }
+
+  // Dado uma posição, devolve a seção que a contém. Se cair antes da primeira seção, devolve null.
+  private secaoDaPosicao(pos: number, secoes: Secao[]): Secao | null {
+    for (const s of secoes) {
+      if (pos >= s.start && pos < s.end) return s;
+    }
+    return null;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // SCRAPE DO POST
+  // ═══════════════════════════════════════════════════════════════
 
   async scrapePostApi(
     postId: number,
@@ -456,7 +516,6 @@ export class WordPressScraper {
     const response = await axios.get(postUrl, jsonAxiosConfig);
     const post = response.data;
 
-    // Mexi aqui porque o title.rendered do fetch completo também vem com entidades HTML cruas
     const titleRenderedBruto = post.title?.rendered || postTitle;
     const titleRendered = decodeHtmlEntities(titleRenderedBruto);
 
@@ -493,7 +552,6 @@ export class WordPressScraper {
     const year = infoBlock.year;
     const years = infoBlock.years || (infoBlock.year ? [infoBlock.year] : undefined);
 
-    // DEBUG: revela o que o infoBlock achou — usado pra rastrear de onde vem o "size global"
     logger.debug(
       `WP INFO_BLOCK | provider=${provider}` +
       ` | size="${infoBlock.size || '-'}"` +
@@ -502,77 +560,80 @@ export class WordPressScraper {
       ` | years=[${infoBlock.years?.join(',') ?? '-'}]`
     );
 
-    const content = html;
-    const { dualIndex, legendadoIndex } = this.findSectionBoundaries($, content);
+    // ─── DETECÇÃO DE SEÇÕES ───────────────────────────────────────
+    const secoes = this.findSections($, html);
 
-    if (dualIndex === null && legendadoIndex !== null) {
-      logger.debug(`WP ${provider}: sem seção DUAL (apenas legendado) — post "${titleRendered.substring(0, 50)}" ignorado`);
+    const resumo = secoes.map(s => `${s.tipo}[${s.start}-${s.end}]`).join(' ');
+    logger.debug(`WP ${provider}: seções | ${resumo || '(nenhuma)'}`);
+
+    // Se só há seção LEGENDADO, descarta o post inteiro.
+    const temDual = secoes.some(s => s.tipo === 'DUAL');
+    const temLegendado = secoes.some(s => s.tipo === 'LEGENDADO');
+    if (!temDual && temLegendado) {
+      logger.debug(`WP ${provider}: post apenas legendado — descartado`);
       return [];
     }
 
-    logger.debug(`WP ${provider}: processando magnets diretos...`);
-    const directMagnets = await this.processDirectMagnets($, content, dualIndex, legendadoIndex, titleRendered, html, provider, type, globalOriginalTitle, year, years);
-    logger.debug(`WP ${provider}: ${directMagnets.length} magnets diretos encontrados`);
+    // ─── COLETA DE MAGNETS POR SEÇÃO ──────────────────────────────
 
-    const protectorLinks = $('a[href*="systemads.net"], a[href*="systemads1.com"]').toArray();
-    logger.debug(`WP ${provider}: ${protectorLinks.length} links de protetor encontrados`);
-
-    const protectorResults = await this.processProtectorLinks($, content, dualIndex, legendadoIndex, titleRendered, html, provider, type, globalOriginalTitle, year, infoBlock, protectorLinks, years);
-
-    const seenInfoHashes = new Set<string>();
-    const all = [...directMagnets, ...protectorResults].filter(r => {
-      const hash = r.magnet.match(/btih:([a-z0-9]+)/i)?.[1]?.toLowerCase();
-      if (hash && seenInfoHashes.has(hash)) return false;
-      if (hash) seenInfoHashes.add(hash);
-      return true;
-    });
-
-    logger.debug(`WP ${provider}: post concluído, total de torrents: ${all.length} (diretos: ${directMagnets.length}, protetores: ${protectorResults.length})`);
-    if (imdbConfirmed) {
-      for (const r of all) r.imdbConfirmed = true;
+    const secoesValidas = secoes.filter(s => s.tipo === 'DUAL');
+    if (secoesValidas.length === 0) {
+      // Sem seções declaradas — aceita todos os magnets (fallback)
+      const todos = $('a[href^="magnet:"]').toArray() as any[];
+      logger.debug(`WP ${provider}: sem seções — processando ${todos.length} magnets`);
+      const results = await this.processarMagnets(todos, $, html, titleRendered, provider, type, globalOriginalTitle, year, years);
+      logger.debug(`WP ${provider}: post concluído, total de torrents: ${results.length}`);
+      if (imdbConfirmed) for (const r of results) r.imdbConfirmed = true;
+      return results;
     }
-    return all;
+
+    // Coleta magnets que caem dentro de alguma seção DUAL
+    const magnetElements = $('a[href^="magnet:"]').toArray() as any[];
+    const magnetsPorSecao: Record<string, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
+    const magnetsValidos: any[] = [];
+
+    for (const el of magnetElements) {
+      const pos = html.indexOf($(el).toString());
+      const secao = pos === -1 ? null : this.secaoDaPosicao(pos, secoes);
+
+      if (!secao) {
+        magnetsPorSecao.NONE++;
+        continue;
+      }
+      if (secao.tipo === 'LEGENDADO') {
+        magnetsPorSecao.LEGENDADO++;
+        continue;
+      }
+      magnetsPorSecao.DUAL++;
+      magnetsValidos.push(el);
+    }
+
+    logger.debug(`WP ${provider}: magnets por seção | DUAL=${magnetsPorSecao.DUAL} LEGENDADO=${magnetsPorSecao.LEGENDADO} NONE=${magnetsPorSecao.NONE}`);
+
+    const results = await this.processarMagnets(magnetsValidos, $, html, titleRendered, provider, type, globalOriginalTitle, year, years);
+    logger.debug(`WP ${provider}: post concluído, total de torrents: ${results.length}`);
+
+    if (imdbConfirmed) for (const r of results) r.imdbConfirmed = true;
+    return results;
   }
 
-  // Um elemento está "dentro da seção válida" quando:
-  // - não há nenhuma seção (aceita tudo), ou
-  // - há seção DUAL e o elemento vem depois dela e antes de LEGENDADO (se existir).
-  estaEntreSecoes(pos: number, dualIndex: number | null, legendadoIndex: number | null): boolean {
-    if (dualIndex === null && legendadoIndex === null) return true;
-    if (dualIndex === null) return false;
-    if (pos < dualIndex) return false;
-    if (legendadoIndex !== null && pos >= legendadoIndex) return false;
-    return true;
-  }
-
-  async processDirectMagnets(
+  // Processa um array de elementos <a href="magnet:">, devolvendo TorrentResult[].
+  private async processarMagnets(
+    elements: any[],
     $: any,
-    content: string,
-    dualIndex: number | null,
-    legendadoIndex: number | null,
-    postTitle: string,
     html: string,
+    postTitle: string,
     provider: string,
     type: 'movie' | 'series',
     globalOriginalTitle: string | undefined,
     year: number | undefined,
     years?: number[]
   ): Promise<TorrentResult[]> {
-    const magnetElements = $('a[href^="magnet:"]').toArray();
-
-    const filteredElements = (dualIndex === null && legendadoIndex === null)
-      ? magnetElements
-      : magnetElements.filter((el: any) => {
-        const hrefPos = content.indexOf($(el).toString());
-        if (hrefPos === -1) return true;
-        return this.estaEntreSecoes(hrefPos, dualIndex, legendadoIndex);
-      });
-
     const results: TorrentResult[] = [];
-
     const batchSize = 5;
-    for (let i = 0; i < filteredElements.length; i += batchSize) {
-      const batch = filteredElements.slice(i, i + batchSize);
+
+    for (let i = 0; i < elements.length; i += batchSize) {
+      const batch = elements.slice(i, i + batchSize);
       const batchPromises = batch.map(async (el: any) => {
         const magnet = $(el).attr('href');
         if (!magnet) return null;
@@ -581,59 +642,6 @@ export class WordPressScraper {
         const linkText = $(el).text().trim();
         const fullContextText = this.getFullContextText($(el));
         const ctxLocal = this.extrairContextoLocal($, el);
-        return this.processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years);
-      });
-
-      const batchResults = await Promise.all(batchPromises);
-      for (const r of batchResults) {
-        if (r) results.push(r);
-      }
-    }
-
-    return results;
-  }
-
-  async processProtectorLinks(
-    $: any,
-    content: string,
-    dualIndex: number | null,
-    legendadoIndex: number | null,
-    postTitle: string,
-    html: string,
-    provider: string,
-    type: 'movie' | 'series',
-    globalOriginalTitle: string | undefined,
-    year: number | undefined,
-    infoBlock: { size?: string; originalTitle?: string; year?: number },
-    protectorLinks: any[],
-    years?: number[]
-  ): Promise<TorrentResult[]> {
-    const results: TorrentResult[] = [];
-
-    const filteredLinks = protectorLinks.filter((el: any) => {
-      const linkPos = content.indexOf($(el).toString());
-      if (linkPos === -1) return false;
-      return this.estaEntreSecoes(linkPos, dualIndex, legendadoIndex);
-    });
-
-    for (let i = 0; i < filteredLinks.length; i += this.PROTECTOR_BATCH_SIZE) {
-      const batch = filteredLinks.slice(i, i + this.PROTECTOR_BATCH_SIZE);
-      const batchPromises = batch.map(async (el: any) => {
-        const protectorUrl = $(el).attr('href');
-        if (!protectorUrl) return null;
-
-        logger.debug(`WP ${provider}: extraindo magnet do protetor ${protectorUrl.substring(0, 50)}...`);
-        const magnet = await this.extractMagnetFromProtector(protectorUrl);
-        if (!magnet) {
-          logger.warn(`WP ${provider}: magnet NULO do protetor ${protectorUrl.substring(0, 50)}`);
-          return null;
-        }
-        logger.debug(`WP ${provider}: magnet obtido do protetor: ${magnet.substring(0, 60)}...`);
-
-        const parentText = $(el).parent().text().trim();
-        const linkText = $(el).text().trim();
-        const fullContextText = this.getFullContextText($(el));
-        const ctxLocal = this.extrairContextoLocal($, el);
 
         return this.processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years);
       });
@@ -645,23 +653,6 @@ export class WordPressScraper {
     }
 
     return results;
-  }
-
-  async analisarMagnetComCache(magnet: string, provider: string): Promise<MagnetCacheEntry | null> {
-    const cached = this.magnetCache.get<MagnetCacheEntry>(magnet);
-    if (cached) return cached;
-
-    try {
-      const dados = await analisarMagnet(magnet);
-      if (dados) {
-        const entry: MagnetCacheEntry = { nome: dados.nome, infoHash: dados.infoHash };
-        this.magnetCache.set(magnet, entry, this.MAGNET_CACHE_TTL);
-        return entry;
-      }
-    } catch (err: any) {
-      logger.warn(`WP ${provider}: erro ao analisar magnet: ${err.message}`);
-    }
-    return null;
   }
 
   async processMagnetItem(
@@ -681,8 +672,6 @@ export class WordPressScraper {
     const dados = await this.analisarMagnetComCache(magnet, provider);
     const canonicalName = dados?.nome ?? null;
 
-    // Mexi aqui pra delegar toda a detecção pro QualityDetector numa cadeia clara de prioridade
-    // Antes a qualidade vinha só de linkText/contextQuality/detectQuality e não pegava alt da img nem irmão anterior
     const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeEspecifica(
       canonicalName,
       ctxLocal,
@@ -698,8 +687,6 @@ export class WordPressScraper {
       return null;
     }
 
-    // DEBUG: rastreia size e qualidade por magnet. Ajuda a saber se o size do post
-    // está vazando pra todos os magnets ou se cada um tem seu valor individual.
     const sizeParent = this.extractSize(parentText);
     const sizePost = this.extractSize(postTitle);
     const size = sizeParent || sizePost;
@@ -719,12 +706,9 @@ export class WordPressScraper {
     const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
 
     const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
-
     const originalTitleFinal = this.extractOriginalTitleFromContext(parentText) || globalOriginalTitle || cleanTitleFromPost;
     const displayTitle = cleanTitleFromPost || canonicalName || postTitle;
 
-    // Mexi aqui porque magnet sem dn= deixava canonicalName vazio, e aí a stream caía no title genérico do post
-    // Se veio do magnet, preserva; se não, sintetiza com originalTitle + anos + qualidade
     const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
       originalTitleFinal || postTitle,
       years,
@@ -735,14 +719,12 @@ export class WordPressScraper {
       logger.debug(`WP ${provider}: canonicalName sintetizado | post="${postTitle.substring(0, 40)}" | canon="${canonicalFinal}"`);
     }
 
-    // Log rastreável da qualidade escolhida — ajuda a saber qual fonte ganhou em cada magnet
     logger.debug(`WP QUALIDADE | provider=${provider} | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade}`);
 
     return {
       title: this.cleanTitle(displayTitle),
       htmlTitle: cleanedHtmlTitle || undefined,
       magnet,
-      // FIX 12: seeders reais vêm via Torbox (getTorrentInfoByHash) depois; aqui fica 0 honesto.
       seeders: 0,
       leechers: 0,
       size,
@@ -763,8 +745,6 @@ export class WordPressScraper {
     };
   }
 
-  // Mexi aqui pra limpar caracteres soltos no fim do título base antes de compor o canonical
-  // "Ice Age*" vira "Ice Age", "A Era do Gelo !" vira "A Era do Gelo"
   private limparTituloBase(titulo: string): string {
     return titulo
       .replace(/[*]+/g, '')
@@ -773,23 +753,14 @@ export class WordPressScraper {
       .trim();
   }
 
-  // Mexi aqui pra montar nome descritivo quando o magnet não traz dn= próprio
-  // Formato: "Título Base <anos> <qualidade>", tipo "A Era do Gelo 2 2006 720p"
   private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
     const baseLimpo = this.limparTituloBase(base);
-
     const anos = years && years.length > 0
-      ? (years.length === 1
-        ? `${years[0]}`
-        : `${years[0]}-${years[years.length - 1]}`)
+      ? (years.length === 1 ? `${years[0]}` : `${years[0]}-${years[years.length - 1]}`)
       : null;
-
     return [baseLimpo, anos, quality].filter(Boolean).join(' ').trim();
   }
 
-  // Mexi aqui porque o regex antigo (\s*[–|-]\s*) cortava "1-4" no hífen sem espaços,
-  // transformando "A Era do Gelo 1-4 (2012) – BluRay..." em "A Era do Gelo 1"
-  // Agora só corta quando o separador tem espaços em volta, preservando ranges tipo 1-4
   extractTitleFromPostTitle(postTitle: string): string | null {
     if (!postTitle) return null;
     const original = postTitle;
@@ -833,7 +804,6 @@ export class WordPressScraper {
 
     const sizeMatch = articleText.match(/Tamanho:\s*([^\n]+)/i);
 
-    // Mexi aqui porque "Ice Age*" virava título base sujo no canonicalName sintetizado
     const originalBruto = originalMatch?.[1]?.trim();
     const originalTitle = originalBruto ? this.limparTituloBase(originalBruto) : undefined;
 
@@ -884,8 +854,6 @@ export class WordPressScraper {
     return null;
   }
 
-  // Extrai valor + unidade de um texto tipo "3.12 GB". Fonte única para
-  // extractSize (formata) e parseSize (converte pra bytes).
   extrairTamanhoNumerico(text: string): TamanhoNumerico | null {
     if (!text) return null;
     const m = text.match(/([\d,.]+)\s*(GB|MB|KB)/i);
@@ -916,7 +884,6 @@ export class WordPressScraper {
     if (f.temDual) return 'Dual';
     if (f.temDublado) return 'Dublado';
     if (f.temNacional) return 'Nacional';
-    // "legenda" sozinho (substantivo) não basta — pode ser rótulo de metadado.
     if (f.temLegendado || f.temLegendaSubstantivo) return 'Legendado';
     return 'Desconhecido';
   }
@@ -925,58 +892,21 @@ export class WordPressScraper {
     return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
   }
 
-  // FIX 12: estimateSeeders removido. Seeders reais vêm via Torbox (getTorrentInfoByHash).
-  // Até lá, o valor é 0 — honesto e sinaliza "sem dado".
+  async analisarMagnetComCache(magnet: string, provider: string): Promise<MagnetCacheEntry | null> {
+    const cached = this.magnetCache.get<MagnetCacheEntry>(magnet);
+    if (cached) return cached;
 
-  // Cabeçalho de seção: começa com "VERSÃO" ou é bem curto. Rejeita trailers, CTAs
-  // e rótulos de metadado (substantivo "legenda" sem particípio).
-  detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
-    const t = normalizarTexto(text).trim();
-
-    if (/^(assistir|baixar|download|ver|trailer)\b/i.test(t)) return 'OUTRO';
-
-    const pareceCabecalho = /^versao\b/i.test(t) || t.length <= 25;
-    if (!pareceCabecalho) return 'OUTRO';
-
-    const f = this.classificarTextoIdioma(text);
-    const temDualCompleto = f.temDual && f.temAudio;
-
-    // Só aceita LEGENDADO se tiver o particípio "legendado"/"legendada".
-    // "legenda" sozinho é substantivo e costuma ser rótulo de metadado ou link.
-    const temLegendadoCabecalho = f.temLegendado;
-
-    if (temLegendadoCabecalho && !temDualCompleto && !f.temDublado) return 'LEGENDADO';
-    if ((temDualCompleto || f.temDublado || f.temNacional) && !temLegendadoCabecalho) return 'DUAL';
-    return 'OUTRO';
-  }
-
-  findSectionBoundaries($: any, content: string): SectionBoundaries {
-    const selectors = ['strong', 'b'];
-    let dualIndex: number | null = null;
-    let legendadoIndex: number | null = null;
-
-    for (const sel of selectors) {
-      const elements = $(sel);
-      for (let i = 0; i < elements.length; i++) {
-        const text = $(elements[i]).text().trim();
-        if (!text) continue;
-
-        const sectionType = this.detectSectionType(text);
-        if (sectionType === 'OUTRO') continue;
-
-        const pos = content.indexOf($(elements[i]).toString());
-        if (pos === -1) continue;
-
-        if (sectionType === 'DUAL' && dualIndex === null) {
-          dualIndex = pos;
-        } else if (sectionType === 'LEGENDADO' && legendadoIndex === null && dualIndex !== null && pos > dualIndex) {
-          legendadoIndex = pos;
-          return { dualIndex, legendadoIndex };
-        }
+    try {
+      const dados = await analisarMagnet(magnet);
+      if (dados) {
+        const entry: MagnetCacheEntry = { nome: dados.nome, infoHash: dados.infoHash };
+        this.magnetCache.set(magnet, entry, this.MAGNET_CACHE_TTL);
+        return entry;
       }
+    } catch (err: any) {
+      logger.warn(`WP ${provider}: erro ao analisar magnet: ${err.message}`);
     }
-
-    return { dualIndex, legendadoIndex };
+    return null;
   }
 
   // Wrapper sobre extrairRangeEpisodios — mantém a assinatura antiga (só o número).
