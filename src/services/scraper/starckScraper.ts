@@ -6,17 +6,20 @@ import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import {
   extrairRangeEpisodios,
   normalizarTexto,
+  isCollectionTitle,
   temporadaAlvoNoRange,
   EpisodeRange,
 } from '../../titulos/TechnicalWords.js';
+import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const logger = new Logger('StarckScraper');
 
 const STARCK_BASE = 'https://www.starck-oficial.com';
 
-// FIX 1: só aceita como qualidade de vídeo valores que realmente são qualidade.
-// Sem isso, "Qualidade de Video: 10" (nota) sobrescrevia o "FHD" do .sl-quality
 const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
+
+// Instância única do SimilarityCalculator — mesma régua do TitleFilter.
+const similarity = SimilarityCalculator.getInstance();
 
 export interface StarckTorrent {
   magnet: string;
@@ -31,9 +34,59 @@ export interface StarckTorrent {
   size?: string;
   season?: number;
   episode?: number;
+  imdbConfirmed?: boolean;
 }
 
-const axiosConfig = {
+export interface PostMetadata {
+  originalTitle?: string;
+  year?: number;
+  size?: string;
+  language?: string;
+  quality?: string;
+}
+
+export type TipoSecao = 'DUAL' | 'LEGENDADO' | 'NONE';
+
+export interface SecaoStarck {
+  tipo: TipoSecao;
+  start: number;
+  end: number;
+}
+
+export interface MetadadosBotao {
+  idioma: string | null;
+  formato: string | null;
+  qualidade: string | null;
+  tamanho: string | null;
+}
+
+export interface LinkClassificado {
+  href: string;
+  pos: number;
+  idioma: string | null;
+  formato: string | null;
+  qualidade: string | null;
+  tamanho: string | null;
+  origem: 'secao' | 'botao' | 'fallback';
+  motivo: string;
+}
+
+export interface SearchResultItem {
+  title: string;
+  postUrl: string;
+  slugTitle: string;
+  range: EpisodeRange | null;
+}
+
+export interface ContagemClassificacao {
+  secaoDual: number;
+  secaoLegendado: number;
+  botaoDual: number;
+  botaoLegendado: number;
+  fallback: number;
+}
+
+export const axiosConfig = {
   timeout: 15000,
   httpsAgent: agenteHttps,
   lookup: lookupCustomizado,
@@ -44,7 +97,9 @@ const axiosConfig = {
   },
 };
 
-//Aqui ele limpa o slug, decodifica e troca hífen por espaço
+export { STARCK_BASE, QUALIDADE_VALIDA_REGEX };
+
+// Decodifica o slug, remove sufixo de data e troca hífen por espaço.
 export function cleanSlug(slug: string): string {
   let decodificado = slug;
   try {
@@ -76,7 +131,7 @@ export function cleanSlug(slug: string): string {
   return semData.replace(/-/g, ' ');
 }
 
-//Aqui ele extrai o título base do slug, tirando temporada e ano
+// Extrai o título base do slug removendo temporada e ano.
 export function extrairTituloBaseDoSlug(slug: string): string {
   const limpo = cleanSlug(slug);
   const normalizado = normalizarTexto(limpo);
@@ -89,15 +144,28 @@ export function extrairTituloBaseDoSlug(slug: string): string {
     .trim();
 }
 
-interface SearchResultItem {
-  title: string;
-  postUrl: string;
-  slugTitle: string;
-  range: EpisodeRange | null;
+// Constrói o Set de frases normalizadas a partir de todas as queries.
+function construirFrases(allQueries: string[]): Set<string> {
+  const frases = new Set<string>();
+  for (const q of allQueries) {
+    const phrase = normalizarTexto(
+      q
+        .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
+        .replace(/\btemporada\s*\d+\b/gi, '')
+        .replace(/\bseason\s*\d+\b/gi, '')
+        .replace(/\b\d{4}\b/g, '')
+    );
+    if (phrase) frases.add(phrase);
+  }
+  return frases;
 }
 
-//Aqui ele busca links do catálogo e filtra pelo range de temporada
-async function searchStarckLinks(
+// Busca links de catálogo no Starck e filtra por temporada e similaridade.
+//
+// IMPORTANTE: o filtro já usa TODAS as queries (via allQueries), então
+// chamar esta função várias vezes para queries diferentes é redundante.
+// searchStarck chama uma vez só.
+export async function searchStarckLinks(
   searchQuery: string,
   allQueries: string[],
   targetSeason?: number,
@@ -133,37 +201,43 @@ async function searchStarckLinks(
     });
 
     const results = [...itemsMap.values()];
+    const frases = construirFrases(allQueries);
+    const frasesArr = [...frases];
 
-    const frases = new Set<string>();
-    for (const q of allQueries) {
-      const phrase = normalizarTexto(
-        q
-          .replace(/\b\d+[ªº°]?\s*temporada\b/gi, '')
-          .replace(/\btemporada\s*\d+\b/gi, '')
-          .replace(/\bseason\s*\d+\b/gi, '')
-          .replace(/\b\d{4}\b/g, '')
-      );
-      if (phrase) frases.add(phrase);
-    }
+    let descartadosPorTemporada = 0;
+    let descartadosPorSimilaridade = 0;
+    let aceitosPorColecao = 0;
 
     const filtered = results.filter(item => {
-      const titleNormalizado = normalizarTexto(item.slugTitle);
-
-      //Aqui ele checa se o alvo cabe no range declarado pelo slug
       if (!temporadaAlvoNoRange(item.range, targetSeason)) {
+        descartadosPorTemporada++;
         return false;
       }
 
-      const match = [...frases].some(frase => titleNormalizado.includes(frase));
-      if (!match) {
-        logger.debug(`Starck: link ignorado (frase não encontrada no slug): "${item.slugTitle}"`);
+      // Pré-filtro via SimilarityCalculator — mesma régua dos outros scrapers.
+      // Fuzzy pega variações que `includes()` deixava passar (ex: "Halloween
+      // de Madea" vs "boo o halloween de madea").
+      const resultado = similarity.compararComTitulos(frasesArr, item.slugTitle);
+      const isCollection = isCollectionTitle(item.slugTitle);
+
+      if (!resultado.match && !isCollection) {
+        descartadosPorSimilaridade++;
         return false;
       }
+
+      if (!resultado.match && isCollection) aceitosPorColecao++;
 
       return true;
     });
 
-    logger.debug(`Starck: ${results.length} itens → ${filtered.length} após filtro para query "${searchQuery.substring(0, 40)}"`);
+    const frasesResumo = frasesArr.map(f => f.substring(0, 30)).join(' | ');
+    logger.debug(
+      `Starck: ${results.length} itens | matches=${filtered.length} ` +
+      `| descartados: temporada=${descartadosPorTemporada} similaridade=${descartadosPorSimilaridade}` +
+      (aceitosPorColecao > 0 ? ` | coleções=${aceitosPorColecao}` : '') +
+      ` | frases=[${frasesResumo}]`
+    );
+
     return filtered.slice(0, 40);
   } catch (err: any) {
     logger.warn('Starck busca falhou', { query: searchQuery.substring(0, 50), error: err.message });
@@ -171,16 +245,8 @@ async function searchStarckLinks(
   }
 }
 
-interface PostMetadata {
-  originalTitle?: string;
-  year?: number;
-  size?: string;
-  language?: string;
-  quality?: string;
-}
-
-//Aqui ele extrai metadados do post a partir do bloco de descrição
-function extractPostMetadata($: any): PostMetadata {
+// Lê o bloco .post-description e devolve título original, ano, tamanho, idioma e qualidade.
+export function extractPostMetadata($: any): PostMetadata {
   const result: PostMetadata = {};
 
   $('.post-description p').each((_i: any, p: any) => {
@@ -197,15 +263,12 @@ function extractPostMetadata($: any): PostMetadata {
       }
       else if (label.includes('tamanho')) result.size = value;
       else if (label.includes('idioma')) result.language = value;
-      // FIX 1: só aceita qualidade de vídeo se o value for qualidade real.
-      // "Qualidade de Video: 10" (nota) não passa; "Qualidade do Audio" cai fora naturalmente.
       else if (/qualidade\s+de\s+v[íi]deo/i.test(label)) {
         if (QUALIDADE_VALIDA_REGEX.test(value)) result.quality = value;
       }
     }
   });
 
-  // FIX 1: fallback pro span .sl-quality (FHD/HD/etc) quando nada foi capturado acima
   if (!result.quality) {
     const q = $('.sl-quality').first().text().trim();
     if (q && QUALIDADE_VALIDA_REGEX.test(q)) result.quality = q;
@@ -222,60 +285,257 @@ function extractPostMetadata($: any): PostMetadata {
   return result;
 }
 
-//Aqui ele confirma se o link está antes da seção "LEGENDADO", ou seja, é dual
-function linkEhDaSecaoDual($: any, el: any): boolean {
-  const html = $('body').html() || '';
-  const legendadoPos = html.search(/VERS[ÃA]O\s+LEGENDAD[OA]/i);
-  if (legendadoPos === -1) return true;
+// Classifica um cabeçalho de seção como DUAL, LEGENDADO ou NONE.
+export function classificarCabecalhoSecao(texto: string): TipoSecao {
+  const t = normalizarTexto(texto).trim();
+  if (!t || t.length > 60) return 'NONE';
+  if (/^(trailer|assistir|baixar|download|ver)\b/i.test(t)) return 'NONE';
+  if (/^epis[oó]dios?\b/i.test(t)) return 'NONE';
 
-  const linkHtml = $(el).toString();
-  const linkPos = html.indexOf(linkHtml);
-  if (linkPos === -1) return false;
+  const temDual = /\bdual\b/.test(t) && /\baudio\b/.test(t);
+  const temDublado = /\bdublado\b|\bdublada\b|\bdublagem\b|\bnacional\b/.test(t);
+  const temLegendado = /\blegendado\b|\blegendada\b/.test(t);
 
-  return linkPos < legendadoPos;
+  if (temLegendado && !temDual && !temDublado) return 'LEGENDADO';
+  if ((temDual || temDublado) && !temLegendado) return 'DUAL';
+  return 'NONE';
 }
 
-//Aqui ele extrai idioma, formato, qualidade e tamanho do botão do magnet
-function extrairMetadadosDoBotao($: any, linkEl: any): {
-  idioma?: string;
-  formato?: string;
-  qualidade?: string;
-  tamanho?: string;
-} {
-  const container = $(linkEl).closest('.buttons-content');
-  if (!container.length) return {};
+// Monta lista de seções [start, end) a partir dos cabeçalhos. Deduplica aninhados.
+export function detectarSecoesStarck($: any, html: string): SecaoStarck[] {
+  const container = $('.post-buttons').first();
+  const escopo = container.length ? container : $('body');
 
-  const textoSpan = container.find('.text').first().text().trim();
-  if (!textoSpan) return {};
+  const cabecalhos: Array<{ tipo: TipoSecao; pos: number; texto: string }> = [];
 
-  const linhas = textoSpan.split('\n').map((s: string) => s.trim()).filter(Boolean);
-  if (linhas.length < 3) return {};
+  escopo.find('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
+    const texto = $(el).text().trim();
+    if (!texto) return;
+
+    const tipo = classificarCabecalhoSecao(texto);
+    if (tipo === 'NONE') return;
+
+    const pos = html.indexOf($(el).toString());
+    if (pos === -1) return;
+
+    cabecalhos.push({ tipo, pos, texto });
+  });
+
+  cabecalhos.sort((a, b) => a.pos - b.pos);
+
+  const dedup: typeof cabecalhos = [];
+  for (const cab of cabecalhos) {
+    const dup = dedup.find(d => normalizarTexto(d.texto) === normalizarTexto(cab.texto));
+    if (dup) continue;
+    dedup.push(cab);
+  }
+
+  const secoes: SecaoStarck[] = [];
+  for (let i = 0; i < dedup.length; i++) {
+    const cab = dedup[i];
+    const proximo = dedup[i + 1];
+    secoes.push({
+      tipo: cab.tipo,
+      start: cab.pos,
+      end: proximo ? proximo.pos : html.length,
+    });
+  }
+
+  return secoes;
+}
+
+// Devolve a seção que contém a posição, ou null se cair fora de todas.
+export function secaoDaPosicao(pos: number, secoes: SecaoStarck[]): SecaoStarck | null {
+  for (const s of secoes) {
+    if (pos >= s.start && pos < s.end) return s;
+  }
+  return null;
+}
+
+// Lê o .buttons-content e devolve idioma, formato, qualidade e tamanho do botão.
+export function classificarBotao($: any, botaoEl: any): MetadadosBotao {
+  const container = $(botaoEl);
+  if (!container.length) return { idioma: null, formato: null, qualidade: null, tamanho: null };
+
+  const textoSpan = container.find('.text').first();
+  if (!textoSpan.length) return { idioma: null, formato: null, qualidade: null, tamanho: null };
+
+  const linhas = textoSpan.text()
+    .split('\n')
+    .map((s: string) => s.trim())
+    .filter(Boolean);
+
+  if (linhas.length < 3) return { idioma: null, formato: null, qualidade: null, tamanho: null };
 
   const primeiraLinha = linhas[0];
   const idiomaMatch = primeiraLinha.match(/(Dual Áudio|Dublado|Legendado|Nacional)/i);
-  const idioma = idiomaMatch ? idiomaMatch[1] : undefined;
+  const idioma = idiomaMatch ? idiomaMatch[1] : null;
 
-  let formato: string | undefined;
+  let formato: string | null = null;
   if (idiomaMatch && idiomaMatch[0]) {
-    const restante = primeiraLinha.substring(idiomaMatch[0].length);
-    if (restante) formato = restante.trim();
+    const restante = primeiraLinha.substring(idiomaMatch[0].length).trim();
+    if (restante) formato = restante;
   }
 
   const terceiraLinha = linhas[2];
   const qualidadeMatch = terceiraLinha.match(/(\d{3,4}p|4K|FHD|HD)/i);
-  const tamanhoMatch = terceiraLinha.match(/\(([\d.]+)\s*GB\)/i);
+  const tamanhoMatch = terceiraLinha.match(/\(([\d.]+)\s*(GB|MB)\)/i);
 
   return {
     idioma,
     formato,
-    qualidade: qualidadeMatch ? qualidadeMatch[1] : undefined,
-    tamanho: tamanhoMatch ? `${tamanhoMatch[1]} GB` : undefined,
+    qualidade: qualidadeMatch ? qualidadeMatch[1] : null,
+    tamanho: tamanhoMatch ? `${tamanhoMatch[1]} ${tamanhoMatch[2]}` : null,
   };
 }
 
-//Aqui ele decodifica os magnets em base64 e enriquece com metadados do botão
-async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMetadata): Promise<StarckTorrent[]> {
-  const rawMagnets: {
+// Extrai qualidade, formato e tamanho do texto ao redor do link (formato seção).
+function extrairMetadadosDoContexto($: any, linkEl: any): {
+  qualidade: string | null;
+  formato: string | null;
+  tamanho: string | null;
+} {
+  const linkText = $(linkEl).text().trim();
+  const parentP = $(linkEl).closest('p');
+  const parentText = parentP.text().replace(/\s+/g, ' ').trim();
+
+  const qualidade =
+    linkText.match(/(\d{3,4}p|4K|FHD|HD)/i)?.[1] ||
+    parentText.match(/(\d{3,4}p|4K|FHD|HD)/i)?.[1] ||
+    null;
+
+  const formato =
+    linkText.match(/\b(MKV|MP4)\b/i)?.[1] ||
+    parentText.match(/\b(MKV|MP4)\b/i)?.[1] ||
+    null;
+
+  const tamanhoMatch =
+    parentText.match(/\(([\d.]+)\s*(GB|MB)\)/i) ||
+    linkText.match(/\(([\d.]+)\s*(GB|MB)\)/i);
+  const tamanho = tamanhoMatch ? `${tamanhoMatch[1]} ${tamanhoMatch[2]}` : null;
+
+  return { qualidade, formato, tamanho };
+}
+
+// Classifica um link filmedl.com por seção, botão ou contexto.
+export function classificarLink(
+  $: any,
+  linkEl: any,
+  html: string,
+  secoes: SecaoStarck[]
+): LinkClassificado {
+  const href = $(linkEl).attr('href') || '';
+  const pos = html.indexOf($(linkEl).toString());
+
+  const base: LinkClassificado = {
+    href,
+    pos,
+    idioma: null,
+    formato: null,
+    qualidade: null,
+    tamanho: null,
+    origem: 'fallback',
+    motivo: '',
+  };
+
+  if (pos !== -1 && secoes.length > 0) {
+    const secao = secaoDaPosicao(pos, secoes);
+    if (secao) {
+      if (secao.tipo === 'LEGENDADO') {
+        return { ...base, origem: 'secao', motivo: 'secao=LEGENDADO' };
+      }
+      if (secao.tipo === 'DUAL') {
+        const ctx = extrairMetadadosDoContexto($, linkEl);
+        return {
+          ...base,
+          idioma: 'Dual Áudio',
+          formato: ctx.formato,
+          qualidade: ctx.qualidade,
+          tamanho: ctx.tamanho,
+          origem: 'secao',
+          motivo: 'secao=DUAL',
+        };
+      }
+    }
+  }
+
+  const botaoEl = $(linkEl).closest('.buttons-content');
+  if (botaoEl.length) {
+    const m = classificarBotao($, botaoEl);
+    if (m.idioma && /legendad[ao]/i.test(m.idioma)) {
+      return { ...base, ...m, origem: 'botao', motivo: 'botao=Legendado' };
+    }
+    if (m.idioma) {
+      return { ...base, ...m, origem: 'botao', motivo: `botao=${m.idioma}` };
+    }
+  }
+
+  return { ...base, origem: 'fallback', motivo: 'sem secao e sem botao' };
+}
+
+// Decodifica a base64 do id e devolve o magnet corrigido.
+export function extrairMagnetDoLink(href: string): string | null {
+  const idMatch = href.match(/[?&]id=([^&]+)/i);
+  if (!idMatch) return null;
+
+  try {
+    const decoded = decodeURIComponent(idMatch[1]);
+    let magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+    if (!magnet.startsWith('magnet:?')) return null;
+    magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
+    return magnet;
+  } catch {
+    return null;
+  }
+}
+
+// Extrai o número do episódio do texto ao redor do link.
+export function extrairEpisodioDoContexto($: any, linkEl: any): number | undefined {
+  const parentP = $(linkEl).closest('p');
+  const parentText = parentP.text().trim() || '';
+  const range = extrairRangeEpisodios(parentText);
+  return range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
+}
+
+// Normaliza a string de idioma do metadata.
+function normalizarIdiomaMetadata(lang: string | undefined): string | undefined {
+  if (!lang) return undefined;
+  const lower = lang.toLowerCase();
+  if (lower.includes('dual')) return 'Dual Áudio';
+  if (lower.includes('dublado') || lower.includes('dublagem')) return 'Dublado';
+  if (lower.includes('legendado')) return 'Legendado';
+  if (lower.includes('nacional')) return 'Nacional';
+  return undefined;
+}
+
+// Limpa o qualityHint, removendo prefixos tipo "EPISÓDIO 03:".
+function limparQualityHint(texto: string): string {
+  return texto
+    .replace(/^epis[oó]dio\s*\d+(\s*(e|ao?|a|-)\s*\d+)?\s*:?\s*/i, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Processa todos os links filmedl.com e devolve os magnets DUAL prontos.
+export async function decodeBase64Magnets(
+  $: any,
+  html: string,
+  postTitle: string,
+  metadata: PostMetadata
+): Promise<{ torrents: StarckTorrent[]; contagem: ContagemClassificacao }> {
+  const secoes = detectarSecoesStarck($, html);
+  const resumo = secoes.map(s => `${s.tipo}[${s.start}-${s.end}]`).join(' ') || '(nenhuma)';
+  logger.debug(`Starck decode | seções | ${resumo}`);
+
+  const contagem: ContagemClassificacao = {
+    secaoDual: 0,
+    secaoLegendado: 0,
+    botaoDual: 0,
+    botaoLegendado: 0,
+    fallback: 0,
+  };
+
+  const rawMagnets: Array<{
     magnet: string;
     qualityHint: string;
     quality?: string;
@@ -283,54 +543,55 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
     language?: string;
     format?: string;
     episode?: number;
-  }[] = [];
+  }> = [];
 
-  $('a[href*="filmedl.com"]').each((_i: any, el: any) => {
-    const href = $(el).attr('href') || '';
-    const idMatch = href.match(/[?&]id=([^&]+)/i);
-    if (!idMatch) return;
+  const todosLinks = $('a[href*="filmedl.com"]').toArray() as any[];
 
-    // FIX 4: antes de qualquer coisa, olha o idioma do botão.
-    // Se for "Legendado", descarta — mesmo sem cabeçalho "VERSÃO LEGENDADO" na página.
-    const botaoMetadados = extrairMetadadosDoBotao($, el);
-    if (botaoMetadados.idioma && /legendad[ao]/i.test(botaoMetadados.idioma)) {
-      logger.debug(`Starck decode | botão marcado como Legendado — ignorado | href=${href.substring(0, 60)}`);
-      return;
+  let legendadoViaSecao = 0;
+  let legendadoViaBotao = 0;
+
+  for (const linkEl of todosLinks) {
+    const cls = classificarLink($, linkEl, html, secoes);
+
+    if (cls.origem === 'secao' && cls.motivo === 'secao=LEGENDADO') {
+      contagem.secaoLegendado++;
+      legendadoViaSecao++;
+      continue;
+    }
+    if (cls.origem === 'botao' && cls.motivo === 'botao=Legendado') {
+      contagem.botaoLegendado++;
+      legendadoViaBotao++;
+      continue;
     }
 
-    // Checagem por seção (segunda barreira)
-    if (!linkEhDaSecaoDual($, el)) return;
+    if (cls.origem === 'secao') contagem.secaoDual++;
+    else if (cls.origem === 'botao') contagem.botaoDual++;
+    else contagem.fallback++;
 
-    try {
-      const decoded = decodeURIComponent(idMatch[1]);
-      let magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
-      if (!magnet.startsWith('magnet:?')) return;
+    const magnet = extrairMagnetDoLink(cls.href);
+    if (!magnet) continue;
 
-      //Aqui ele corrige o "&" solto dentro do dn (não vem codificado pelo Starck)
-      magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
+    const episode = extrairEpisodioDoContexto($, linkEl);
+    const parentText = $(linkEl).closest('p').text().trim() || '';
 
-      const parentP = $(el).closest('p');
-      const parentText = parentP.text().trim() || '';
+    rawMagnets.push({
+      magnet,
+      qualityHint: limparQualityHint(parentText),
+      quality: cls.qualidade || undefined,
+      size: cls.tamanho || undefined,
+      language: cls.idioma || undefined,
+      format: cls.formato || undefined,
+      episode,
+    });
+  }
 
-      const range = extrairRangeEpisodios(parentText);
-      const episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
-
-      rawMagnets.push({
-        magnet,
-        qualityHint: parentText,
-        quality: botaoMetadados.qualidade,
-        size: botaoMetadados.tamanho,
-        language: botaoMetadados.idioma,
-        // FIX 3: propaga o formato extraído do botão (MKV, MP4, etc)
-        format: botaoMetadados.formato,
-        episode,
-      });
-    } catch (err) {
-      logger.warn('Starck decode | erro ao decodificar magnet', { error: (err as Error).message });
-    }
-  });
-
-  logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalLinks=${rawMagnets.length}`);
+  logger.debug(
+    `Starck decode | links: total=${todosLinks.length}` +
+    ` | seção DUAL=${contagem.secaoDual} LEGENDADO=${contagem.secaoLegendado}` +
+    ` | botão DUAL=${contagem.botaoDual} LEGENDADO=${contagem.botaoLegendado}` +
+    ` | fallback=${contagem.fallback} | extraídos=${rawMagnets.length}` +
+    ` | descartados legendado: secao=${legendadoViaSecao} botao=${legendadoViaBotao}`
+  );
 
   const analyzed = await Promise.all(
     rawMagnets.map(async (item) => {
@@ -360,6 +621,8 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
 
   const seen = new Set<string>();
   const results: StarckTorrent[] = [];
+  const idiomaMeta = normalizarIdiomaMetadata(metadata.language);
+
   for (const item of analyzed) {
     if (!item || seen.has(item.infoHash)) continue;
     seen.add(item.infoHash);
@@ -370,13 +633,13 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
       episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
     }
 
-    //Aqui ele monta um canonicalName a partir dos metadados quando o magnet não tem dn
     if (!item.canonicalName) {
       const tituloBase = metadata.originalTitle || postTitle;
+      const qualidadeLimpa = item.quality || item.qualityHint.replace(/^\d{3,4}p\s*$/i, '').trim() || null;
       const partes = [
         tituloBase,
-        item.language || metadata.language,
-        item.quality || item.qualityHint,
+        item.language || idiomaMeta,
+        qualidadeLimpa,
         item.size,
       ].filter(Boolean);
       item.canonicalName = partes.join(' ');
@@ -388,39 +651,41 @@ async function decodeBase64Magnets($: any, postTitle: string, metadata: PostMeta
       canonicalName: item.canonicalName,
       qualityHint: item.qualityHint,
       quality: item.quality,
-      // FIX 3: expõe o formato do botão pro mapper usar, se quiser
       format: item.format,
       size: item.size,
-      language: item.language || 'Dual Áudio',
+      language: item.language || idiomaMeta || 'Dual Áudio',
       episode,
     });
   }
 
   logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
-  return results;
+  return { torrents: results, contagem };
 }
 
-//Aqui é o entrypoint do scraper Starck
+// Entrypoint do scraper. Busca links, processa posts e devolve torrents.
+//
+// UMA ÚNICA busca HTTP — o filtro dentro de searchStarckLinks já usa todas as
+// queries (allQueries) como frases, então iterar query por query é redundante
+// e só multiplicava o log e o tempo de rede.
 export async function searchStarck(
   query: string,
   type: 'movie' | 'series' = 'movie',
   targetSeason?: number,
   searchQueries?: string[],
-  targetYear?: number
+  targetYear?: number,
+  imdbId?: string
 ): Promise<StarckTorrent[]> {
   const startTime = Date.now();
 
-  const queriesParaBusca = searchQueries && searchQueries.length > 0 ? searchQueries : [query];
   const allQueries = [...new Set([query, ...(searchQueries || [])])];
 
   const allResults: StarckTorrent[] = [];
   const seenInfoHashes = new Set<string>();
 
-  for (const q of queriesParaBusca) {
-    logger.debug(`Starck: tentando busca com query "${q}"`);
-    const links = await searchStarckLinks(q, allQueries, targetSeason, targetYear);
-    if (links.length === 0) continue;
+  // Uma busca, todas as frases.
+  const links = await searchStarckLinks(query, allQueries, targetSeason, targetYear);
 
+  if (links.length > 0) {
     let processedPosts = 0;
 
     for (const link of links) {
@@ -428,11 +693,30 @@ export async function searchStarck(
 
       try {
         const res = await axios.get(link.postUrl, axiosConfig);
-        const $ = cheerio.load(res.data);
-        const metadata = extractPostMetadata($);
-        const magnets = await decodeBase64Magnets($, link.title, metadata);
 
-        for (const magnet of magnets) {
+        // Validação IMDb — mesmo padrão de Bludv/WP/HDR.
+        // Se o post declara um IMDb diferente do buscado, descarta (a menos
+        // que seja coleção/franquia, onde o IMDb do post pode ser de um dos
+        // filmes e o filtro textual já validou o resto).
+        let imdbConfirmed = false;
+        if (imdbId) {
+          const imdbIdDoPost = (res.data as string).match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+          if (imdbIdDoPost) {
+            const isCollection = isCollectionTitle(link.title);
+            if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+              processedPosts++;
+              continue;
+            }
+            if (!isCollection) imdbConfirmed = true;
+          }
+        }
+
+        const $ = cheerio.load(res.data);
+        const htmlSerializado = $.html();
+        const metadata = extractPostMetadata($);
+        const { torrents } = await decodeBase64Magnets($, htmlSerializado, link.title, metadata);
+
+        for (const magnet of torrents) {
           if (seenInfoHashes.has(magnet.infoHash)) continue;
           seenInfoHashes.add(magnet.infoHash);
 
@@ -442,6 +726,7 @@ export async function searchStarck(
           magnet.year = metadata.year;
           if (metadata.quality && !magnet.qualityHint) magnet.qualityHint = metadata.quality;
           if (!magnet.size && metadata.size) magnet.size = metadata.size;
+          if (imdbConfirmed) magnet.imdbConfirmed = true;
 
           allResults.push(magnet);
         }
@@ -452,8 +737,6 @@ export async function searchStarck(
         processedPosts++;
       }
     }
-
-    if (allResults.length > 0) break;
   }
 
   const duration = Date.now() - startTime;

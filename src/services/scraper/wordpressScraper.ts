@@ -8,7 +8,8 @@ import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import { CacheService } from '../../debrid/CacheService.js';
-import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, normalizarTexto, isCollectionTitle } from '../../titulos/TechnicalWords.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade } from '../../titulos/TechnicalWords.js';
+import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -103,8 +104,7 @@ export type InfoBlock = {
   size?: string;
 };
 
-// Seção é um intervalo [start, end) dentro do HTML, delimitado por cabeçalhos.
-// Não assume ordem entre DUAL e LEGENDADO.
+// Seção é um intervalo [start, end) dentro do HTML.
 export type Secao = {
   tipo: 'DUAL' | 'LEGENDADO';
   start: number;
@@ -130,6 +130,7 @@ export type ContextoLocalMagnet = {
 export class WordPressScraper {
   public readonly qualityDetector: QualityDetector;
   public readonly magnetCache: CacheService;
+  public readonly similarity: SimilarityCalculator;
   public readonly POST_BATCH_SIZE = 3;
   public readonly PROTECTOR_BATCH_SIZE = 5;
   public readonly MAGNET_CACHE_TTL = 30 * 60 * 1000;
@@ -137,6 +138,7 @@ export class WordPressScraper {
   constructor() {
     this.qualityDetector = new QualityDetector();
     this.magnetCache = new CacheService();
+    this.similarity = SimilarityCalculator.getInstance();
   }
 
   async search(
@@ -212,10 +214,11 @@ export class WordPressScraper {
       logger.debug(`WP ${site.name}: temporada detectada na query: ${querySeason}`);
     }
 
-    const { frases, baseTitles } = this.montarFrasesDeBusca(searchQuery, searchQueries);
+    const frases = this.montarFrasesDeBusca(searchQuery, searchQueries);
+    const tokensRuido = calcularTokensRuido(postItems.map(p => p.title));
 
     const relevantPosts = postItems.filter(post =>
-      this.postRelevante(post, querySeason, frases, baseTitles, site.name)
+      this.postRelevante(post, querySeason, frases, site.name, tokensRuido)
     );
 
     logger.info(`WP ${site.name}: ${relevantPosts.length} posts relevantes na API para "${searchQuery}"`);
@@ -253,7 +256,8 @@ export class WordPressScraper {
     return results;
   }
 
-  montarFrasesDeBusca(searchQuery: string, searchQueries?: string[]): { frases: Set<string>; baseTitles: string[] } {
+  // Frases normalizadas da busca, sem temporada.
+  montarFrasesDeBusca(searchQuery: string, searchQueries?: string[]): Set<string> {
     const allQueries = new Set<string>([searchQuery, ...(searchQueries || [])]);
     const frases = new Set<string>();
 
@@ -267,41 +271,45 @@ export class WordPressScraper {
       if (phrase) frases.add(phrase);
     }
 
-    const baseTitles = [...frases].map(frase =>
-      normalizarTexto(frase.replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim())
-    ).filter(Boolean);
-
-    return { frases, baseTitles };
+    return frases;
   }
 
   postRelevante(
     post: { title: string },
     querySeason: number | undefined,
     frases: Set<string>,
-    baseTitles: string[],
-    siteName: string
+    siteName: string,
+    tokensRuido: Set<string>
   ): boolean {
     const lowerTitle = post.title.toLowerCase();
 
     if (/\blist[aã]o\b/i.test(lowerTitle)) return false;
 
     if (querySeason) {
-      const seasonPatterns = [
-        new RegExp(`\\b${querySeason}\\s*[ªº°]?\\s*temporada\\b`, 'i'),
-        new RegExp(`\\btemporada\\s*${querySeason}\\b`, 'i'),
-        new RegExp(`\\bseason\\s*${querySeason}\\b`, 'i'),
-      ];
-      if (!seasonPatterns.some(p => p.test(lowerTitle))) return false;
+      const range = extrairRangeEpisodios(post.title);
+      if (!temporadaAlvoNoRange(range, querySeason)) return false;
     }
 
-    const titleNormalizado = normalizarTexto(post.title);
-    const match = [...frases].some(frase => titleNormalizado.includes(frase));
-    const isCollection = isCollectionTitle(titleNormalizado) &&
-      baseTitles.some(base => titleNormalizado.includes(base));
+    // Limpa ruído do site (tokens frequentes) antes do pré-filtro.
+    const tituloLimpo = limparPorRaridade(post.title, tokensRuido);
+    const resultado = this.similarity.compararComTitulos([...frases], tituloLimpo);
+    const isCollection = isCollectionTitle(post.title);
 
-    if (!match && !isCollection) {
-      logger.debug(`WP ${siteName}: post ignorado (frase não encontrada): "${post.title.substring(0, 50)}"`);
+    if (!resultado.match && !isCollection) {
+      logger.debug(
+        `WP ${siteName}: post ignorado (score ${resultado.score.toFixed(2)} ${resultado.nivel}): "${post.title.substring(0, 50)}"`
+      );
       return false;
+    }
+
+    if (!resultado.match && isCollection) {
+      logger.debug(`WP ${siteName}: coleção aceita por pré-filtro: "${post.title.substring(0, 60)}"`);
+    }
+
+    if (resultado.match) {
+      logger.debug(
+        `WP ${siteName}: post aceito (${resultado.nivel} score=${resultado.score.toFixed(2)}): "${post.title.substring(0, 60)}"`
+      );
     }
 
     return true;
@@ -424,10 +432,7 @@ export class WordPressScraper {
     return { qualidade: 'HD', fonte: 'fallback' };
   }
 
-  // ═══════════════════════════════════════════════════════════════
-  // DETECÇÃO DE SEÇÕES — sem assumir ordem, coleta TODAS as posições
-  // ═══════════════════════════════════════════════════════════════
-
+  // Classifica um cabeçalho de seção como DUAL, LEGENDADO ou OUTRO.
   detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
     const t = normalizarTexto(text).trim();
 
@@ -445,8 +450,7 @@ export class WordPressScraper {
     return 'OUTRO';
   }
 
-  // Nova API: devolve lista de seções com [start, end). Cada cabeçalho inicia uma seção;
-  // o próximo cabeçalho (de qualquer tipo) encerra a anterior.
+  // Lista de seções [start, end). Cada cabeçalho inicia uma seção.
   findSections($: any, content: string): Secao[] {
     const selectors = ['strong', 'b'];
     const cabecalhos: Array<{ tipo: 'DUAL' | 'LEGENDADO'; pos: number }> = [];
@@ -483,7 +487,7 @@ export class WordPressScraper {
     return secoes;
   }
 
-  // Compat: devolve os boundaries no formato antigo (para quem ainda chama)
+  // Boundaries no formato antigo.
   findSectionBoundaries($: any, content: string): { dualIndex: number | null; legendadoIndex: number | null } {
     const secoes = this.findSections($, content);
     return {
@@ -492,17 +496,12 @@ export class WordPressScraper {
     };
   }
 
-  // Dado uma posição, devolve a seção que a contém. Se cair antes da primeira seção, devolve null.
   private secaoDaPosicao(pos: number, secoes: Secao[]): Secao | null {
     for (const s of secoes) {
       if (pos >= s.start && pos < s.end) return s;
     }
     return null;
   }
-
-  // ═══════════════════════════════════════════════════════════════
-  // SCRAPE DO POST
-  // ═══════════════════════════════════════════════════════════════
 
   async scrapePostApi(
     postId: number,
@@ -545,7 +544,7 @@ export class WordPressScraper {
     }
 
     const $ = cheerio.load(contentHtml);
-    const html = contentHtml;
+    const html = $.html();
 
     const infoBlock = this.extractInfoBlock($, html);
     const globalOriginalTitle = infoBlock.originalTitle || undefined;
@@ -560,13 +559,11 @@ export class WordPressScraper {
       ` | years=[${infoBlock.years?.join(',') ?? '-'}]`
     );
 
-    // ─── DETECÇÃO DE SEÇÕES ───────────────────────────────────────
     const secoes = this.findSections($, html);
 
     const resumo = secoes.map(s => `${s.tipo}[${s.start}-${s.end}]`).join(' ');
     logger.debug(`WP ${provider}: seções | ${resumo || '(nenhuma)'}`);
 
-    // Se só há seção LEGENDADO, descarta o post inteiro.
     const temDual = secoes.some(s => s.tipo === 'DUAL');
     const temLegendado = secoes.some(s => s.tipo === 'LEGENDADO');
     if (!temDual && temLegendado) {
@@ -574,11 +571,8 @@ export class WordPressScraper {
       return [];
     }
 
-    // ─── COLETA DE MAGNETS POR SEÇÃO ──────────────────────────────
-
     const secoesValidas = secoes.filter(s => s.tipo === 'DUAL');
     if (secoesValidas.length === 0) {
-      // Sem seções declaradas — aceita todos os magnets (fallback)
       const todos = $('a[href^="magnet:"]').toArray() as any[];
       logger.debug(`WP ${provider}: sem seções — processando ${todos.length} magnets`);
       const results = await this.processarMagnets(todos, $, html, titleRendered, provider, type, globalOriginalTitle, year, years);
@@ -587,15 +581,20 @@ export class WordPressScraper {
       return results;
     }
 
-    // Coleta magnets que caem dentro de alguma seção DUAL
     const magnetElements = $('a[href^="magnet:"]').toArray() as any[];
     const magnetsPorSecao: Record<string, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
     const magnetsValidos: any[] = [];
 
     for (const el of magnetElements) {
       const pos = html.indexOf($(el).toString());
-      const secao = pos === -1 ? null : this.secaoDaPosicao(pos, secoes);
 
+      if (pos === -1) {
+        logger.warn(`WP ${provider}: magnet não localizado no HTML (serialização divergiu)`);
+        magnetsPorSecao.NONE++;
+        continue;
+      }
+
+      const secao = this.secaoDaPosicao(pos, secoes);
       if (!secao) {
         magnetsPorSecao.NONE++;
         continue;
@@ -617,7 +616,7 @@ export class WordPressScraper {
     return results;
   }
 
-  // Processa um array de elementos <a href="magnet:">, devolvendo TorrentResult[].
+  // Processa <a href="magnet:"> e devolve TorrentResult[].
   private async processarMagnets(
     elements: any[],
     $: any,
@@ -909,7 +908,7 @@ export class WordPressScraper {
     return null;
   }
 
-  // Wrapper sobre extrairRangeEpisodios — mantém a assinatura antiga (só o número).
+  // Wrapper sobre extrairRangeEpisodios — devolve só o número do episódio.
   extractEpisodeFromText(text: string): number | undefined {
     if (!text) return undefined;
     const range = extrairRangeEpisodios(text);

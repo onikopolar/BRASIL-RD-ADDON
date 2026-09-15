@@ -79,7 +79,6 @@ export class CatalogProvider {
     this.startCacheCleanup();
   }
 
-  //Limpa o cache de streams em intervalo fixo — o cache TMDB agora é do ImdbScraperService
   private startCacheCleanup(): void {
     if (this.cleanupTimer) return;
     this.cleanupTimer = setInterval(() => {
@@ -122,7 +121,6 @@ export class CatalogProvider {
     map.set(key, { data, timestamp: Date.now() });
   }
 
-  //Delega o cache inteiro pro ImdbScraperService (memória + banco) — sem camada extra aqui
   async getTmdbSearchData(imdbId: string, season?: number): Promise<TmdbSearchData> {
     let imdbTitles: ImdbTitles | null = null;
     let searchTitle = '';
@@ -208,7 +206,6 @@ export class CatalogProvider {
       return [];
     }
 
-    //Log objetivo do episodeTitles — valida que os nomes PT/EN chegaram antes do scraping
     if (finalSeason !== undefined && tmdb.imdbTitles?.episodeTitles) {
       const lista = tmdb.imdbTitles.episodeTitles;
       const statusEp = lista.length === 0 ? 'VAZIO' : `${lista.length} eps`;
@@ -230,10 +227,10 @@ export class CatalogProvider {
       searchQuery, type, finalSeason, tmdb.seasonYear ?? undefined, imdbId || undefined
     );
 
-    this.logarTorrents('PÓS-SCRAPER', torrentResults);
+    this.logarResumo('PÓS-SCRAPER', torrentResults);
 
     await this.enrichTorrentsWithMagnetData(torrentResults);
-    this.logarTorrents('PÓS-ENRICH', torrentResults);
+    this.logarResumo('PÓS-ENRICH', torrentResults);
 
     const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
 
@@ -272,13 +269,23 @@ export class CatalogProvider {
     return this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
   }
 
-  private logarTorrents(prefixo: string, torrents: ScrapedTorrent[]): void {
-    this.logger.debug(`${prefixo} | total=${torrents.length}`);
-    for (const t of torrents) {
-      const hash = t.infoHash ? t.infoHash.substring(0, 12) : 'SEM-HASH';
-      const titulo = (t.title || t.canonicalName || '').substring(0, 55);
-      this.logger.debug(`${prefixo} | ${t.provider} | ${hash} | ${titulo}`);
+  // Log agregado: 1 linha por provider com contagem + hash de exemplo. Substitui N linhas por torrent.
+  private logarResumo(prefixo: string, torrents: ScrapedTorrent[]): void {
+    if (torrents.length === 0) {
+      this.logger.debug(`${prefixo} | total=0`);
+      return;
     }
+
+    const porProvider = new Map<string, number>();
+    for (const t of torrents) {
+      porProvider.set(t.provider, (porProvider.get(t.provider) || 0) + 1);
+    }
+
+    const resumo = [...porProvider.entries()]
+      .map(([p, n]) => `${p}=${n}`)
+      .join(', ');
+
+    this.logger.debug(`${prefixo} | total=${torrents.length} | ${resumo}`);
   }
 
   private extractEpisodeNumber(title: string): number | null {
@@ -290,44 +297,39 @@ export class CatalogProvider {
     const needData = torrents.filter(t => !t.infoHash || !t.canonicalName);
     if (needData.length === 0) return;
 
-    this.logger.debug('ENRICH_START', {
-      total: torrents.length,
-      precisam: needData.length,
-    });
-
     const results = await Promise.all(needData.map(t => analisarMagnet(t.magnet).catch(() => null)));
+
+    let atualizados = 0;
     needData.forEach((t, i) => {
       const r = results[i];
-      const antesHash = t.infoHash ? 'sim' : 'nao';
-      const antesNome = t.canonicalName ? 'sim' : 'nao';
       if (r?.nome) t.canonicalName = r.nome;
       if (r?.infoHash) t.infoHash = r.infoHash.toLowerCase();
-      const depoisHash = t.infoHash ? 'sim' : 'nao';
-      const depoisNome = t.canonicalName ? 'sim' : 'nao';
-      this.logger.debug(`ENRICH_ITEM | ${t.provider} | hash ${antesHash}->${depoisHash} | nome ${antesNome}->${depoisNome} | ${(t.title || '').substring(0, 45)}`);
+      if (r?.nome || r?.infoHash) atualizados++;
     });
+
+    this.logger.debug(`ENRICH | precisavam=${needData.length} atualizados=${atualizados} total=${torrents.length}`);
   }
 
   private async deduplicateTorrentsByMagnet(torrents: ScrapedTorrent[]): Promise<ScrapedTorrent[]> {
     const seen = new Set<string>();
     const unique: ScrapedTorrent[] = [];
+    let removidos = 0;
 
     for (const t of torrents) {
       const hash = t.infoHash;
       const chave = hash ? hash.toLowerCase() : (t.title || t.canonicalName || '').toLowerCase().trim();
-      const tipoChave = hash ? 'hash' : 'titulo';
-      const status = seen.has(chave) ? 'REMOVIDO' : 'ACEITO';
-      this.logger.debug(`DEDUP_${status} | ${t.provider} | chave=${tipoChave}:${chave.substring(0, 12)} | ${(t.title || '').substring(0, 45)}`);
-      if (seen.has(chave)) continue;
+      if (seen.has(chave)) {
+        removidos++;
+        continue;
+      }
       seen.add(chave);
       unique.push(t);
     }
 
-    this.logger.debug('DEDUP_RESULT', { entrada: torrents.length, saida: unique.length });
+    this.logger.debug(`DEDUP | entrada=${torrents.length} saida=${unique.length} removidos=${removidos}`);
     return unique;
   }
 
-  //Escolhe o título que vai pra validação. Se originalTitle não tem conteúdo latino útil (japonês, coreano), usa title
   private escolherTituloParaValidar(original: string | undefined, title: string | undefined): string {
     if (original && normalizarTexto(original).length > 0) return original;
     return title || '';
@@ -349,8 +351,6 @@ export class CatalogProvider {
       naoLegendado.map(async (t) => {
         const tituloParaValidar = this.escolherTituloParaValidar(t.originalTitle, t.title);
         const tituloParaIdioma = t.title || t.originalTitle || '';
-        this.logger.debug(`TITULO_ESCOLHIDO | validar="${tituloParaValidar.substring(0, 50)}" | original="${(t.originalTitle || '').substring(0, 30)}" | title="${(t.title || '').substring(0, 30)}"`);
-        this.logger.debug(`🔍 Validando: "${tituloParaValidar.substring(0, 50)}" | alvo S${season ?? '?'}E${episode ?? '?'}`);
 
         const result = await this.titleFilter.titulosCombinam(
           tituloParaValidar,
@@ -591,7 +591,6 @@ export class CatalogProvider {
     return m ? m[1] : null;
   }
 
-  //Limpa o cache TMDB — delega pro ImdbScraperService, que é o dono agora
   clearTmdbCache(): void {
     ImdbScraperService.clearGlobalCache();
   }

@@ -7,9 +7,12 @@ import {
   normalizarTexto,
   isCollectionTitle,
   temporadaAlvoNoRange,
+  calcularTokensRuido,
+  limparPorRaridade,
   EpisodeRange,
 } from '../../titulos/TechnicalWords.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
+import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const logger = new Logger('HdrScraper');
 
@@ -41,6 +44,9 @@ const axiosConfig = {
     'Accept-Language': 'pt-BR,pt;q=0.9',
   },
 };
+
+// Instância única do SimilarityCalculator — mesma régua do TitleFilter.
+const similarity = SimilarityCalculator.getInstance();
 
 export function detectSeasonRange(text: string): EpisodeRange | null {
   const range = extrairRangeEpisodios(text);
@@ -283,9 +289,7 @@ function classificarSecao(texto: string): 'DUAL' | 'LEGENDADO' | 'NONE' {
   const temDublado = /\bdublado\b|\bdublada\b|\bdublagem\b|\bnacional\b/.test(t);
   const temLegendado = /\blegendado\b|\blegendada\b/.test(t);
 
-  // Legendado puro vence.
   if (temLegendado && !temDual && !temDublado) return 'LEGENDADO';
-  // DUAL/Dublado puro vence.
   if ((temDual || temDublado) && !temLegendado) return 'DUAL';
   return 'NONE';
 }
@@ -295,9 +299,7 @@ interface SearchResultItem {
   postUrl: string;
 }
 
-// Extrai o título "limpo" de um <a> de resultado, cobrindo:
-//  - layout novo (media-card): meta[itemprop="name"] > .media-card-title > title
-//  - layout antigo: texto direto do link
+// Extrai o título "limpo" de um <a> de resultado.
 function extrairTituloDoLink($: any, el: any): string {
   const metaName = $(el).find('meta[itemprop="name"]').attr('content');
   if (metaName && metaName.trim()) return metaName.trim();
@@ -367,7 +369,6 @@ export async function extractMagnetsFromPost(
 
   const metadata = extractHdrMetadata($);
 
-  // Detecta cabeçalhos de seção (DUAL/LEGENDADO) por posição no HTML.
   const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
   $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
     const texto = $(el).text().trim();
@@ -472,7 +473,6 @@ export async function extractMagnetsFromPost(
 
       const episode = episodeStart;
 
-      // Qualidade/tamanho: prioriza o que veio junto do link; se faltar, usa o bloco de specs da página inteira.
       const qualityMatch = raw.qualityMatch || metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
       const sizeMatch = raw.sizeMatch || metadata.size?.trim();
 
@@ -486,7 +486,6 @@ export async function extractMagnetsFromPost(
         ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
         : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
 
-      // Passa o containerText limpo como htmlTitle — o StreamFormatter anexa como sufixo entre parênteses.
       const htmlTitleLimpo = raw.containerText
         .replace(/MAGNET LINK/gi, '')
         .replace(/\s+/g, ' ')
@@ -519,7 +518,6 @@ export async function extractMagnetsFromPost(
 }
 
 // Busca um único post do HDR: faz o GET, valida IMDb (se aplicável) e extrai os magnets.
-// Retorna sempre — erro vira lista vazia — para não derrubar o Promise.all.
 async function processarPostHdr(
   item: SearchResultItem,
   imdbId: string | undefined,
@@ -561,8 +559,6 @@ export async function searchHdr(
 
   const queriesBase = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
 
-  // Queries = apenas o que veio de fora (nome base + nome com ano).
-  // Sem variantes "4k" — HDR não indexa 4k como termo próprio e multiplicava buscas sem retorno.
   const queriesParaBusca: string[] = [];
   for (const q of queriesBase) {
     if (!queriesParaBusca.includes(q)) queriesParaBusca.push(q);
@@ -583,10 +579,6 @@ export async function searchHdr(
 
   const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
 
-  const baseTitles = frasesValidas
-    .map(frase => normalizarTexto(frase.replace(/\b\d+\b/g, ' ').trim()))
-    .filter(Boolean);
-
   try {
     const allResults: HdrTorrent[] = [];
     const seenInfoHashes = new Set<string>();
@@ -599,15 +591,29 @@ export async function searchHdr(
         continue;
       }
 
+      // Limpa ruído do site (tokens frequentes) antes do pré-filtro.
+      const tokensRuido = calcularTokensRuido(links.map(l => l.title));
+
       const filtrados = links.filter(link => {
-        const tituloNorm = normalizarTexto(link.title);
-        const contemFrase = frasesValidas.some(frase => tituloNorm.includes(frase));
-        const isCollection = isCollectionTitle(tituloNorm) &&
-          baseTitles.some(base => tituloNorm.includes(base));
-        return contemFrase || isCollection;
+        const tituloLimpo = limparPorRaridade(link.title, tokensRuido);
+        const resultado = similarity.compararComTitulos(frasesValidas, tituloLimpo);
+        const isCollection = isCollectionTitle(link.title);
+
+        if (!resultado.match && !isCollection) return false;
+
+        if (!resultado.match && isCollection) {
+          logger.debug(`HDR: coleção aceita por pré-filtro: "${link.title.substring(0, 60)}"`);
+        }
+
+        if (resultado.match) {
+          logger.debug(
+            `HDR: post aceito (${resultado.nivel} score=${resultado.score.toFixed(2)}): "${link.title.substring(0, 60)}"`
+          );
+        }
+
+        return true;
       });
 
-      // Se a query base não achou nada relevante, HDR não tem o título — encerra.
       if (filtrados.length === 0) {
         logger.debug(`HDR: "${q}" → ${links.length} links, 0 relevantes — encerrando`);
         break;
@@ -615,8 +621,6 @@ export async function searchHdr(
 
       logger.debug(`HDR: "${q}" → ${links.length} links, ${filtrados.length} relevantes`);
 
-      // Busca todos os posts em paralelo — cada um é independente (GET + parse + analisarMagnet).
-      // A dedup por infoHash roda depois, em série, sobre o resultado agregado.
       const respostas = await Promise.all(
         filtrados.map(item => processarPostHdr(item, imdbId, targetSeason))
       );

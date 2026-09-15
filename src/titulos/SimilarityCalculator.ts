@@ -2,10 +2,10 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { normalizarTexto, isCollectionTitle } from './TechnicalWords.js';
+import { normalizarTexto, isCollectionTitle, extrairNumeroParte } from './TechnicalWords.js';
 import { CacheService } from '../debrid/CacheService.js';
 
-interface ScoreDetalhes {
+export interface ScoreDetalhes {
   nivel: 'N1' | 'N2' | 'N3' | 'N4' | 'N5';
   descricao: string;
   score: number;
@@ -18,9 +18,17 @@ interface ScoreDetalhes {
   ordemOk: boolean;
 }
 
-interface TokensComAno {
+export interface TokensComAno {
   tokens: string[];
   ano: number | null;
+}
+
+export interface ResultadoComparacao {
+  match: boolean;
+  score: number;
+  nivel: 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'vazio' | 'nenhum';
+  tituloVencedor?: string;
+  detalhes?: ScoreDetalhes;
 }
 
 export class SimilarityCalculator {
@@ -38,13 +46,11 @@ export class SimilarityCalculator {
   private readonly FUZZY_TTL = 30 * 60 * 1000;
   private readonly TMDB_TTL = 10 * 60 * 1000;
 
-  // Tokens que podem sobrar no torrent sem indicar título diferente (técnicos)
-  // Coloquei essa regex aqui pra não travar N1 em torrents tipo "superman 1080p dual"
-  // Ano saiu daqui porque agora é tratado em passo próprio (extrairTokensAno)
-  private readonly EXTRAS_LEGITIMOS = /^(1080p|720p|480p|2160p|1440p|4k|x264|x265|h264|h265|hevc|dual|dublado|legendado|bluray|webrip|webdl|brrip|hdrip|dvdrip|remux)$/;
+  public static readonly THRESHOLD_PRE_FILTRO = 0.5;
+  public static readonly THRESHOLD_FINAL = 0.80;
 
-  // Regex do que conta como ano válido pra extrair do título
-  private readonly REGEX_ANO = /^(19|20)\d{2}$/;
+  public readonly EXTRAS_LEGITIMOS = /^(1080p|720p|480p|2160p|1440p|4k|x264|x265|h264|h265|hevc|dual|dublado|legendado|bluray|webrip|webdl|brrip|hdrip|dvdrip|remux)$/;
+  public readonly REGEX_ANO = /^(19|20)\d{2}$/;
 
   private static instance: SimilarityCalculator;
 
@@ -60,18 +66,60 @@ export class SimilarityCalculator {
     this.tmdbScraper = useTmdbScraper ? ImdbScraperService.getInstance() : null;
     this.languageDetector = LanguageDetector.getInstance();
 
-    this.resultCache = new CacheService();
-    this.tokenCache = new CacheService();
-    this.fuzzyCache = new CacheService();
-    this.tmdbLocalCache = new CacheService();
+    this.resultCache = new CacheService({ name: 'sim:result' });
+    this.tokenCache = new CacheService({ name: 'sim:token' });
+    this.fuzzyCache = new CacheService({ name: 'sim:fuzzy' });
+    this.tmdbLocalCache = new CacheService({ name: 'sim:tmdb' });
   }
 
-  //  API PÚBLICA
+  //  API PÚBLICA — PRÉ-FILTRO
+
+  compararComTitulos(
+    titulosTmdb: string[],
+    tituloCandidato: string,
+    threshold: number = SimilarityCalculator.THRESHOLD_PRE_FILTRO
+  ): ResultadoComparacao {
+    const { tokens: tokensCandidato } = this.tokensAnoCache(tituloCandidato);
+    if (tokensCandidato.length === 0) {
+      return { match: false, score: 0, nivel: 'vazio' };
+    }
+
+    let melhor: ScoreDetalhes | null = null;
+    let melhorTitulo = '';
+
+    for (const titulo of titulosTmdb) {
+      const { tokens: tokensTmdb } = this.tokensAnoCache(titulo);
+      if (tokensTmdb.length === 0) continue;
+
+      const detalhes = this.calcularScore(tokensTmdb, tokensCandidato);
+      if (!melhor || detalhes.score > melhor.score) {
+        melhor = detalhes;
+        melhorTitulo = titulo;
+      }
+    }
+
+    if (!melhor) {
+      return { match: false, score: 0, nivel: 'nenhum' };
+    }
+
+    return {
+      match: melhor.score >= threshold,
+      score: melhor.score,
+      nivel: melhor.nivel,
+      tituloVencedor: melhorTitulo,
+      detalhes: melhor,
+    };
+  }
+
+  pontuarTokens(tmdbTokens: string[], candidatoTokens: string[]): ScoreDetalhes {
+    return this.calcularScore(tmdbTokens, candidatoTokens);
+  }
+
+  //  API PÚBLICA — FLUXO PRINCIPAL
 
   async smartTitleContainsCheck(
     torrentTitle: string,
     imdbId: string,
-    // Mexi aqui pra receber years[] do TitleFilter, que sabe quando o torrent é coleção com faixa de anos
     _torrentMetadata?: { year?: number; season?: number; years?: number[] },
     rawTitleForLanguage?: string,
     preFetchedTmdbData?: ImdbTitles | null
@@ -82,7 +130,7 @@ export class SimilarityCalculator {
 
     const cached = this.resultCache.get<SmartTitleMatch>(resultKey);
     if (cached) {
-      this.logger.debug(`Cache hit | "${torrentTitle.substring(0, 50)}"`);
+      this.logger.debug(`cache hit | "${torrentTitle.substring(0, 50)}"`);
       return cached;
     }
 
@@ -104,7 +152,6 @@ export class SimilarityCalculator {
       return result;
     }
 
-    // Mexi aqui pra extrair tokens e ano de uma vez só, tirando o ano da comparação textual
     const { tokens: torrentTokens, ano: anoTorrentExtraido } = this.tokensAnoCache(torrentTitle);
     if (torrentTokens.length === 0) {
       return { matches: false, similarity: 0, reason: 'Título vazio' };
@@ -114,12 +161,8 @@ export class SimilarityCalculator {
     const years = _torrentMetadata?.years;
     const isCollection = isCollectionTitle(torrentTitle);
 
-    // Mexi aqui pro gate respeitar o range de anos quando o scraper declara uma coleção
-    // Sem isso, "Ice Age" com years=[2002,2012] e IMDb=2006 era rejeitado por anoTorrent=2002
     const dentroDoRangeAnos = this.imdbDentroDoRangeAnos(years, movieInfo.year);
 
-    // Mexi aqui pra ano ser gate duro e não mais bônus/penalidade no fim
-    // Coleções explícitas e ranges válidos escapam do gate
     if (!isCollection && !dentroDoRangeAnos && anoTorrent !== null && movieInfo.year !== undefined) {
       const diverge = Math.abs(anoTorrent - movieInfo.year) > 1;
       if (diverge) {
@@ -130,14 +173,12 @@ export class SimilarityCalculator {
           mediaType: movieInfo.mediaType,
         };
         this.resultCache.set(resultKey, result, this.RESULT_TTL);
-        this.logger.debug(`GATE_ANO | torrent="${torrentTitle.substring(0, 50)}" | anoTorrent=${anoTorrent} | anoImdb=${movieInfo.year} | years=${years?.join(',') ?? '-'} → REJEITADO`);
+        this.logger.debug(
+          `GATE_ANO rejeitado | "${torrentTitle.substring(0, 50)}" | ` +
+          `torrent=${anoTorrent} imdb=${movieInfo.year} years=[${years?.join(',') ?? '-'}]`
+        );
         return result;
       }
-    }
-
-    // Mexi aqui pra logar quando o gate foi bypassado por range de coleção
-    if (dentroDoRangeAnos && !isCollection) {
-      this.logger.debug(`GATE_ANO_BYPASS | torrent="${torrentTitle.substring(0, 50)}" | years=[${years?.join(',')}] | anoImdb=${movieInfo.year} → dentro do range`);
     }
 
     const titulosValidos = movieInfo.allTitles.filter(t => t && t.trim().length > 0);
@@ -149,7 +190,6 @@ export class SimilarityCalculator {
     let melhorTitulo = '';
 
     for (const titulo of titulosValidos) {
-      // Título do TMDB passa pelo mesmo destilador, senão "1917" seria tratado como vazio
       const { tokens: tmdbTokens } = this.tokensAnoCache(titulo);
       if (tmdbTokens.length === 0) continue;
 
@@ -176,9 +216,7 @@ export class SimilarityCalculator {
       return result;
     }
 
-    // Mexi aqui pra decisão final ficar limpa: só score textual, sem bônus de ano
-    // Ano já foi usado como gate duro antes; se chegou aqui, é porque passou
-    const THRESHOLD = 0.80;
+    const THRESHOLD = SimilarityCalculator.THRESHOLD_FINAL;
     const matches = melhor.score >= THRESHOLD;
     const motivo = matches
       ? `score ${melhor.score.toFixed(2)} ≥ ${THRESHOLD}`
@@ -197,23 +235,33 @@ export class SimilarityCalculator {
     return result;
   }
 
-  // Mexi aqui pra centralizar a regra de "IMDb dentro do range de anos declarado pelo torrent"
-  // Ranges (2+ anos) usam min/max; ano único usa tolerância ±1
-  private imdbDentroDoRangeAnos(years: number[] | undefined, anoImdb: number | undefined): boolean {
-    if (!years || years.length === 0 || anoImdb === undefined) return false;
+  //  API PÚBLICA — SIMILARIDADE DE TOKENS
 
-    if (years.length > 1) {
-      const minYear = Math.min(...years);
-      const maxYear = Math.max(...years);
-      return anoImdb >= minYear && anoImdb <= maxYear;
+  jaccardSimilarity(tokensA: string[], tokensB: string[]): number {
+    if (tokensA.length === 0 && tokensB.length === 0) return 0;
+    const setA = new Set(tokensA);
+    const setB = new Set(tokensB);
+
+    let intersecao = 0;
+    for (const t of setA) {
+      if (setB.has(t)) intersecao++;
     }
-
-    return Math.abs(years[0] - anoImdb) <= 1;
+    const uniao = setA.size + setB.size - intersecao;
+    return uniao > 0 ? intersecao / uniao : 0;
   }
 
-  //  OBTENÇÃO DE DADOS TMDB
+  tokensContidos(sub: string[], sup: string[]): boolean {
+    if (sub.length === 0) return false;
+    const setSup = new Set(sup);
+    for (const t of sub) {
+      if (!setSup.has(t)) return false;
+    }
+    return true;
+  }
 
-  private async obterMovieInfo(
+  //  API PÚBLICA — TMDB
+
+  async obterMovieInfo(
     imdbId: string,
     season: number,
     preFetched?: ImdbTitles | null
@@ -269,18 +317,23 @@ export class SimilarityCalculator {
 
   //  NÚCLEO DE SIMILARIDADE — 5 NÍVEIS EM CASCATA
 
-  /**
-   * N1: TMDB ⊂ torrent (consecutivo)  → 1.00
-   * N2: torrent ⊂ TMDB (consecutivo)  → 0.95
-   * N3: TMDB ⊂ torrent (subsequência) → 0.90
-   * N4: torrent ⊂ TMDB (subsequência) → 0.85
-   * N5: F1 com fuzzy                  → 0.00–0.84
-   */
-  private calcularScore(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
-    // Guarda nova: TMDB curto + torrent com extras não-técnicos cai direto pro F1
-    // Sem isso, "superman" dava 1.0 contra "superman and lois" (bug do falso positivo)
+  calcularScore(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
+    // Guarda: se ambos declaram número de parte e diferem, rejeita direto sem fuzzy.
+    const parteTmdb = extrairNumeroParte(tmdbTokens.join(' '));
+    const parteTorrent = extrairNumeroParte(torrentTokens.join(' '));
+    if (parteTmdb !== null && parteTorrent !== null && parteTmdb !== parteTorrent) {
+      return this.montarDetalhes(
+        'N5',
+        `Parte divergente: ${parteTorrent} vs ${parteTmdb}`,
+        0,
+        tmdbTokens,
+        torrentTokens,
+        [],
+        []
+      );
+    }
+
     if (this.matchCurtoSuspeito(tmdbTokens, torrentTokens)) {
-      this.logger.debug(`GUARDA_MATCH_CURTO | tmdb=[${tmdbTokens.join(' ')}] torrent=[${torrentTokens.join(' ')}] → F1`);
       return this.calcularF1(tmdbTokens, torrentTokens);
     }
 
@@ -303,43 +356,26 @@ export class SimilarityCalculator {
     return this.calcularF1(tmdbTokens, torrentTokens);
   }
 
-  /**
-   * Detecta match estruturalmente suspeito: TMDB com 1 token só e torrent com
-   * 2+ tokens extras que NÃO são metadado técnico.
-   *
-   * "superman" vs "superman and lois"    → suspeito (3t) → F1
-   * "superman" vs "superman returns"     → 2 tokens, N1 resolve (o gate de ano cuida do resto)
-   * "ghosts"   vs "city of ghosts"       → suspeito (3t) → F1
-   * "ragnarok" vs "gaten ragnarok"       → 2 tokens, N1 resolve (artigo, mesmo título)
-   * "superman" vs "superman 1080p"       → ok → N1
-   *
-   * Mexi aqui porque exigir 2+ extras evita rejeitar títulos com artigo/variação
-   * ("gaten" de "gåten ragnarok", "the" de "the matrix") — casos onde o único
-   * extra não muda o significado.
-   */
-  private matchCurtoSuspeito(tmdbTokens: string[], torrentTokens: string[]): boolean {
+  matchCurtoSuspeito(tmdbTokens: string[], torrentTokens: string[]): boolean {
     if (tmdbTokens.length !== 1) return false;
-    // Precisa de 3+ tokens no torrent (TMDB + 2 extras). Com 2 tokens é só
-    // "título + artigo/versão", que o N1 resolve corretamente.
     if (torrentTokens.length < 3) return false;
 
     const tokenTmdb = tmdbTokens[0];
     const extras = torrentTokens.filter(t => t !== tokenTmdb);
     if (extras.length < 2) return false;
 
-    // Se todos os extras são legítimos (técnicos), não é suspeito
     const todosLegitimos = extras.every(t => this.EXTRAS_LEGITIMOS.test(t));
     return !todosLegitimos;
   }
 
-  private montarDetalhes(
+  montarDetalhes(
     nivel: ScoreDetalhes['nivel'],
     descricao: string,
     score: number,
     tmdbTokens: string[],
     torrentTokens: string[],
     matchedSet: string[],
-    unmatchedSet: string[]
+    _unmatchedSet: string[]
   ): ScoreDetalhes {
     const matchedTmdb = nivel === 'N1' || nivel === 'N3' ? tmdbTokens : [];
     const matchedTorrent = nivel === 'N2' || nivel === 'N4' ? torrentTokens : [];
@@ -361,7 +397,7 @@ export class SimilarityCalculator {
     };
   }
 
-  private contemConsecutivo(haystack: string[], needle: string[]): boolean {
+  contemConsecutivo(haystack: string[], needle: string[]): boolean {
     if (needle.length === 0 || needle.length > haystack.length) return false;
     for (let i = 0; i <= haystack.length - needle.length; i++) {
       let ok = true;
@@ -376,7 +412,7 @@ export class SimilarityCalculator {
     return false;
   }
 
-  private contemSubsequencia(haystack: string[], needle: string[]): boolean {
+  contemSubsequencia(haystack: string[], needle: string[]): boolean {
     if (needle.length === 0) return false;
     let j = 0;
     for (let i = 0; i < haystack.length && j < needle.length; i++) {
@@ -385,7 +421,7 @@ export class SimilarityCalculator {
     return j === needle.length;
   }
 
-  private calcularF1(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
+  calcularF1(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
     const matchedTmdb: string[] = [];
     const matchedTorrent: string[] = [];
     const unmatchedTmdb: string[] = [];
@@ -451,16 +487,7 @@ export class SimilarityCalculator {
 
   //  TOKENIZAÇÃO COM EXTRAÇÃO DE ANO
 
-  /**
-   * Extrai tokens e ano separadamente.
-   * Ano sai dos tokens textuais pra não poluir a comparação (N1–N5).
-   *
-   * "superman 1978"       → { tokens: [superman], ano: 1978 }
-   * "1917 2019"           → { tokens: [1917],    ano: 2019 }
-   * "1917"                → { tokens: [1917],    ano: null }   (título é o próprio número)
-   * "superman"            → { tokens: [superman], ano: null }
-   */
-  private extrairTokensAno(texto: string): TokensComAno {
+  extrairTokensAno(texto: string): TokensComAno {
     const todos = normalizarTexto(texto).split(' ').filter(w => w.length > 0);
     const semAno: string[] = [];
     const anos: number[] = [];
@@ -473,7 +500,6 @@ export class SimilarityCalculator {
       }
     }
 
-    // Fallback: título é só um número tipo "1917" ou "2012" — trata como nome
     if (semAno.length === 0 && todos.length > 0) {
       return { tokens: todos, ano: null };
     }
@@ -481,7 +507,7 @@ export class SimilarityCalculator {
     return { tokens: semAno, ano: anos.length > 0 ? anos[0] : null };
   }
 
-  private tokensAnoCache(texto: string): TokensComAno {
+  tokensAnoCache(texto: string): TokensComAno {
     const key = `tokano|${texto}`;
     const cached = this.tokenCache.get<TokensComAno>(key);
     if (cached) return cached;
@@ -493,7 +519,7 @@ export class SimilarityCalculator {
 
   //  FUZZY
 
-  private fuzzyRatioCache(a: string, b: string): number {
+  fuzzyRatioCache(a: string, b: string): number {
     const [x, y] = a < b ? [a, b] : [b, a];
     const key = `fz|${x}|${y}`;
     const cached = this.fuzzyCache.get<number>(key);
@@ -504,7 +530,7 @@ export class SimilarityCalculator {
     return ratio;
   }
 
-  private fuzzyRatio(a: string, b: string): number {
+  fuzzyRatio(a: string, b: string): number {
     if (a === b) return 1;
     const maxLen = Math.max(a.length, b.length);
     if (maxLen === 0) return 1;
@@ -512,7 +538,7 @@ export class SimilarityCalculator {
     return 1 - dist / maxLen;
   }
 
-  private levenshtein(a: string, b: string): number {
+  levenshtein(a: string, b: string): number {
     const m = a.length;
     const n = b.length;
     if (m === 0) return n;
@@ -537,9 +563,23 @@ export class SimilarityCalculator {
     return prev[n];
   }
 
+  //  GATE DE ANO
+
+  imdbDentroDoRangeAnos(years: number[] | undefined, anoImdb: number | undefined): boolean {
+    if (!years || years.length === 0 || anoImdb === undefined) return false;
+
+    if (years.length > 1) {
+      const minYear = Math.min(...years);
+      const maxYear = Math.max(...years);
+      return anoImdb >= minYear && anoImdb <= maxYear;
+    }
+
+    return Math.abs(years[0] - anoImdb) <= 1;
+  }
+
   //  LOGS OBJETIVOS
 
-  private logarResultado(
+  logarResultado(
     torrentTitle: string,
     tmdbTitle: string,
     detalhes: ScoreDetalhes,

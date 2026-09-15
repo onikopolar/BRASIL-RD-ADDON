@@ -7,7 +7,8 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -60,8 +61,7 @@ const AXIOS_OPTS = {
 
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
 
-// Seção contígua do HTML — [start, end). Cada header abre uma seção que vai
-// até o próximo header (ou até o fim do conteúdo).
+// Seção contígua do HTML — [start, end).
 export type Section = {
   type: SectionType;
   start: number;
@@ -78,7 +78,7 @@ export type PostItem = { title: string; url: string };
 export type ProtectorLink = { url: string; secao: SectionType } & LinkContext;
 export type ExtractedMagnet = { magnet: string; link: LinkContext; secao: SectionType };
 
-export type FrasesBusca = { frases: Set<string>; baseTitles: string[] };
+export type FrasesBusca = { frases: Set<string> };
 
 export type PostMetadata = {
   quality?: string;
@@ -106,10 +106,12 @@ function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
 
 export class BludvScraper {
   public readonly qualityDetector: QualityDetector;
+  public readonly similarity: SimilarityCalculator;
   public readonly BATCH_SIZE = 5;
 
   constructor() {
     this.qualityDetector = new QualityDetector();
+    this.similarity = SimilarityCalculator.getInstance();
   }
 
   async search(
@@ -202,10 +204,19 @@ export class BludvScraper {
       items.push({ title: text, url: fullUrl });
     });
 
-    return items.filter(item => this.postRelevante(item, targetSeason, frasesBusca)).slice(0, 5);
+    const tokensRuido = calcularTokensRuido(items.map(i => i.title));
+
+    return items
+      .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido))
+      .slice(0, 5);
   }
 
-  postRelevante(item: PostItem, targetSeason: number | undefined, frasesBusca: FrasesBusca): boolean {
+  postRelevante(
+    item: PostItem,
+    targetSeason: number | undefined,
+    frasesBusca: FrasesBusca,
+    tokensRuido: Set<string>
+  ): boolean {
     const lowerTitle = item.title.toLowerCase();
 
     if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
@@ -220,14 +231,26 @@ export class BludvScraper {
       if (!temporadaAlvoNoRange(range, targetSeason)) return false;
     }
 
-    const titleNormalizado = normalizarTexto(item.title);
-    const match = [...frasesBusca.frases].some(frase => titleNormalizado.includes(frase));
-    const isCollection = isCollectionTitle(titleNormalizado) &&
-      frasesBusca.baseTitles.some(base => titleNormalizado.includes(base));
+    // Limpa ruído do site (tokens frequentes) antes do pré-filtro.
+    const tituloLimpo = limparPorRaridade(item.title, tokensRuido);
+    const resultado = this.similarity.compararComTitulos([...frasesBusca.frases], tituloLimpo);
+    const isCollection = isCollectionTitle(item.title);
 
-    if (!match && !isCollection) {
-      logger.debug(`[BLUDV] post ignorado (frase não encontrada): "${item.title.substring(0, 50)}"`);
+    if (!resultado.match && !isCollection) {
+      logger.debug(
+        `[BLUDV] post ignorado (score ${resultado.score.toFixed(2)} ${resultado.nivel}): "${item.title.substring(0, 50)}"`
+      );
       return false;
+    }
+
+    if (!resultado.match && isCollection) {
+      logger.debug(`[BLUDV] coleção aceita por pré-filtro: "${item.title.substring(0, 60)}"`);
+    }
+
+    if (resultado.match) {
+      logger.debug(
+        `[BLUDV] post aceito (${resultado.nivel} score=${resultado.score.toFixed(2)}): "${item.title.substring(0, 60)}"`
+      );
     }
 
     return true;
@@ -266,16 +289,12 @@ export class BludvScraper {
 
     const metadata = this.extractPostMetadata($);
 
-    // Monta as seções contíguas a partir dos headers. Cada header abre uma seção
-    // [start, end) que vai até o próximo header (ou até o fim do conteúdo).
     const sections = this.findSections($, contentHtml);
 
-    // Log objetivo: só o nome de cada seção e o range.
     logger.debug(
       `[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`
     );
 
-    // Se só existem seções LEGENDADO (nenhuma DUAL), descarta o post inteiro.
     const temDual = sections.some(s => s.type === 'DUAL');
     if (!temDual) {
       logger.debug('[BLUDV] post sem nenhuma seção DUAL — descartado');
@@ -285,7 +304,6 @@ export class BludvScraper {
     const directMagnets = this.extractDirectMagnets($, contentHtml, sections);
     const protectorLinks = this.extractProtectorLinks($, contentHtml, sections);
 
-    // Contagem por seção de origem — visibilidade de onde cada magnet caiu.
     const dirDual = directMagnets.filter(m => m.secao === 'DUAL').length;
     const proDual = protectorLinks.filter(l => l.secao === 'DUAL').length;
     logger.debug(
@@ -392,9 +410,6 @@ export class BludvScraper {
     return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
-  // Monta seções contíguas do HTML a partir dos headers DUAL/LEGENDADO.
-  // Cada header abre uma seção [start, end) que vai até o próximo header (ou fim).
-  // Conteúdo antes do primeiro header vira uma seção NONE.
   findSections($: any, contentHtml: string): Section[] {
     const strongEls = $('.content strong, .content b').toArray();
     const headers: { pos: number; type: 'DUAL' | 'LEGENDADO' }[] = [];
@@ -418,11 +433,9 @@ export class BludvScraper {
     const sections: Section[] = [];
 
     if (headers.length === 0) {
-      // Sem headers, todo o conteúdo é NONE.
       return [{ type: 'NONE', start: 0, end: contentLength }];
     }
 
-    // Conteúdo antes do primeiro header vira seção NONE.
     if (headers[0].pos > 0) {
       sections.push({ type: 'NONE', start: 0, end: headers[0].pos });
     }
@@ -436,8 +449,6 @@ export class BludvScraper {
     return sections;
   }
 
-  // Devolve a seção que contém a posição. Retorna null se a posição cai fora
-  // de todas as seções (não deveria acontecer, mas é defensivo).
   findSectionForPosition(pos: number, sections: Section[]): Section | null {
     for (const s of sections) {
       if (pos >= s.start && pos < s.end) return s;
@@ -461,20 +472,15 @@ export class BludvScraper {
     return 'NONE';
   }
 
-  // Extrai magnets diretos. Cada magnet é classificado pela sua PRÓPRIA posição
-  // no HTML, não pela posição do container — evita que o <center> externo
-  // (que envolve múltiplas seções) contamine a classificação.
   extractDirectMagnets($: any, contentHtml: string, sections: Section[]): ExtractedMagnet[] {
     const resultados: ExtractedMagnet[] = [];
     const stats: Record<SectionType, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
 
-    // Pré-calcula a posição de cada <center> para reaproveitar no spanText.
     const centerSpanCache = new Map<any, string>();
     for (const centerEl of $('center').toArray()) {
       centerSpanCache.set(centerEl, $(centerEl).find('span').first().text().trim());
     }
 
-    // Itera todos os <a href="magnet:"> dentro do conteúdo.
     const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
 
     for (const el of allMagnetAnchors) {
@@ -490,7 +496,6 @@ export class BludvScraper {
 
       if (secao !== 'DUAL') continue;
 
-      // Monta contexto. Se o <a> tem um <center> ancestral, usa o span dele.
       const $el = $(el);
       const closestCenter = $el.closest('center').get(0);
       const spanText = closestCenter ? (centerSpanCache.get(closestCenter) ?? '') : '';
@@ -507,7 +512,6 @@ export class BludvScraper {
       });
     }
 
-    // Log interno (uma linha) — quantos magnets de cada tipo foram vistos.
     logger.debug(
       `[BLUDV] magnets por seção | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`
     );
@@ -673,11 +677,7 @@ export class BludvScraper {
 
     logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
 
-    const baseTitles = [...frases].map(frase =>
-      normalizarTexto(frase.replace(/\b\d+\b/g, ' ').replace(/\s+/g, ' ').trim())
-    ).filter(Boolean);
-
-    return { frases, baseTitles };
+    return { frases };
   }
 
   extractTitleFromPostTitle(postTitle: string): string | null {

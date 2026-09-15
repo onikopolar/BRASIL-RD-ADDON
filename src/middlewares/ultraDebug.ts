@@ -1,31 +1,45 @@
 import { Request, Response, NextFunction } from 'express';
 import { Logger } from '../utils/logger.js';
 import crypto from 'crypto';
+import { extrairIp } from './clientInfo.js';
 
 const logger = new Logger('ULTRA-DEBUG');
+const manifestLogger = new Logger('MANIFEST-DEBUG');
+const configureLogger = new Logger('CONFIGURE-DEBUG');
 
-// Redacta API keys de URLs antes de logar
+const SKIP_PATHS = ['/health', '/metrics', '/favicon.ico', '/cache/status'];
+
+const SENSITIVE_KEY_PATTERNS = [
+  'apikey', 'api_key', 'token', 'authorization', 'password', 'secret', 'rd_key', 'torbox',
+];
+
+// Módulo: helpers puros, sem estado.
+
 function maskUrl(url: string): string {
   let masked = url.replace(/(\/torbox=)([a-f0-9-]{32,36})(\/|$)/gi, '$1***$3');
   masked = masked.replace(/([?&]token=)([^&\s]+)/gi, '$1***');
   return masked;
 }
 
-// Máscara valores sensíveis (API keys, tokens)
 function maskSensitive(obj: any, depth: number = 0): any {
   if (depth > 3) return '[MAX_DEPTH]';
+
   if (!obj || typeof obj !== 'object') {
     if (typeof obj === 'string' && obj.length > 30) {
       return obj.substring(0, 8) + '...' + obj.substring(obj.length - 8);
     }
     return obj;
   }
+
   if (Array.isArray(obj)) return obj.map((i: any) => maskSensitive(i, depth + 1));
+
   const masked: any = {};
   for (const [k, v] of Object.entries(obj)) {
     const keyLower = k.toLowerCase();
-    if (['apikey', 'api_key', 'token', 'authorization', 'password', 'secret', 'rd_key', 'torbox'].some(s => keyLower.includes(s))) {
-      masked[k] = typeof v === 'string' ? (v.substring(0, 4) + '***MASKED***' + v.substring(v.length - 4)) : '***MASKED***';
+    if (SENSITIVE_KEY_PATTERNS.some(s => keyLower.includes(s))) {
+      masked[k] = typeof v === 'string'
+        ? v.substring(0, 4) + '***MASKED***' + v.substring(v.length - 4)
+        : '***MASKED***';
     } else {
       masked[k] = maskSensitive(v, depth + 1);
     }
@@ -33,7 +47,6 @@ function maskSensitive(obj: any, depth: number = 0): any {
   return masked;
 }
 
-// Extrai preview de corpo de resposta (string ou objeto)
 function getBodyPreview(body: any): string {
   try {
     const str = typeof body === 'string' ? body : JSON.stringify(body);
@@ -43,7 +56,6 @@ function getBodyPreview(body: any): string {
   }
 }
 
-// Calcula tamanho do corpo de resposta
 function getBodySize(body: any): number {
   try {
     return typeof body === 'string' ? body.length : JSON.stringify(body).length;
@@ -52,8 +64,23 @@ function getBodySize(body: any): number {
   }
 }
 
-// Log centralizado para respostas JSON/SEND
-function logResponse(requestId: string, res: any, startTime: number, body: any, type: 'JSON' | 'SEND', shouldSkip: boolean): void {
+function shouldSkipPath(path: string): boolean {
+  return SKIP_PATHS.some(p => path === p || path.startsWith(p));
+}
+
+function generateRequestId(): string {
+  return crypto.randomUUID().substring(0, 8);
+}
+
+// Logger interno: aceita a linha e o campo extra, respeita o skip.
+function logResponse(
+  requestId: string,
+  res: any,
+  startTime: number,
+  body: any,
+  type: 'JSON' | 'SEND',
+  shouldSkip: boolean,
+): void {
   if (shouldSkip) return;
   const responseTime = Date.now() - startTime;
   const preview = maskUrl(getBodyPreview(body));
@@ -61,8 +88,16 @@ function logResponse(requestId: string, res: any, startTime: number, body: any, 
   logger.debug(`◀ RESPONSE #${requestId} ${res.statusCode} (${responseTime}ms) ${type}`, { size, preview });
 }
 
-function generateRequestId(): string {
-  return crypto.randomUUID().substring(0, 8);
+// Fábrica única para os middlewares de log informativo (manifest/configure).
+function createInfoMiddleware(log: Logger, mensagem: string) {
+  return (req: any, _res: any, next: NextFunction) => {
+    log.info(mensagem, {
+      requestId: req._ultraDebugId,
+      host: req.headers.host,
+      userAgent: req.headers['user-agent']?.substring(0, 100),
+    });
+    next();
+  };
 }
 
 export const ultraDebugMiddleware = () => {
@@ -71,13 +106,13 @@ export const ultraDebugMiddleware = () => {
     req._ultraDebugId = requestId;
     const startTime = Date.now();
 
-    // Pula health checks e metrics
-    const skipPaths = ['/health', '/metrics', '/favicon.ico', '/cache/status'];
-    const shouldSkip = skipPaths.some(p => req.path === p || req.path.startsWith(p));
+    const shouldSkip = shouldSkipPath(req.path);
 
     if (!shouldSkip) {
+      const { ip, source } = extrairIp(req);
       logger.debug(`▶ REQUEST #${requestId} ${req.method} ${maskUrl(req.path)}`, {
-        ip: req.ip || req.connection?.remoteAddress || 'unknown',
+        ip,
+        ipSource: source,
         userAgent: req.headers['user-agent']?.substring(0, 120),
       });
     }
@@ -98,48 +133,26 @@ export const ultraDebugMiddleware = () => {
 
     res.redirect = function (url: string | number, statusOrUrl?: string | number) {
       const responseTime = Date.now() - startTime;
-      let redirectUrl: string;
-      let statusCode: number;
-      if (typeof url === 'number') {
-        statusCode = url;
-        redirectUrl = String(statusOrUrl || '');
-      } else {
-        statusCode = typeof statusOrUrl === 'number' ? statusOrUrl : 302;
-        redirectUrl = url;
-      }
+      const isStatusFirst = typeof url === 'number';
+      const statusCode = isStatusFirst
+        ? url
+        : (typeof statusOrUrl === 'number' ? statusOrUrl : 302);
+      const redirectUrl = isStatusFirst ? String(statusOrUrl || '') : url;
+
       if (!shouldSkip) {
         logger.debug(`◀ RESPONSE #${requestId} ${statusCode} (${responseTime}ms) REDIRECT → ${maskUrl(redirectUrl)}`);
       }
-      if (statusCode === 302) {
-        return originalRedirect(redirectUrl);
-      }
-      return originalRedirect(statusCode, redirectUrl);
+
+      if (isStatusFirst) return originalRedirect(statusCode, redirectUrl);
+      return originalRedirect(redirectUrl);
     };
 
     next();
   };
 };
 
-export const manifestDebugMiddleware = () => {
-  return (req: any, res: any, next: NextFunction) => {
-    const loggerManifest = new Logger('MANIFEST-DEBUG');
-    loggerManifest.info(' MANIFEST SOLICITADO', {
-      requestId: req._ultraDebugId,
-      host: req.headers.host,
-      userAgent: req.headers['user-agent']?.substring(0, 100),
-    });
-    next();
-  };
-};
+export const manifestDebugMiddleware = () =>
+  createInfoMiddleware(manifestLogger, ' MANIFEST SOLICITADO');
 
-export const configureDebugMiddleware = () => {
-  return (req: any, res: any, next: NextFunction) => {
-    const loggerCfg = new Logger('CONFIGURE-DEBUG');
-    loggerCfg.info(' PÁGINA DE CONFIGURAÇÃO SOLICITADA', {
-      requestId: req._ultraDebugId,
-      host: req.headers.host,
-      userAgent: req.headers['user-agent']?.substring(0, 100),
-    });
-    next();
-  };
-};
+export const configureDebugMiddleware = () =>
+  createInfoMiddleware(configureLogger, ' PÁGINA DE CONFIGURAÇÃO SOLICITADA');
