@@ -138,23 +138,41 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
 
-export const COLLECTION_WORDS = new Set([
+export const COLLECTION_WORDS_FILMES = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
-  'coletanea', 'franquia', 'duologia', 'todas as temporadas',
-  'temporada completa', 'season pack', 'pack completo',
+  'coletanea', 'franquia', 'duologia',
   'collection', 'complete collection', 'the complete collection',
-  'complete series', 'full collection', 'extended collection',
   'movie collection', 'film collection', 'anthology',
   'todos os filmes', 'all movies', 'all films', 'todos filmes',
 ]);
 
+export const COLLECTION_WORDS_SERIES = new Set([
+  'todas as temporadas',
+  'temporada completa', 'season pack', 'pack completo',
+  'complete series', 'full collection', 'extended collection',
+]);
+
+// Tipo do conteúdo conforme o TMDB/Stremio. 'tv' é o rótulo do TMDB pra série.
+export type TipoConteudo = 'movie' | 'series' | 'tv' | null | undefined;
+
+// Escolhe o conjunto de palavras de coleção conforme o tipo.
+// Sem tipo declarado, une os dois — compatibilidade com chamadas antigas.
+function palavrasDeColecao(tipo: TipoConteudo): Set<string> {
+  if (tipo === 'series' || tipo === 'tv') return COLLECTION_WORDS_SERIES;
+  if (tipo === 'movie') return COLLECTION_WORDS_FILMES;
+  return new Set([...COLLECTION_WORDS_FILMES, ...COLLECTION_WORDS_SERIES]);
+}
+
 // Detecta título de coleção/franquia/pack. Normaliza internamente.
-export function isCollectionTitle(title: string): boolean {
+// Se `tipo` for informado, restringe ao conjunto correto (filmes ou séries).
+export function isCollectionTitle(title: string, tipo?: TipoConteudo): boolean {
   if (!title) return false;
   const normalizado = normalizarTexto(title);
   if (!normalizado) return false;
 
-  for (const termo of COLLECTION_WORDS) {
+  const palavras = palavrasDeColecao(tipo);
+
+  for (const termo of palavras) {
     const termoNorm = normalizarTexto(termo);
     if (!termoNorm) continue;
 

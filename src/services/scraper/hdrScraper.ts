@@ -10,6 +10,7 @@ import {
   calcularTokensRuido,
   limparPorRaridade,
   EpisodeRange,
+  TipoConteudo,
 } from '../../titulos/TechnicalWords.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
 import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
@@ -60,7 +61,7 @@ export function detectSeasonRange(text: string): EpisodeRange | null {
   return null;
 }
 
-export function passaFiltroTemporada(textos: string[], targetSeason?: number): boolean {
+export function passaFiltroTemporada(textos: string[], targetSeason?: number, mediaType?: TipoConteudo): boolean {
   if (targetSeason === undefined) return true;
 
   for (const t of textos) {
@@ -69,7 +70,7 @@ export function passaFiltroTemporada(textos: string[], targetSeason?: number): b
     if (range) return temporadaAlvoNoRange(range, targetSeason);
   }
 
-  return textos.some(t => isCollectionTitle(t));
+  return textos.some(t => isCollectionTitle(t, mediaType));
 }
 
 export function isLikelyPostLink(href: string, text: string): boolean {
@@ -320,7 +321,7 @@ function extrairTituloDoLink($: any, el: any): string {
   return $(el).text().replace(/\s+/g, ' ').trim();
 }
 
-export async function searchHdrLinks(query: string, targetSeason?: number): Promise<SearchResultItem[]> {
+export async function searchHdrLinks(query: string, targetSeason?: number, mediaType?: TipoConteudo): Promise<SearchResultItem[]> {
   const searchUrl = `${HDR_BASE}/index.php?busca=${encodeURIComponent(query)}`;
 
   try {
@@ -342,7 +343,7 @@ export async function searchHdrLinks(query: string, targetSeason?: number): Prom
       if (seen.has(absoluteHref)) return;
       seen.add(absoluteHref);
 
-      if (!passaFiltroTemporada([text], targetSeason)) return;
+      if (!passaFiltroTemporada([text], targetSeason, mediaType)) return;
 
       results.push({ title: text, postUrl: absoluteHref });
     });
@@ -358,7 +359,8 @@ export async function extractMagnetsFromPost(
   html: string,
   postTitle: string,
   postUrl?: string,
-  targetSeason?: number
+  targetSeason?: number,
+  mediaType?: TipoConteudo
 ): Promise<HdrTorrent[]> {
   const $ = cheerio.load(html);
   const results: HdrTorrent[] = [];
@@ -413,7 +415,7 @@ export async function extractMagnetsFromPost(
     const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(containerText);
     if (isLegendado && !isDualOuDublado) return;
 
-    if (!passaFiltroTemporada([containerText, postTitle, pageTitle], targetSeason)) return;
+    if (!passaFiltroTemporada([containerText, postTitle, pageTitle], targetSeason, mediaType)) return;
 
     const qualityMatch = containerText.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
     let sizeMatch = containerText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
@@ -521,7 +523,8 @@ export async function extractMagnetsFromPost(
 async function processarPostHdr(
   item: SearchResultItem,
   imdbId: string | undefined,
-  targetSeason: number | undefined
+  targetSeason: number | undefined,
+  mediaType?: TipoConteudo
 ): Promise<{ torrents: HdrTorrent[]; imdbConfirmed: boolean }> {
   try {
     const res = await axios.get(item.postUrl, axiosConfig);
@@ -530,7 +533,7 @@ async function processarPostHdr(
     if (imdbId) {
       const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
-        const isCollection = isCollectionTitle(item.title);
+        const isCollection = isCollectionTitle(item.title, mediaType);
         if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
           return { torrents: [], imdbConfirmed: false };
         }
@@ -540,7 +543,7 @@ async function processarPostHdr(
       }
     }
 
-    const torrents = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason);
+    const torrents = await extractMagnetsFromPost(res.data, item.title, item.postUrl, targetSeason, mediaType);
     return { torrents, imdbConfirmed };
   } catch {
     return { torrents: [], imdbConfirmed: false };
@@ -553,7 +556,8 @@ export async function searchHdr(
   targetSeason?: number,
   searchQueries?: string[],
   targetYear?: number,
-  imdbId?: string
+  imdbId?: string,
+  mediaType?: TipoConteudo
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
 
@@ -584,7 +588,7 @@ export async function searchHdr(
     const seenInfoHashes = new Set<string>();
 
     for (const q of queriesParaBusca) {
-      const links = await searchHdrLinks(q, targetSeason);
+      const links = await searchHdrLinks(q, targetSeason, mediaType);
 
       if (links.length === 0) {
         logger.debug(`HDR: "${q}" sem links`);
@@ -597,12 +601,12 @@ export async function searchHdr(
       const filtrados = links.filter(link => {
         const tituloLimpo = limparPorRaridade(link.title, tokensRuido);
         const resultado = similarity.compararComTitulos(frasesValidas, tituloLimpo);
-        const isCollection = isCollectionTitle(link.title);
+        const isCollection = isCollectionTitle(link.title, mediaType);
 
         if (!resultado.match && !isCollection) return false;
 
         if (!resultado.match && isCollection) {
-          logger.debug(`HDR: coleção aceita por pré-filtro: "${link.title.substring(0, 60)}"`);
+          logger.debug(`HDR: coleção aceita por pré-filtro: "${link.title.substring(0, 60)}" mediaType=${mediaType ?? '-'}`);
         }
 
         if (resultado.match) {
@@ -622,7 +626,7 @@ export async function searchHdr(
       logger.debug(`HDR: "${q}" → ${links.length} links, ${filtrados.length} relevantes`);
 
       const respostas = await Promise.all(
-        filtrados.map(item => processarPostHdr(item, imdbId, targetSeason))
+        filtrados.map(item => processarPostHdr(item, imdbId, targetSeason, mediaType))
       );
 
       for (const { torrents, imdbConfirmed } of respostas) {

@@ -8,7 +8,7 @@ import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.j
 import { TitleFilter } from '../titulos/titleFilter.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
-import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, temporadaAlvoNoRange, normalizarTexto } from '../titulos/TechnicalWords.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, temporadaAlvoNoRange, normalizarTexto, TipoConteudo } from '../titulos/TechnicalWords.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -206,6 +206,15 @@ export class CatalogProvider {
       return [];
     }
 
+    // Tipo do conteúdo pro isCollectionTitle escolher o conjunto certo em technical-words.
+    // Vem do Stremio (movie/series, sempre preenchido). Pra 'anime' e 'other' cai pro TMDB
+    // quando disponível; senão undefined — isCollectionTitle usa a união (comportamento antigo).
+    const mediaTypeEfetivo: TipoConteudo =
+      type === 'movie' ? 'movie' :
+      type === 'series' ? 'series' :
+      (tmdb.mediaType === 'movie' || tmdb.mediaType === 'tv') ? tmdb.mediaType :
+      undefined;
+
     if (finalSeason !== undefined && tmdb.imdbTitles?.episodeTitles) {
       const lista = tmdb.imdbTitles.episodeTitles;
       const statusEp = lista.length === 0 ? 'VAZIO' : `${lista.length} eps`;
@@ -224,7 +233,8 @@ export class CatalogProvider {
     }
 
     const torrentResults = await this.torrentScraper.searchTorrents(
-      searchQuery, type, finalSeason, tmdb.seasonYear ?? undefined, imdbId || undefined
+      searchQuery, type, finalSeason, tmdb.seasonYear ?? undefined, imdbId || undefined,
+      mediaTypeEfetivo
     );
 
     this.logarResumo('PÓS-SCRAPER', torrentResults);

@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { normalizarTexto, isCollectionTitle, extrairNumeroParte } from './TechnicalWords.js';
+import { normalizarTexto, isCollectionTitle, extrairNumeroParte, getPotentialSequelNumbers } from './TechnicalWords.js';
 import { CacheService } from '../debrid/CacheService.js';
 
 export interface ScoreDetalhes {
@@ -186,12 +186,32 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
+    // Delegação de sequência: a régua vem do shared. Só rejeita quando o torrent declara
+    // um número que nenhum título TMDB declara.
+    const seqTorrent = getPotentialSequelNumbers(torrentTitle);
+
     let melhor: ScoreDetalhes | null = null;
     let melhorTitulo = '';
+    let seqBloqueou = false;
 
     for (const titulo of titulosValidos) {
       const { tokens: tmdbTokens } = this.tokensAnoCache(titulo);
       if (tmdbTokens.length === 0) continue;
+
+      const seqTmdb = getPotentialSequelNumbers(titulo);
+      if (seqTorrent.length > 0 && seqTmdb.length === 0) {
+        this.logger.debug(`SEQUENCIA rejeitada | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb="${titulo.substring(0, 40)}"`);
+        seqBloqueou = true;
+        continue;
+      }
+      if (seqTorrent.length > 0 && seqTmdb.length > 0) {
+        const inter = seqTorrent.filter(n => seqTmdb.includes(n));
+        if (inter.length === 0) {
+          this.logger.debug(`SEQUENCIA divergente | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb=[${seqTmdb.join(',')}]`);
+          seqBloqueou = true;
+          continue;
+        }
+      }
 
       const detalhes = this.calcularScore(tmdbTokens, torrentTokens);
       if (!melhor || detalhes.score > melhor.score) {
@@ -201,7 +221,14 @@ export class SimilarityCalculator {
     }
 
     if (!melhor) {
-      return { matches: false, similarity: 0, reason: 'Nenhum título comparável' };
+      const result: SmartTitleMatch = {
+        matches: false,
+        similarity: 0,
+        reason: seqBloqueou ? `Sequência sem par: [${seqTorrent.join(',')}]` : 'Nenhum título comparável',
+        mediaType: movieInfo.mediaType,
+      };
+      this.resultCache.set(resultKey, result, this.RESULT_TTL);
+      return result;
     }
 
     if (isCollection && melhor.score >= 0.5) {

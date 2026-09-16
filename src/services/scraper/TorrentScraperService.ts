@@ -8,7 +8,7 @@ import { WordPressScraper } from './wordpressScraper.js';
 import { BludvScraper } from './bludvScraper.js';
 import { searchStarck } from './starckScraper.js';
 import { searchHdr } from './hdrScraper.js';
-import { extrairRangeEpisodios } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, TipoConteudo } from '../../titulos/TechnicalWords.js';
 
 const logger = new Logger('TorrentScraperService');
 
@@ -92,7 +92,8 @@ export class TorrentScraperService {
     type: 'movie' | 'series' = 'movie',
     targetSeason?: number,
     targetYear?: number,
-    imdbId?: string
+    imdbId?: string,
+    mediaType?: TipoConteudo
   ): Promise<TorrentResult[]> {
     const startTime = Date.now();
 
@@ -107,22 +108,23 @@ export class TorrentScraperService {
       });
 
       // Os 4 scrapers rodam em paralelo. runScraper cuida de enabled + catch + timing.
+      // O mediaType chega pronto do CatalogProvider — ou 'movie', ou 'series'/'tv', ou undefined.
       const runs = await Promise.all([
         this.runScraper('BLUDV', isScraperAtivo('bludv'), async () => {
-          const raw = await this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId);
+          const raw = await this.bludvScraper.search(query, type, targetSeason, searchQueries, imdbId, mediaType);
           return dedupBy(raw, r => r.magnet);
         }),
         this.runScraper('WP', isScraperAtivo('wordpress'), async () => {
-          const raw = await this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId);
+          const raw = await this.wpScraper.search(query, type, targetSeason, searchQueries, imdbId, mediaType);
           return dedupBy(raw, r => r.magnet);
         }),
         this.runScraper('Starck', isScraperAtivo('starck'), async () => {
-          const raw = await searchStarck(query, type, targetSeason, searchQueries);
+          const raw = await searchStarck(query, type, targetSeason, searchQueries, undefined, undefined, mediaType);
           const deduped = dedupBy(raw, r => r.infoHash);
           return mapAndFilter(deduped, r => this.mapStarckResult(r, type));
         }),
         this.runScraper('HDR', isScraperAtivo('hdr'), async () => {
-          const raw = await searchHdr(query, type, targetSeason, searchQueries, targetYear, imdbId);
+          const raw = await searchHdr(query, type, targetSeason, searchQueries, targetYear, imdbId, mediaType);
           const deduped = dedupBy(raw, r => r.infoHash);
           return mapAndFilter(deduped, r => this.mapHdrResult(r, type));
         }),

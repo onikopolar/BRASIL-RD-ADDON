@@ -7,7 +7,7 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade, INDICADORES_INTERNACIONAL_TORRENTS } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade, INDICADORES_INTERNACIONAL_TORRENTS, TipoConteudo } from '../../titulos/TechnicalWords.js';
 import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const LEGENDADO_REGEX = new RegExp(
@@ -61,7 +61,6 @@ const AXIOS_OPTS = {
 
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
 
-// Seção contígua do HTML — [start, end).
 export type Section = {
   type: SectionType;
   start: number;
@@ -104,6 +103,24 @@ function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
   });
 }
 
+function truncar(s: string, n = 60): string {
+  return s.length > n ? s.substring(0, n) + '…' : s;
+}
+
+export type DiagnosticoSecao = {
+  tipo: SectionType;
+  motivo: string;
+  flags: {
+    vazio: boolean;
+    ruido: boolean;
+    comprido: boolean;
+    dual: boolean;
+    dublado: boolean;
+    nacional: boolean;
+    legendado: boolean;
+  };
+};
+
 export class BludvScraper {
   public readonly qualityDetector: QualityDetector;
   public readonly similarity: SimilarityCalculator;
@@ -119,7 +136,8 @@ export class BludvScraper {
     type: 'movie' | 'series',
     targetSeason?: number,
     searchQueries?: string[],
-    imdbId?: string
+    imdbId?: string,
+    mediaType?: TipoConteudo
   ): Promise<TorrentResult[]> {
     try {
       const queriesParaBusca = searchQueries && searchQueries.length > 0 ? searchQueries : [query];
@@ -129,8 +147,7 @@ export class BludvScraper {
       const seenUrls = new Set<string>();
 
       for (const q of queriesParaBusca) {
-        logger.debug(`BLUDV: tentando busca com query "${q}"`);
-        const posts = await this.searchPosts(q, targetSeason, frasesBusca);
+        const posts = await this.searchPosts(q, targetSeason, frasesBusca, mediaType);
 
         for (const post of posts) {
           if (!seenUrls.has(post.url)) {
@@ -140,26 +157,27 @@ export class BludvScraper {
         }
 
         if (allPosts.length > 0) {
-          logger.debug(`BLUDV: query "${q}" retornou ${posts.length} posts. Encerrando busca.`);
+          logger.debug(`[BLUDV] "${q}" → ${posts.length} posts`);
           break;
         }
+        logger.debug(`[BLUDV] "${q}" → 0`);
       }
 
       if (!allPosts.length) return [];
 
       logger.info(
-        `BLUDV HTML: ${allPosts.length} posts filtrados (usando ${queriesParaBusca.length} queries)` +
-        (targetSeason !== undefined ? ` (temporada ${targetSeason})` : '')
+        `[BLUDV] ${allPosts.length} posts (${queriesParaBusca.length} queries)` +
+        (targetSeason !== undefined ? ` season=${targetSeason}` : '')
       );
 
       const postResults = await Promise.all(
         allPosts.map(item =>
-          this.scrapePost(item.url, type, targetSeason, imdbId).catch(() => [] as TorrentResult[])
+          this.scrapePost(item.url, type, targetSeason, imdbId, mediaType).catch(() => [] as TorrentResult[])
         )
       );
       return postResults.flat();
     } catch (err: any) {
-      logger.warn(`BLUDV HTML falhou: ${err.code || err.message}`);
+      logger.warn(`[BLUDV] falha na busca: ${err.code || err.message}`);
       return [];
     }
   }
@@ -167,16 +185,14 @@ export class BludvScraper {
   async searchPosts(
     query: string,
     targetSeason: number | undefined,
-    frasesBusca: FrasesBusca
+    frasesBusca: FrasesBusca,
+    mediaType?: TipoConteudo
   ): Promise<PostItem[]> {
     const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
     const res = await axios.get(searchUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
-    if ($('body').hasClass('search-no-results')) {
-      logger.debug('[BLUDV] busca sem resultados (search-no-results)');
-      return [];
-    }
+    if ($('body').hasClass('search-no-results')) return [];
 
     const items: PostItem[] = [];
     const urlsVistas = new Set<string>();
@@ -207,7 +223,7 @@ export class BludvScraper {
     const tokensRuido = calcularTokensRuido(items.map(i => i.title));
 
     return items
-      .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido))
+      .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido, mediaType))
       .slice(0, 5);
   }
 
@@ -215,12 +231,13 @@ export class BludvScraper {
     item: PostItem,
     targetSeason: number | undefined,
     frasesBusca: FrasesBusca,
-    tokensRuido: Set<string>
+    tokensRuido: Set<string>,
+    mediaType?: TipoConteudo
   ): boolean {
     const lowerTitle = item.title.toLowerCase();
 
     if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
-      logger.debug(`[BLUDV] post legendado ignorado: "${item.title.substring(0, 50)}"`);
+      logger.debug(`[BLUDV] ignorado legendado: "${truncar(item.title, 55)}"`);
       return false;
     }
 
@@ -231,26 +248,19 @@ export class BludvScraper {
       if (!temporadaAlvoNoRange(range, targetSeason)) return false;
     }
 
-    // Limpa ruído do site (tokens frequentes) antes do pré-filtro.
     const tituloLimpo = limparPorRaridade(item.title, tokensRuido);
     const resultado = this.similarity.compararComTitulos([...frasesBusca.frases], tituloLimpo);
-    const isCollection = isCollectionTitle(item.title);
+    const isCollection = isCollectionTitle(item.title, mediaType);
 
     if (!resultado.match && !isCollection) {
-      logger.debug(
-        `[BLUDV] post ignorado (score ${resultado.score.toFixed(2)} ${resultado.nivel}): "${item.title.substring(0, 50)}"`
-      );
+      logger.debug(`[BLUDV] ignorado (${resultado.score.toFixed(2)} ${resultado.nivel}): "${truncar(item.title, 55)}"`);
       return false;
     }
 
     if (!resultado.match && isCollection) {
-      logger.debug(`[BLUDV] coleção aceita por pré-filtro: "${item.title.substring(0, 60)}"`);
-    }
-
-    if (resultado.match) {
-      logger.debug(
-        `[BLUDV] post aceito (${resultado.nivel} score=${resultado.score.toFixed(2)}): "${item.title.substring(0, 60)}"`
-      );
+      logger.debug(`[BLUDV] aceito coleção: "${truncar(item.title, 60)}" mediaType=${mediaType ?? '-'}`);
+    } else {
+      logger.debug(`[BLUDV] aceito (${resultado.nivel} ${resultado.score.toFixed(2)}): "${truncar(item.title, 60)}"`);
     }
 
     return true;
@@ -260,13 +270,17 @@ export class BludvScraper {
     postUrl: string,
     type: 'movie' | 'series',
     targetSeason?: number,
-    imdbId?: string
+    imdbId?: string,
+    mediaType?: TipoConteudo
   ): Promise<TorrentResult[]> {
     const res = await axios.get(postUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
     const contentHtml = $('.content').html() || $('body').html() || '';
-    if (!contentHtml) return [];
+    if (!contentHtml) {
+      logger.debug(`[BLUDV] post sem .content: ${postUrl}`);
+      return [];
+    }
 
     const postTitle =
       $('h1').first().text().trim() ||
@@ -276,7 +290,7 @@ export class BludvScraper {
     if (imdbId) {
       const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
-        const isCollection = isCollectionTitle(postTitle);
+        const isCollection = isCollectionTitle(postTitle, mediaType);
         if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
         if (!isCollection) imdbConfirmed = true;
       }
@@ -288,33 +302,47 @@ export class BludvScraper {
     }
 
     const metadata = this.extractPostMetadata($);
+    const sections = this.findSections($, contentHtml, postTitle);
 
-    const sections = this.findSections($, contentHtml);
-
-    logger.debug(
-      `[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`
-    );
+    logger.debug(`[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`);
 
     const temDual = sections.some(s => s.type === 'DUAL');
-    if (!temDual) {
-      logger.debug('[BLUDV] post sem nenhuma seção DUAL — descartado');
+
+    // Formato legado: post sem seções, com um único magnet e o idioma declarado só no título/metadata.
+    const tituloDeclaraDual = /\bdual\b|\bdublado\b|\bdublada\b|\bnacional\b/i.test(postTitle);
+    const metadataDeclaraDual = !!metadata.language
+      && /dual|dublado|dublagem|nacional|portugu[eê]s\s*\|\s*ingl[eê]s/i.test(metadata.language);
+    const usarFallbackDual = !temDual && (tituloDeclaraDual || metadataDeclaraDual);
+
+    if (!temDual && !usarFallbackDual) {
+      this.logarDiagnosticoSemDual($, contentHtml, postTitle, metadata);
       return [];
     }
 
-    const directMagnets = this.extractDirectMagnets($, contentHtml, sections);
-    const protectorLinks = this.extractProtectorLinks($, contentHtml, sections);
+    if (usarFallbackDual) {
+      logger.debug(
+        `[BLUDV] FALLBACK_DUAL | sem seção, assumindo DUAL | "${truncar(postTitle, 55)}" ` +
+        `| titulo=${tituloDeclaraDual} metadata=${metadataDeclaraDual}`
+      );
+    }
+
+    const sectionsEfetivas: Section[] = temDual
+      ? sections
+      : [{ type: 'DUAL', start: 0, end: contentHtml.length }];
+
+    const directMagnets = this.extractDirectMagnets($, contentHtml, sectionsEfetivas, postTitle);
+    const protectorLinks = this.extractProtectorLinks($, contentHtml, sectionsEfetivas, postTitle);
 
     const dirDual = directMagnets.filter(m => m.secao === 'DUAL').length;
     const proDual = protectorLinks.filter(l => l.secao === 'DUAL').length;
-    logger.debug(
-      `[BLUDV] magnets | diretos DUAL=${dirDual} | protetores DUAL=${proDual}`
-    );
 
     const protectorMagnets = await this.resolverMagnetsDoProtetor(protectorLinks);
-
     const allMagnets = dedupByMagnet([...directMagnets, ...protectorMagnets]);
 
-    if (allMagnets.length === 0) return [];
+    if (allMagnets.length === 0) {
+      logger.debug(`[BLUDV] magnet DUAL diretos=${dirDual} protetores=${proDual} → 0 válidos`);
+      return [];
+    }
 
     const analyzedMagnets = await Promise.all(
       allMagnets.map(async ({ magnet, link, secao }) => {
@@ -335,7 +363,7 @@ export class BludvScraper {
       if (magnetsVistos.has(magnet)) continue;
       magnetsVistos.add(magnet);
 
-      const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeComFonte(
+      const { qualidade: quality } = this.resolverQualidadeComFonte(
         canonicalName,
         link,
         postTitle,
@@ -344,17 +372,15 @@ export class BludvScraper {
       const { episode, episodeRangeText } = this.resolverEpisodio(canonicalName, link);
       const language = this.resolverIdioma(secao, metadata.language);
 
-      const originalTitleFinal = metadata.originalTitle || cleanTitleFromPost;
+      // dn de coleção é mais específico que o título original do metadata — prioriza ele.
+      const dnColecao = canonicalName && isCollectionTitle(canonicalName, mediaType) ? canonicalName : null;
+      const originalTitleFinal = dnColecao || metadata.originalTitle || cleanTitleFromPost;
       const displayTitle = originalTitleFinal || canonicalName || postTitle;
 
       const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
         originalTitleFinal || postTitle,
         metadata.years,
         quality
-      );
-
-      logger.debug(
-        `[BLUDV] QUALIDADE | magnet=${magnet.substring(0, 40)}... | qualidade=${quality} | fonte=${fonteQualidade} | secao=${secao}`
       );
 
       const size = metadata.size
@@ -391,7 +417,32 @@ export class BludvScraper {
       });
     }
 
+    logger.debug(`[BLUDV] "${truncar(postTitle, 55)}" → DUAL diretos=${dirDual} protetores=${proDual} válidos=${results.length}`);
+
     return results;
+  }
+
+  // Diagnóstico quando o post cai fora por falta de DUAL e sem fallback possível.
+  private logarDiagnosticoSemDual($: any, contentHtml: string, postTitle: string, metadata: PostMetadata): void {
+    const strongs = $('.content strong, .content b').toArray();
+    const totalStrongs = strongs.length;
+    const totalMagnetAnchors = $('a[href^="magnet:"]').length;
+    const totalProtetores = $('a[href*="systemads1.com"]').length;
+
+    logger.debug(
+      `[BLUDV] SEM_DUAL | "${truncar(postTitle, 60)}" | ` +
+      `strongs=${totalStrongs} magnetAnchors=${totalMagnetAnchors} protetores=${totalProtetores} | ` +
+      `lang="${metadata.language || '-'}" quality="${metadata.quality || '-'}" ` +
+      `original="${truncar(metadata.originalTitle || '-', 40)}"`
+    );
+
+    const amostra = strongs.slice(0, 8).map((el: any) => {
+      const texto = $(el).text().trim();
+      if (!texto) return '(vazio)';
+      const diag = this.diagnosticarSecao(texto);
+      return `"${truncar(texto, 30)}"→${diag.tipo}:${diag.motivo}`;
+    });
+    logger.debug(`[BLUDV] SEM_DUAL amostra strongs | ${amostra.join(' | ') || '(nenhum)'}`);
   }
 
   private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
@@ -410,24 +461,38 @@ export class BludvScraper {
     return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
-  findSections($: any, contentHtml: string): Section[] {
+  findSections($: any, contentHtml: string, postTitle?: string): Section[] {
     const strongEls = $('.content strong, .content b').toArray();
     const headers: { pos: number; type: 'DUAL' | 'LEGENDADO' }[] = [];
+    const descartados: Array<{ texto: string; tipo: SectionType; motivo: string }> = [];
 
     for (const el of strongEls) {
       const texto = $(el).text().trim();
       if (!texto) continue;
 
-      const tipo = this.detectSectionType(texto);
-      if (tipo === 'NONE') continue;
+      const diag = this.diagnosticarSecao(texto);
+
+      if (diag.tipo === 'NONE') {
+        const potencial = texto.length <= 60 && (diag.flags.dual || diag.flags.dublado || diag.flags.nacional || diag.flags.legendado || !diag.flags.ruido);
+        if (potencial) descartados.push({ texto, tipo: diag.tipo, motivo: diag.motivo });
+        continue;
+      }
 
       const pos = contentHtml.indexOf($(el).toString());
       if (pos === -1) continue;
 
-      headers.push({ pos, type: tipo });
+      headers.push({ pos, type: diag.tipo });
     }
 
     headers.sort((a, b) => a.pos - b.pos);
+
+    if (headers.length === 0 && strongEls.length > 0) {
+      const amostra = descartados.slice(0, 8).map(d => `"${truncar(d.texto, 30)}"→${d.tipo}:${d.motivo}`);
+      logger.debug(
+        `[BLUDV] sem headers | strongs=${strongEls.length} descartados=${descartados.length} | ` +
+        `amostra: ${amostra.join(' | ') || '(nenhum relevante)'}`
+      );
+    }
 
     const contentLength = contentHtml.length;
     const sections: Section[] = [];
@@ -457,22 +522,48 @@ export class BludvScraper {
   }
 
   detectSectionType(text: string): SectionType {
-    const t = normalizarTexto(text).trim();
-
-    if (/^(trailer|assistir|baixar|download|ver)\b/i.test(t)) return 'NONE';
-    if (t.length > 60) return 'NONE';
-
-    const hasNacional = /\bnacional\b/.test(t);
-    const hasDual = /\bdual\b/.test(t) && /\baudio\b/.test(t);
-    const hasDublado = /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t);
-    const hasLegendado = /\blegendado\b|\blegendada\b/.test(t);
-
-    if (hasLegendado && !hasDual && !hasDublado && !hasNacional) return 'LEGENDADO';
-    if ((hasDual || hasDublado || hasNacional) && !hasLegendado) return 'DUAL';
-    return 'NONE';
+    return this.diagnosticarSecao(text).tipo;
   }
 
-  extractDirectMagnets($: any, contentHtml: string, sections: Section[]): ExtractedMagnet[] {
+  // Igual ao detectSectionType, mas devolve o motivo da classificação. Usado só nos logs.
+  private diagnosticarSecao(text: string): DiagnosticoSecao {
+    const t = normalizarTexto(text).trim();
+
+    const flags = {
+      vazio: !t,
+      ruido: /^(trailer|assistir|baixar|download|ver)\b/i.test(t),
+      comprido: t.length > 60,
+      dual: /\bdual\b/.test(t) && /\baudio\b/.test(t),
+      dublado: /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t),
+      nacional: /\bnacional\b/.test(t),
+      legendado: /\blegendado\b|\blegendada\b/.test(t),
+    };
+
+    if (flags.vazio) return { tipo: 'NONE', motivo: 'vazio', flags };
+    if (flags.ruido) return { tipo: 'NONE', motivo: 'palavra-ruido', flags };
+    if (flags.comprido) return { tipo: 'NONE', motivo: `len=${t.length}`, flags };
+
+    if (flags.legendado && !flags.dual && !flags.dublado && !flags.nacional) {
+      return { tipo: 'LEGENDADO', motivo: 'legendado-only', flags };
+    }
+
+    if ((flags.dual || flags.dublado || flags.nacional) && !flags.legendado) {
+      const tags = [
+        flags.dual && 'dual',
+        flags.dublado && 'dublado',
+        flags.nacional && 'nacional',
+      ].filter(Boolean).join('+');
+      return { tipo: 'DUAL', motivo: tags, flags };
+    }
+
+    if (flags.legendado && (flags.dual || flags.dublado || flags.nacional)) {
+      return { tipo: 'NONE', motivo: 'conflito:dual+legendado', flags };
+    }
+
+    return { tipo: 'NONE', motivo: 'sem-indicador', flags };
+  }
+
+  extractDirectMagnets($: any, contentHtml: string, sections: Section[], postTitle?: string): ExtractedMagnet[] {
     const resultados: ExtractedMagnet[] = [];
     const stats: Record<SectionType, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
 
@@ -488,7 +579,10 @@ export class BludvScraper {
       if (!magnet) continue;
 
       const pos = contentHtml.indexOf($(el).toString());
-      if (pos === -1) continue;
+      if (pos === -1) {
+        stats.NONE++;
+        continue;
+      }
 
       const section = this.findSectionForPosition(pos, sections);
       const secao: SectionType = section?.type ?? 'NONE';
@@ -512,24 +606,33 @@ export class BludvScraper {
       });
     }
 
-    logger.debug(
-      `[BLUDV] magnets por seção | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`
-    );
+    if (allMagnetAnchors.length > 0) {
+      logger.debug(
+        `[BLUDV] magnets brutos=${allMagnetAnchors.length} | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`
+      );
+    }
 
     return resultados;
   }
 
-  extractProtectorLinks($: any, contentHtml: string, sections: Section[]): ProtectorLink[] {
+  extractProtectorLinks($: any, contentHtml: string, sections: Section[], postTitle?: string): ProtectorLink[] {
     const allLinks = $('a[href*="systemads1.com"]').toArray();
     if (!allLinks.length) return [];
 
     const result: ProtectorLink[] = [];
+    const stats: Record<SectionType, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
+
     for (const el of allLinks) {
       const pos = contentHtml.indexOf($(el).toString());
-      if (pos === -1) continue;
+      if (pos === -1) {
+        stats.NONE++;
+        continue;
+      }
 
       const section = this.findSectionForPosition(pos, sections);
       const secao: SectionType = section?.type ?? 'NONE';
+      stats[secao]++;
+
       if (secao !== 'DUAL') continue;
 
       result.push({
@@ -538,6 +641,11 @@ export class BludvScraper {
         ...this.buildLinkContext($, el),
       });
     }
+
+    logger.debug(
+      `[BLUDV] protetores brutos=${allLinks.length} | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`
+    );
+
     return result;
   }
 
@@ -675,7 +783,7 @@ export class BludvScraper {
       if (phrase) frases.add(phrase);
     }
 
-    logger.debug(`[BLUDV] Frases possíveis: [${[...frases].join(' | ')}]`);
+    logger.debug(`[BLUDV] frases=[${[...frases].join(' | ')}]`);
 
     return { frases };
   }
@@ -772,7 +880,7 @@ export class BludvScraper {
       const match = (res.data as string).match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
       return match ? match[1] : null;
     } catch (err: any) {
-      logger.warn(`Falha ao extrair magnet do protetor: ${err.message}`);
+      logger.warn(`[BLUDV] protetor falhou: ${err.message}`);
       return null;
     }
   }
