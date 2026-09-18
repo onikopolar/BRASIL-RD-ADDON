@@ -356,6 +356,9 @@ export class WordPressScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
+  // Pega o contexto local do magnet: rótulo no MESMO <p> antes do <a>, ou no <p> anterior como fallback.
+  // Layout moderno (Comando, Demolidor) tem <p><strong>Episódio 01</strong><a>…</a></p> — o rótulo fica
+  // dentro do mesmo <p>. Layout antigo (Scary Movie) tem <p><b>Título</b></p><p><a>…</a></p> — irmão anterior.
   private extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
     const $el = $(el);
     const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
@@ -363,15 +366,34 @@ export class WordPressScraper {
     let textoIrmaoAnterior: string | null = null;
     let tituloIrmaoAnterior: string | null = null;
 
-    let irmao = $el.parent().prev();
-    for (let passo = 0; passo < 3 && irmao.length; passo++) {
-      const texto = irmao.text().replace(/\s+/g, ' ').trim();
-      if (texto) {
-        if (QUALIDADE_PURA_REGEX.test(texto)) textoIrmaoAnterior = texto;
-        if (this.pareceTituloDeItem(texto)) tituloIrmaoAnterior = texto;
-        break;
+    const $pai = $el.parent();
+
+    // 1) <strong>/<b> dentro do MESMO <p>, antes do <a>
+    const $rotulo = $pai.find('strong, b').first();
+    if ($rotulo.length) {
+      const idxRotulo = $rotulo.index();
+      const idxLink = $el.index();
+      if (idxRotulo !== -1 && idxLink !== -1 && idxRotulo < idxLink) {
+        const texto = $rotulo.text().replace(/\s+/g, ' ').trim();
+        if (texto) {
+          if (QUALIDADE_PURA_REGEX.test(texto)) textoIrmaoAnterior = texto;
+          if (this.pareceTituloDeItem(texto)) tituloIrmaoAnterior = texto;
+        }
       }
-      irmao = irmao.prev();
+    }
+
+    // 2) Fallback pro <p> anterior — só quando nada foi achado no próprio <p>
+    if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
+      let irmao = $pai.prev();
+      for (let passo = 0; passo < 3 && irmao.length; passo++) {
+        const texto = irmao.text().replace(/\s+/g, ' ').trim();
+        if (texto) {
+          if (QUALIDADE_PURA_REGEX.test(texto)) textoIrmaoAnterior = texto;
+          if (this.pareceTituloDeItem(texto)) tituloIrmaoAnterior = texto;
+          break;
+        }
+        irmao = irmao.prev();
+      }
     }
 
     return { altDaImg, textoIrmaoAnterior, tituloIrmaoAnterior };

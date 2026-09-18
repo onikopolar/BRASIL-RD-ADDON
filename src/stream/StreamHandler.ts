@@ -130,8 +130,16 @@ export class StreamHandler {
         return { streams: sorted };
       }
 
-      const informativeStream = this.createInformativeStreamIfNoContent(request);
-      return { streams: informativeStream ? [informativeStream] : [] };
+      this.logger.info('📭 Nada encontrado', {
+        requestId,
+        imdbId,
+        type: request.type,
+        dbStreams: dbResult.streams.length,
+        catalogStreams: catalogResult.streams.length,
+      });
+
+      // Banco vazio e catálogo vazio → sem stream. Sem fallback informativo. Só um mini aviso pro terminal.
+      return { streams: [] };
     } catch (error) {
       this.logger.error('Falha no processamento', {
         requestId,
@@ -169,7 +177,7 @@ export class StreamHandler {
     if (paraChecar.length === 0) return;
     for (const h of paraChecar) this.seedsCheckedAt.set(h, now);
 
-    void this.enrichSeedersEmBackground(paraChecar, apiKey).catch(() => {});
+    void this.enrichSeedersEmBackground(paraChecar, apiKey).catch(() => { });
   }
 
   //Busca seeds reais de cada hash em lotes paralelos e grava no banco. Nunca lança.
@@ -182,7 +190,7 @@ export class StreamHandler {
       await Promise.all(batch.map(async hash => {
         const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC).catch(() => 0);
         if (seeds > 0) {
-          await Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => {});
+          await Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => { });
           atualizados++;
         }
       }));
@@ -220,18 +228,6 @@ export class StreamHandler {
       requestId
     );
     return this.convertToStreamFormat(informativeStream);
-  }
-
-  private createInformativeStreamIfNoContent(request: StreamRequest): Stream | null {
-    const imdbId = this.extractImdbIdFromRequest(request);
-    if (imdbId || request.type === 'series') {
-      const informativeStream = this.staticResponseService.createInformativeStream(
-        StaticResponse.DOWNLOADING,
-        request.id
-      );
-      return this.convertToStreamFormat(informativeStream);
-    }
-    return null;
   }
 
   private convertToStreamFormat(informativeStream: any): Stream {

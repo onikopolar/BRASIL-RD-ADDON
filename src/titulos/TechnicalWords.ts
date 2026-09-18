@@ -142,7 +142,7 @@ export const COLLECTION_WORDS_FILMES = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
   'coletanea', 'franquia', 'duologia',
   'collection', 'complete collection', 'the complete collection',
-  'movie collection', 'film collection', 'anthology',
+  'movie collection', 'film collection',
   'todos os filmes', 'all movies', 'all films', 'todos filmes',
 ]);
 
