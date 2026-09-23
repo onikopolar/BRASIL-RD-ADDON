@@ -132,7 +132,8 @@ export class ImdbScraperService {
     ImdbScraperService.globalCache.set(key, entry);
   }
 
-  // Lê do banco se a entrada é recente, tem episodeTitles quando precisa, e não tem mojibake.
+  // Lê do banco se a entrada é recente, tem episodeTitles quando precisa, não tem mojibake
+  // e não é uma entrada legacy (gravada antes do fix que separa titlesPt/titlesEn).
   private async getFromDbCache(imdbId: string, season: number): Promise<ImdbTitles | null> {
     try {
       const row: any = await ImdbTitleCache.findOne({
@@ -150,8 +151,15 @@ export class ImdbScraperService {
       if (season > 0 && !row.episodeTitles) return null;
 
       // Entrada com mojibake é ignorada — próxima request regrava limpo.
-      if (this.temMojibake(row.episodeTitles) || this.temMojibake(row.titlesPt)) {
+      if (this.temMojibake(row.episodeTitles) || this.temMojibake(row.titlesPt) || this.temMojibake(row.titlesEn)) {
         logger.debug('DB_CACHE_MOJIBAKE_SKIP', { imdbId, season });
+        return null;
+      }
+
+      // Entrada legacy: titlesPt === titlesEn (bug histórico do saveToDbCache que
+      // gravava o mesmo array nas duas colunas). Força re-fetch pra regravar com o fix.
+      if (this.ehEntradaLegacy(row.titlesPt, row.titlesEn)) {
+        logger.debug('DB_CACHE_LEGACY_SKIP', { imdbId, season });
         return null;
       }
 
@@ -162,24 +170,40 @@ export class ImdbScraperService {
     }
   }
 
-  // Reconstrói o ImdbTitles a partir dos campos salvos. Perde portugueseTitle/priority (não salvos).
-  private reconstruirImdbTitles(row: any): ImdbTitles {
-    const allTitles: string[] = [];
-    const pt = Array.isArray(row.titlesPt) ? row.titlesPt : [];
-    const en = Array.isArray(row.titlesEn) ? row.titlesEn : [];
+  // Detecta entrada gravada antes do fix: as duas colunas idênticas (mesmo array, mesma ordem).
+  private ehEntradaLegacy(titlesPt: any, titlesEn: any): boolean {
+    if (!Array.isArray(titlesPt) || !Array.isArray(titlesEn)) return false;
+    if (titlesPt.length === 0 && titlesEn.length === 0) return false;
+    if (titlesPt.length !== titlesEn.length) return false;
+    return titlesPt.every((t: string, i: number) => t === titlesEn[i]);
+  }
 
+  // Reconstrói o ImdbTitles a partir dos campos salvos.
+  // titlesEn[0] é o título original; titlesPt[0] é o PT-BR (quando existe).
+  private reconstruirImdbTitles(row: any): ImdbTitles {
+    const pt: string[] = Array.isArray(row.titlesPt) ? row.titlesPt : [];
+    const en: string[] = Array.isArray(row.titlesEn) ? row.titlesEn : [];
+
+    const portugueseTitle = pt[0] || null;
+    const originalTitle = en[0] || portugueseTitle || '';
+
+    const allTitles: string[] = [];
+    if (portugueseTitle) allTitles.push(portugueseTitle);
+    if (originalTitle && originalTitle !== portugueseTitle) allTitles.push(originalTitle);
     for (const t of pt) if (t && !allTitles.includes(t)) allTitles.push(t);
     for (const t of en) if (t && !allTitles.includes(t)) allTitles.push(t);
 
+    const hasPortuguese = !!portugueseTitle && portugueseTitle !== originalTitle;
+
     return {
-      originalTitle: allTitles[0] || '',
-      portugueseTitle: null,
-      portugueseTitleRaw: null,
+      originalTitle,
+      portugueseTitle: hasPortuguese ? portugueseTitle : null,
+      portugueseTitleRaw: hasPortuguese ? portugueseTitle : null,
       allTitles,
-      foundInPortuguese: false,
+      foundInPortuguese: hasPortuguese,
       year: row.year ?? undefined,
       mediaType: undefined,
-      portuguesePriority: false,
+      portuguesePriority: hasPortuguese,
       episodeTitles: row.episodeTitles || null,
     };
   }
@@ -210,18 +234,35 @@ export class ImdbScraperService {
     return value;
   }
 
-  // Grava no banco. Corrige mojibake antes de gravar. Falha vira debug.
+  // Grava no banco. Separa títulos PT e EN em colunas distintas pra reconstrução correta.
+  // Corrige mojibake antes de gravar. Falha vira debug.
   private async saveToDbCache(imdbId: string, season: number, data: ImdbTitles): Promise<void> {
     try {
-      // Corrige mojibake esporádico da TMDB antes de gravar.
-      const titles = (data.allTitles || []).map(t => this.corrigirMojibake(t));
+      const origClean = this.corrigirMojibake(data.originalTitle || '');
+      const ptClean = data.portugueseTitle ? this.corrigirMojibake(data.portugueseTitle) : null;
+      const allClean = (data.allTitles || []).map(t => this.corrigirMojibake(t));
+
+      // titlesPt: apenas o título em português (quando existe).
+      const titlesPt: string[] = ptClean ? [ptClean] : [];
+
+      // titlesEn: original primeiro (posição 0 é o que reconstruirImdbTitles lê),
+      // seguido dos demais títulos que não sejam o PT nem duplicatas do original.
+      const titlesEnRaw = [origClean, ...allClean];
+      const titlesEn: string[] = [];
+      for (const t of titlesEnRaw) {
+        if (!t) continue;
+        if (t === ptClean) continue;
+        if (titlesEn.includes(t)) continue;
+        titlesEn.push(t);
+      }
+
       const episodeTitlesLimpos = this.corrigirMojibake(data.episodeTitles ?? null);
 
       await ImdbTitleCache.upsert({
         imdbId,
         season,
-        titlesPt: titles,
-        titlesEn: titles,
+        titlesPt,
+        titlesEn,
         year: data.year ?? null,
         episodeTitles: episodeTitlesLimpos,
         updatedAt: new Date(),
@@ -258,6 +299,7 @@ export class ImdbScraperService {
         const htmlResult = await getTmdbTitlesViaHtml(imdbId);
         if (htmlResult) {
           ImdbScraperService.setCache(cacheKey, { data: htmlResult, timestamp: Date.now() });
+          await this.saveToDbCache(imdbId, seasonKey, htmlResult);
           return htmlResult;
         }
 
@@ -265,6 +307,7 @@ export class ImdbScraperService {
         logger.debug('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
         const imdbResult = await this.scrapeImdbTitle(imdbId);
         ImdbScraperService.setCache(cacheKey, { data: imdbResult, timestamp: Date.now() });
+        await this.saveToDbCache(imdbId, seasonKey, imdbResult);
         return imdbResult;
       }
 
@@ -601,8 +644,8 @@ export class ImdbScraperService {
     return {
       cacheSize: ImdbScraperService.globalCache.size,
       cacheTTL: this.cacheTTL,
-      version: '2.4.0',
-      feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b)',
+      version: '2.5.0',
+      feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17)',
     };
   }
 }

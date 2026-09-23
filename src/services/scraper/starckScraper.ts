@@ -16,7 +16,7 @@ import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const logger = new Logger('StarckScraper');
 
-const STARCK_BASE = 'https://www.starck-oficial.com';
+const STARCK_BASE = 'https://www.starckfilmes-v24.com';
 
 const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
 
@@ -28,6 +28,7 @@ export interface StarckTorrent {
   infoHash: string;
   originalTitle?: string;
   year?: number;
+  years?: number[];
   language?: string;
   canonicalName?: string;
   qualityHint?: string;
@@ -42,6 +43,7 @@ export interface StarckTorrent {
 export interface PostMetadata {
   originalTitle?: string;
   year?: number;
+  years?: number[];
   size?: string;
   language?: string;
   quality?: string;
@@ -168,7 +170,8 @@ export async function searchStarckLinks(
   allQueries: string[],
   targetSeason?: number,
   targetYear?: number,
-  mediaType?: TipoConteudo
+  mediaType?: TipoConteudo,
+  type?: 'movie' | 'series'
 ): Promise<SearchResultItem[]> {
   const searchUrl = `${STARCK_BASE}/?s=${encodeURIComponent(searchQuery)}`;
 
@@ -191,8 +194,13 @@ export async function searchStarckLinks(
 
       if (!slugTitle || slugTitle.length < 3) return;
 
+      const textoRaw = ($(el).text() || '').trim();
+      const titleAttr = ($(el).attr('title') || '').trim();
+      const textoUtil = textoRaw.length > 3 && !/^(N\/D|[\d.,]+)$/i.test(textoRaw);
+      const titulo = textoUtil ? textoRaw : (titleAttr || slugTitle);
+
       itemsMap.set(fullUrl, {
-        title: $(el).text().trim() || slugTitle,
+        title: titulo,
         postUrl: fullUrl,
         slugTitle,
         range,
@@ -202,18 +210,37 @@ export async function searchStarckLinks(
     const results = [...itemsMap.values()];
     const frasesArr = [...construirFrases(allQueries)];
 
+    // Só FILME usa collection pra bypassar similaridade.
+    // Série: "1ª Temporada Completa" é só uma temporada, não pack.
+    // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
+    const ehSerie = mediaType === 'series' || mediaType === 'tv';
+
+    let descartadosPorTipo = 0;
     let descartadosPorTemporada = 0;
     let descartadosPorSimilaridade = 0;
     let aceitosPorColecao = 0;
 
     const filtered = results.filter(item => {
+      // Pré-filtro de tipo via slug: range != null sinaliza série; coleção de série cobre pack sem range.
+      const isCollection = !ehSerie && isCollectionTitle(item.slugTitle, mediaType);
+      const isCollectionSeries = isCollectionTitle(item.slugTitle, 'series');
+      const pareceSerie = item.range !== null || isCollectionSeries;
+
+      if (type === 'movie' && pareceSerie) {
+        descartadosPorTipo++;
+        return false;
+      }
+      if (type === 'series' && !pareceSerie) {
+        descartadosPorTipo++;
+        return false;
+      }
+
       if (!temporadaAlvoNoRange(item.range, targetSeason)) {
         descartadosPorTemporada++;
         return false;
       }
 
       const resultado = similarity.compararComTitulos(frasesArr, item.slugTitle);
-      const isCollection = isCollectionTitle(item.slugTitle, mediaType);
 
       if (!resultado.match && !isCollection) {
         descartadosPorSimilaridade++;
@@ -227,9 +254,9 @@ export async function searchStarckLinks(
 
     logger.debug(
       `Starck: ${results.length} itens | matches=${filtered.length}` +
-      ` | descartados: temporada=${descartadosPorTemporada} similaridade=${descartadosPorSimilaridade}` +
+      ` | descartados: tipo=${descartadosPorTipo} temporada=${descartadosPorTemporada} similaridade=${descartadosPorSimilaridade}` +
       (aceitosPorColecao > 0 ? ` | coleções=${aceitosPorColecao}` : '') +
-      ` | mediaType=${mediaType ?? '-'}`
+      ` | type=${type ?? '-'} mediaType=${mediaType ?? '-'}`
     );
 
     return filtered.slice(0, 40);
@@ -239,7 +266,7 @@ export async function searchStarckLinks(
   }
 }
 
-// Lê o bloco .post-description.
+// Lê o bloco .post-description. Coleta todos os anos de "Lançamento" — "2002 - 2012" vira [2002, 2012].
 export function extractPostMetadata($: any): PostMetadata {
   const result: PostMetadata = {};
 
@@ -252,8 +279,12 @@ export function extractPostMetadata($: any): PostMetadata {
 
       if (label.includes('nome original')) result.originalTitle = value;
       else if (label.includes('lançamento') || label.includes('ano')) {
-        const yearMatch = value.match(/\b(19|20)\d{2}\b/);
-        if (yearMatch) result.year = parseInt(yearMatch[0]);
+        const yearMatches = value.match(/\b(19|20)\d{2}\b/g) || [];
+        if (yearMatches.length > 0) {
+          const anos = yearMatches.map((y: string) => parseInt(y));
+          result.years = anos;
+          result.year = anos[0];
+        }
       }
       else if (label.includes('tamanho')) result.size = value;
       else if (label.includes('idioma')) result.language = value;
@@ -473,7 +504,7 @@ export function extrairMagnetDoLink(href: string): string | null {
 
   try {
     const decoded = decodeURIComponent(idMatch[1]);
-    let magnet = Buffer.from(decoded, 'base64').toString('latin1').replace(/&amp;/gi, '&');
+    let magnet = Buffer.from(decoded, 'base64').toString('utf8').replace(/&amp;/gi, '&');
     if (!magnet.startsWith('magnet:?')) return null;
     magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
     return magnet;
@@ -669,7 +700,7 @@ export async function searchStarck(
   const allResults: StarckTorrent[] = [];
   const seenInfoHashes = new Set<string>();
 
-  const links = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType);
+  const links = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType, type);
 
   if (links.length > 0) {
     let processedPosts = 0;
@@ -698,6 +729,11 @@ export async function searchStarck(
         const metadata = extractPostMetadata($);
         const { torrents } = await decodeBase64Magnets($, htmlSerializado, link.title, metadata);
 
+        // Post inteiro é coleção? (ex: "Quadrilogia Completa – A Era do Gelo").
+        // Nesse caso o título do post carrega o marcador de coleção — metadata PT só traz "Ice Age" puro.
+        const postEhColecao = isCollectionTitle(link.title, mediaType);
+        const originalDoPost = postEhColecao ? link.title : undefined;
+
         for (const magnet of torrents) {
           if (seenInfoHashes.has(magnet.infoHash)) continue;
           seenInfoHashes.add(magnet.infoHash);
@@ -709,8 +745,19 @@ export async function searchStarck(
           const dnEhColecao = !!dn && isCollectionTitle(dn, mediaType);
           const originalDoDn = dnEhColecao ? dn : undefined;
 
-          magnet.originalTitle = originalDoDn || metadata.originalTitle || link.slugTitle;
-          magnet.year = metadata.year ?? (dn ? extrairAno(dn)?.[0] : undefined);
+          magnet.originalTitle = originalDoDn || originalDoPost || metadata.originalTitle || link.slugTitle;
+
+          // years: range completo (ex: quadrilogia 2002-2012) do dn se tiver, senão do metadata.
+          const anosDoDn = dn ? extrairAno(dn) : undefined;
+          const years = (anosDoDn && anosDoDn.length > 0)
+            ? anosDoDn
+            : (metadata.years && metadata.years.length > 0
+              ? metadata.years
+              : (metadata.year !== undefined ? [metadata.year] : undefined));
+
+          magnet.years = years;
+          magnet.year = years ? years[0] : undefined;
+
           magnet.language = magnet.language || metadata.language;
           if (metadata.quality && !magnet.qualityHint) magnet.qualityHint = metadata.quality;
           if (!magnet.size && metadata.size) magnet.size = metadata.size;

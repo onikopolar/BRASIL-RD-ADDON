@@ -186,9 +186,11 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
-    // Delegação de sequência: a régua vem do shared. Só rejeita quando o torrent declara
-    // um número que nenhum título TMDB declara.
     const seqTorrent = getPotentialSequelNumbers(torrentTitle);
+
+    // Sequência confirmada quando algum título TMDB declara o mesmo número do torrent.
+    const tmdbDeclaraMesmoNumero = seqTorrent.length > 0
+      && titulosValidos.some(t => getPotentialSequelNumbers(t).some(n => seqTorrent.includes(n)));
 
     let melhor: ScoreDetalhes | null = null;
     let melhorTitulo = '';
@@ -199,21 +201,29 @@ export class SimilarityCalculator {
       if (tmdbTokens.length === 0) continue;
 
       const seqTmdb = getPotentialSequelNumbers(titulo);
-      if (seqTorrent.length > 0 && seqTmdb.length === 0) {
-        this.logger.debug(`SEQUENCIA rejeitada | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb="${titulo.substring(0, 40)}"`);
-        seqBloqueou = true;
-        continue;
-      }
-      if (seqTorrent.length > 0 && seqTmdb.length > 0) {
-        const inter = seqTorrent.filter(n => seqTmdb.includes(n));
-        if (inter.length === 0) {
-          this.logger.debug(`SEQUENCIA divergente | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb=[${seqTmdb.join(',')}]`);
+      let torrentTokensParaComparar = torrentTokens;
+
+      if (seqTorrent.length > 0) {
+        if (seqTmdb.length > 0) {
+          const inter = seqTorrent.filter(n => seqTmdb.includes(n));
+          if (inter.length === 0) {
+            this.logger.debug(`SEQUENCIA divergente | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb=[${seqTmdb.join(',')}]`);
+            seqBloqueou = true;
+            continue;
+          }
+        } else if (!tmdbDeclaraMesmoNumero) {
+          this.logger.debug(`SEQUENCIA rejeitada | "${torrentTitle.substring(0, 50)}" | torrent=[${seqTorrent.join(',')}] tmdb="${titulo.substring(0, 40)}"`);
           seqBloqueou = true;
           continue;
+        } else {
+          // Sequência confirmada em outro título — remove o número do torrent pra casar com o subtítulo.
+          torrentTokensParaComparar = torrentTokens.filter(
+            t => !/^\d{1,2}$/.test(t) || !seqTorrent.includes(parseInt(t))
+          );
         }
       }
 
-      const detalhes = this.calcularScore(tmdbTokens, torrentTokens);
+      const detalhes = this.calcularScore(tmdbTokens, torrentTokensParaComparar);
       if (!melhor || detalhes.score > melhor.score) {
         melhor = detalhes;
         melhorTitulo = titulo;
@@ -385,9 +395,12 @@ export class SimilarityCalculator {
 
   matchCurtoSuspeito(tmdbTokens: string[], torrentTokens: string[]): boolean {
     if (tmdbTokens.length !== 1) return false;
-    if (torrentTokens.length < 3) return false;
 
     const tokenTmdb = tmdbTokens[0];
+    if (tokenTmdb.length > 3) return false;  // só guarda tokens curtos/ambíguos (it, up, us, her)
+
+    if (torrentTokens.length < 3) return false;
+
     const extras = torrentTokens.filter(t => t !== tokenTmdb);
     if (extras.length < 2) return false;
 

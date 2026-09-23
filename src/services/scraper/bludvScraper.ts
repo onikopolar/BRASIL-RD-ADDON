@@ -59,6 +59,10 @@ const AXIOS_OPTS = {
   },
 };
 
+// IDs de categoria do WordPress do BLUDV — descobertos via /wp-json/wp/v2/categories?slug=
+const CAT_FILMES = 92;
+const CAT_SERIES = 10;
+
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
 
 export type Section = {
@@ -105,6 +109,14 @@ function dedupByMagnet(magnets: ExtractedMagnet[]): ExtractedMagnet[] {
 
 function truncar(s: string, n = 60): string {
   return s.length > n ? s.substring(0, n) + '…' : s;
+}
+
+// Converte o mediaType do catalog no ID de categoria do BLUDV — o WordPress filtra server-side via &cat=.
+// 'tv' é o rótulo do TMDB pra série — tratamos igual a 'series'. Sem tipo declarado devolve null.
+function mapearCategoriaBludv(mediaType?: TipoConteudo): number | null {
+  if (mediaType === 'movie') return CAT_FILMES;
+  if (mediaType === 'series' || mediaType === 'tv') return CAT_SERIES;
+  return null;
 }
 
 export type DiagnosticoSecao = {
@@ -188,7 +200,11 @@ export class BludvScraper {
     frasesBusca: FrasesBusca,
     mediaType?: TipoConteudo
   ): Promise<PostItem[]> {
-    const searchUrl = `${BASE_URL}/?s=${encodeURIComponent(query)}`;
+    const catId = mapearCategoriaBludv(mediaType);
+    const searchUrl = catId
+      ? `${BASE_URL}/?s=${encodeURIComponent(query)}&cat=${catId}`
+      : `${BASE_URL}/?s=${encodeURIComponent(query)}`;
+
     const res = await axios.get(searchUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
@@ -222,9 +238,16 @@ export class BludvScraper {
 
     const tokensRuido = calcularTokensRuido(items.map(i => i.title));
 
-    return items
+    const filtrados = items
       .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido, mediaType))
       .slice(0, 5);
+
+    // Uma linha por query — categoria aplicada, candidatos extraídos e quantos passaram no filtro.
+    logger.debug(
+      `[BLUDV] "${truncar(query, 40)}" | cat=${catId ?? 'all'} candidatos=${items.length} filtrados=${filtrados.length}`
+    );
+
+    return filtrados;
   }
 
   postRelevante(
@@ -250,7 +273,12 @@ export class BludvScraper {
 
     const tituloLimpo = limparPorRaridade(item.title, tokensRuido);
     const resultado = this.similarity.compararComTitulos([...frasesBusca.frases], tituloLimpo);
-    const isCollection = isCollectionTitle(item.title, mediaType);
+
+    // Só FILME usa collection no pré-filtro.
+    // Série: "1ª Temporada Completa" é só uma temporada, não pack.
+    // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
+    const ehSerie = mediaType === 'series' || mediaType === 'tv';
+    const isCollection = !ehSerie && isCollectionTitle(item.title, mediaType);
 
     if (!resultado.match && !isCollection) {
       logger.debug(`[BLUDV] ignorado (${resultado.score.toFixed(2)} ${resultado.nivel}): "${truncar(item.title, 55)}"`);
@@ -288,7 +316,7 @@ export class BludvScraper {
 
     let imdbConfirmed = false;
     if (imdbId) {
-      const imdbIdDoPost = res.data.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+      const imdbIdDoPost = res.data.match(/imdb\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
         const isCollection = isCollectionTitle(postTitle, mediaType);
         if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) return [];
@@ -454,8 +482,8 @@ export class BludvScraper {
   private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
     const anos = years && years.length > 0
       ? (years.length === 1
-          ? `${years[0]}`
-          : `${years[0]}-${years[years.length - 1]}`)
+        ? `${years[0]}`
+        : `${years[0]}-${years[years.length - 1]}`)
       : null;
 
     return [base, anos, quality].filter(Boolean).join(' ').trim();

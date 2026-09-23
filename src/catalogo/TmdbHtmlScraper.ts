@@ -48,82 +48,17 @@ const axiosConfigEn = {
 };
 
 // ═══════════════════════════════════════════════════════════════════════
-//  FALLBACK: TMDB /find/{imdb_id} — converte IMDB ID direto sem OMDB
-// ═══════════════════════════════════════════════════════════════════════
-
-async function getTmdbViaFindEndpoint(imdbId: string): Promise<ImdbTitles | null> {
-  try {
-    // Tenta TMDB API find endpoint (sem key = fallback pra HTML)
-    const apiKey = process.env.TMDB_API_KEY;
-    if (apiKey) {
-      const axios = (await import('axios')).default;
-      const resp = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
-        params: { api_key: apiKey, external_source: 'imdb_id', language: 'pt-BR' },
-        timeout: 10000,
-        headers: { 'User-Agent': 'BrasilRD/1.0' },
-      });
-      const results = resp.data;
-      const movie = results?.movie_results?.[0];
-      const tv = results?.tv_results?.[0];
-      const item = movie || tv;
-      if (item) {
-        const mediaType = movie ? 'movie' as const : 'tv' as const;
-        const url = `https://www.themoviedb.org/${mediaType}/${item.id}?language=pt-BR`;
-        const meta = await scrapeTmdbPage(url);
-        if (meta) {
-          const normalized = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-          const allTitles = [normalized(meta.originalTitle)];
-          if (meta.portugueseTitle) {
-            const normPt = normalized(meta.portugueseTitle);
-            if (!allTitles.includes(normPt)) allTitles.push(normPt);
-          }
-          return {
-            originalTitle: meta.originalTitle,
-            portugueseTitle: meta.portugueseTitle,
-            portugueseTitleRaw: meta.portugueseTitleRaw,
-            allTitles,
-            foundInPortuguese: !!meta.portugueseTitle,
-            year: meta.year,
-            mediaType,
-            portuguesePriority: !!meta.portugueseTitle,
-          };
-        }
-      }
-    }
-  } catch { /* fallback silencioso */ }
-  
-  // Fallback HTML: tenta /movie/{imdbId} ou /tv/{imdbId}
-  try {
-    for (const type of ['movie', 'tv']) {
-      const url = `https://www.themoviedb.org/${type}/${imdbId}?language=pt-BR`;
-      const meta = await scrapeTmdbPage(url);
-      if (meta) {
-        const normalized = (t: string) => t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-        const allTitles = [normalized(meta.originalTitle)];
-        if (meta.portugueseTitle) {
-          const normPt = normalized(meta.portugueseTitle);
-          if (!allTitles.includes(normPt)) allTitles.push(normPt);
-        }
-        return {
-          originalTitle: meta.originalTitle,
-          portugueseTitle: meta.portugueseTitle,
-          portugueseTitleRaw: meta.portugueseTitleRaw,
-          allTitles,
-          foundInPortuguese: !!meta.portugueseTitle,
-          year: meta.year,
-          mediaType: type as 'movie' | 'tv',
-          portuguesePriority: !!meta.portugueseTitle,
-        };
-      }
-    }
-  } catch { /* fallback silencioso */ }
-  
-  return null;
-}
-
-// ═══════════════════════════════════════════════════════════════════════
 //  HELPERS
 // ═══════════════════════════════════════════════════════════════════════
+
+function normalizeTitle(t: string): string {
+  return t
+    .toLowerCase()
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\w\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
 
 async function retryAxios<T>(fn: () => Promise<T>, maxRetries: number, delayMs: number): Promise<T> {
   let lastErr: any;
@@ -141,34 +76,217 @@ async function retryAxios<T>(fn: () => Promise<T>, maxRetries: number, delayMs: 
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 1: Pega título via OMDB API (gratuita, sem key obrigatória)
+//  FALLBACK: TMDB /find/{imdb_id}
 // ═══════════════════════════════════════════════════════════════════════
 
-async function getOmdbTitle(imdbId: string): Promise<{ title: string; year?: number; type?: 'tv' | 'movie' } | null> {
+async function getTmdbViaFindEndpoint(imdbId: string): Promise<ImdbTitles | null> {
   try {
-    const url = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
-    const res = await retryAxios(() => axios.get(url, {
-      timeout: 10000,
-      headers: { 'User-Agent': 'BrasilRD/1.0' },
-    }), 3, 1000);
-    const data = res.data;
-    if (!data || data.Response === 'False' || !data.Title) {
-      logger.warn(`OMDB: sem resultados para ${imdbId}`);
+    const apiKey = process.env.TMDB_API_KEY;
+    if (apiKey) {
+      const resp = await axios.get(`https://api.themoviedb.org/3/find/${imdbId}`, {
+        params: { api_key: apiKey, external_source: 'imdb_id', language: 'pt-BR' },
+        timeout: 10000,
+        headers: { 'User-Agent': 'BrasilRD/1.0' },
+      });
+      const results = resp.data;
+      const movie = results?.movie_results?.[0];
+      const tv = results?.tv_results?.[0];
+      const item = movie || tv;
+      if (item) {
+        const mediaType = movie ? 'movie' as const : 'tv' as const;
+        const url = `https://www.themoviedb.org/${mediaType}/${item.id}?language=pt-BR`;
+        const meta = await scrapeTmdbPage(url);
+        if (meta) {
+          const allTitles = [normalizeTitle(meta.originalTitle)];
+          if (meta.portugueseTitle) {
+            const normPt = normalizeTitle(meta.portugueseTitle);
+            if (!allTitles.includes(normPt)) allTitles.push(normPt);
+          }
+          return {
+            originalTitle: meta.originalTitle,
+            portugueseTitle: meta.portugueseTitle,
+            portugueseTitleRaw: meta.portugueseTitleRaw,
+            allTitles,
+            foundInPortuguese: !!meta.portugueseTitle,
+            year: meta.year,
+            mediaType,
+            portuguesePriority: !!meta.portugueseTitle,
+          };
+        }
+      }
+    }
+  } catch { /* fallback silencioso */ }
+
+  try {
+    for (const type of ['movie', 'tv']) {
+      const url = `https://www.themoviedb.org/${type}/${imdbId}?language=pt-BR`;
+      const meta = await scrapeTmdbPage(url);
+      if (meta) {
+        const allTitles = [normalizeTitle(meta.originalTitle)];
+        if (meta.portugueseTitle) {
+          const normPt = normalizeTitle(meta.portugueseTitle);
+          if (!allTitles.includes(normPt)) allTitles.push(normPt);
+        }
+        return {
+          originalTitle: meta.originalTitle,
+          portugueseTitle: meta.portugueseTitle,
+          portugueseTitleRaw: meta.portugueseTitleRaw,
+          allTitles,
+          foundInPortuguese: !!meta.portugueseTitle,
+          year: meta.year,
+          mediaType: type as 'movie' | 'tv',
+          portuguesePriority: !!meta.portugueseTitle,
+        };
+      }
+    }
+  } catch { /* fallback silencioso */ }
+
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PASSO 1: Pega título via Cinemeta (substitui OMDB)
+// ═══════════════════════════════════════════════════════════════════════
+
+async function getCinemetaTitle(imdbId: string): Promise<{ title: string; year?: number; type?: 'tv' | 'movie' } | null> {
+  for (const tipo of ['series', 'movie'] as const) {
+    try {
+      const url = `https://v3-cinemeta.strem.io/meta/${tipo}/${imdbId}.json`;
+      const res = await retryAxios(() => axios.get(url, {
+        timeout: 10000,
+        headers: { 'User-Agent': 'BrasilRD/1.0' },
+      }), 3, 1000);
+
+      const meta = res.data?.meta;
+      if (!meta?.name) continue;
+
+      const title = meta.name as string;
+      const yearStr = String(meta.year ?? '').trim();
+
+      // Só aceita year se for 4 dígitos puros.
+      // Ranges como "1995–2003" ficam undefined pra não rejeitarem
+      // o ano correto no filtro do PASSO 3.
+      const year = /^\d{4}$/.test(yearStr) ? parseInt(yearStr, 10) : undefined;
+
+      const type: 'tv' | 'movie' = tipo === 'series' ? 'tv' : 'movie';
+
+      logger.debug(`Cinemeta: "${title}" (${yearStr || '?'}) [${type}]`);
+      return { title, year, type };
+    } catch {
+      // tenta o próximo tipo
+    }
+  }
+  return null;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+//  PASSO 2: AdoroCinema — fonte PT-BR nativa
+//  O AdoroCinema ofusca os hrefs em base64 dentro da classe CSS.
+//  Decodifica e faz exact match por título + tipo.
+// ═══════════════════════════════════════════════════════════════════════
+
+interface AdoroCard {
+  title: string;
+  href: string;
+  mediaType: 'movie' | 'tv';
+  year?: number;
+}
+
+// Decodifica classe ofuscada do AdoroCinema: "ACrL3Nlcmllcy9zZXJpZS0zNDU5Lw=="
+// → remove "ACr" → "/series/serie-3459/"
+function decodeAdoroClass(cls: string | undefined): string | null {
+  if (!cls) return null;
+  const cleaned = cls.replace(/ACr/g, '');
+  try {
+    const decoded = Buffer.from(cleaned, 'base64').toString('utf-8');
+    const m = decoded.match(/^\/(series\/serie-\d+|filmes\/filme-\d+)\//);
+    return m ? `/${m[1]}/` : null;
+  } catch {
+    return null;
+  }
+}
+
+// O AdoroCinema resolve o match sozinho: o ?q= dele cruza títulos PT e EN
+// (buscar "Ice Age: The Meltdown" devolve "A Era do Gelo 2").
+// Se retornou card, é o título certo — não precisa de exact match nem tipo.
+async function searchAdoroCinema(title: string): Promise<AdoroCard | null> {
+  try {
+    const url = `https://www.adorocinema.com/pesquisar/?q=${encodeURIComponent(title)}`;
+    const res = await axios.get(url, axiosConfig);
+    const $ = cheerio.load(res.data);
+
+    const cards: AdoroCard[] = [];
+    $('.card.entity-card').each((_i, el) => {
+      const t = $(el).find('.meta-title-link').text().trim();
+      const cls = $(el).find('.meta-title-link').attr('class')
+        || $(el).find('.thumbnail-container').attr('class')
+        || '';
+      const href = decodeAdoroClass(cls);
+      if (!t || !href) return;
+
+      const mediaType: 'movie' | 'tv' = href.includes('/series/') ? 'tv' : 'movie';
+      const yearText = $(el).find('.meta-body-info').text().replace(/\s+/g, ' ').trim();
+      const ym = yearText.match(/(\d{4})/);
+
+      cards.push({
+        title: t,
+        href,
+        mediaType,
+        year: ym ? parseInt(ym[1], 10) : undefined,
+      });
+    });
+
+    if (cards.length === 0) {
+      logger.debug(`AdoroCinema: 0 cards para "${title}"`);
       return null;
     }
-    const title = data.Title;
-    const year = data.Year ? parseInt(data.Year) : undefined;
-    const type = data.Type === 'series' ? 'tv' as const : data.Type === 'movie' ? 'movie' as const : undefined;
-    logger.debug(`OMDB: "${title}" (${year || '?'}) [${type || '?'}]`);
-    return { title, year, type };
+
+    logger.debug(`AdoroCinema: "${title}" → "${cards[0].title}" (${cards[0].year ?? '?'}) ${cards[0].href}`);
+    return cards[0];
   } catch (err: any) {
-    logger.warn(`OMDB falhou para ${imdbId}: ${err.message}`);
+    logger.warn(`AdoroCinema search falhou para "${title}": ${err.message}`);
+    return null;
+  }
+}
+async function scrapeAdoroPage(href: string): Promise<{
+  titlePt: string;
+  originalTitle: string | null;
+  year?: number;
+  mediaType: 'movie' | 'tv';
+} | null> {
+  try {
+    const url = `https://www.adorocinema.com${href}`;
+    const res = await axios.get(url, axiosConfig);
+    const $ = cheerio.load(res.data);
+
+    const titlePt = $('h1').first().text().trim();
+    if (!titlePt) return null;
+
+    // Título original — estrutura muda entre filme e série.
+    // Série: .meta-body-original-title strong
+    // Filme: .meta-body-item com .light contendo "Título original", strong dentro
+    let originalTitle = $('.meta-body-original-title strong').text().trim() || null;
+    if (!originalTitle) {
+      const origWrap = $('.meta-body-item')
+        .filter((_i, el) => $(el).find('.light').text().includes('Título original'))
+        .first();
+      originalTitle = origWrap.find('strong').text().trim() || null;
+    }
+
+    const metaInfo = $('.meta-body-info').text().replace(/\s+/g, ' ').trim();
+    const year = parseInt(metaInfo.match(/(\d{4})/)?.[1] ?? '', 10) || undefined;
+
+    const mediaType: 'movie' | 'tv' = href.includes('/series/') ? 'tv' : 'movie';
+
+    return { titlePt, originalTitle, year, mediaType };
+  } catch (err: any) {
+    logger.warn(`AdoroCinema scrape falhou para ${href}: ${err.message}`);
     return null;
   }
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: Busca o título no TMDB via search HTML
+//  PASSO 3: Busca o título no TMDB via search HTML (fallback)
 // ═══════════════════════════════════════════════════════════════════════
 
 interface TmdbSearchResult {
@@ -178,26 +296,6 @@ interface TmdbSearchResult {
   year?: number;
 }
 
-async function searchTmdbHtml(query: string, year?: number, preferType?: 'tv' | 'movie'): Promise<TmdbSearchResult | null> {
-  const all = await searchTmdbHtmlAll(query);
-  if (all.length === 0) return null;
-
-  if (preferType && year) {
-    const best = all.find(r => r.mediaType === preferType && r.year === year);
-    if (best) return best;
-  }
-  if (preferType) {
-    const typeMatch = all.find(r => r.mediaType === preferType);
-    if (typeMatch) return typeMatch;
-  }
-  if (year) {
-    const yearMatch = all.find(r => r.year === year);
-    if (yearMatch) return yearMatch;
-  }
-  return all[0];
-}
-
-/** Retorna TODOS os resultados da busca TMDB (sem filtrar) */
 async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
   try {
     const searchUrl = `https://www.themoviedb.org/search?query=${encodeURIComponent(query)}`;
@@ -206,7 +304,6 @@ async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
 
     const results: TmdbSearchResult[] = [];
 
-    // Pega cards de resultado — links para /movie/ ou /tv/
     $('a[href]').each((_i, el) => {
       const href = $(el).attr('href');
       if (!href) return;
@@ -219,7 +316,6 @@ async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
       const mediaType = match[1] as 'movie' | 'tv';
       const fullUrl = `https://www.themoviedb.org${href}`;
 
-      // Pega o título do card (elemento h2 ou p próximo)
       const card = $(el).closest('div, section, article');
       const titleEl = card.find('h2, .title, [class*="title"]').first();
       const title = titleEl.text().trim() || $(el).text().trim();
@@ -235,15 +331,12 @@ async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
       }
     });
 
-    // Dedup por URL
     const seen = new Set<string>();
-    const unique = results.filter(r => {
+    return results.filter(r => {
       if (seen.has(r.tmdbUrl)) return false;
       seen.add(r.tmdbUrl);
       return true;
     });
-
-    return unique;
   } catch (err: any) {
     logger.warn(`TMDB search HTML falhou para "${query}": ${err.message}`);
     return [];
@@ -251,7 +344,7 @@ async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
-//  PASSO 3: Extrai metadados da página do TMDB (pt-BR + en)
+//  PASSO 3b: Extrai metadados da página do TMDB (pt-BR + en)
 // ═══════════════════════════════════════════════════════════════════════
 
 async function scrapeTmdbPage(tmdbUrl: string): Promise<{
@@ -261,7 +354,6 @@ async function scrapeTmdbPage(tmdbUrl: string): Promise<{
   year?: number;
 } | null> {
   try {
-    // Busca páginas em pt-BR e EN EM PARALELO (força language=pt-BR na URL)
     const urlPt = tmdbUrl.includes('?') ? `${tmdbUrl}&language=pt-BR` : `${tmdbUrl}?language=pt-BR`;
     const urlEn = tmdbUrl.includes('?') ? `${tmdbUrl}&language=en-US` : `${tmdbUrl}?language=en-US`;
     const [resPt, resEn] = await Promise.all([
@@ -272,23 +364,19 @@ async function scrapeTmdbPage(tmdbUrl: string): Promise<{
     const $pt = cheerio.load(resPt.data);
     const $en = resEn ? cheerio.load(resEn.data) : null;
 
-    // ═══ H2 é a fonte mais confiável: "Avatar: A Lenda de Aang (2005)" ═══
     const ptH2 = $pt('h2').first().text().trim().replace(/\s+/g, ' ');
     const yearMatch = ptH2.match(/\(\s*(\d{4})\s*\)/);
     const year = yearMatch ? parseInt(yearMatch[1]) : undefined;
     const ptTitle = ptH2.replace(/\s*\(\s*\d{4}\s*\)\s*/, '').trim();
-    
-    // Título original: H2 da página EN
+
     let originalTitle = ptTitle;
     if ($en) {
       const enH2 = $en('h2').first().text().trim().replace(/\s+/g, ' ');
       const enTitle = enH2.replace(/\s*\(\s*\d{4}\s*\)\s*/, '').trim();
       if (enTitle && enTitle !== ptTitle) originalTitle = enTitle;
     }
-    const normalize = (t: string) =>
-      t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
 
-    const isDifferent = normalize(ptTitle) !== normalize(originalTitle);
+    const isDifferent = normalizeTitle(ptTitle) !== normalizeTitle(originalTitle);
 
     logger.debug(`TMDB HTML: PT="${ptTitle}" | ORIG="${originalTitle}" | year=${year} | diff=${isDifferent}`);
 
@@ -312,41 +400,71 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
   const startTime = Date.now();
 
   try {
-    // PASSO 1: Pega título via OMDB
-    const imdbData = await getOmdbTitle(imdbId);
+    // PASSO 1: Pega título via Cinemeta
+    const imdbData = await getCinemetaTitle(imdbId);
     if (!imdbData) {
-      // Fallback: tenta TMDB /find/{imdb_id} direto (sem precisar do título)
-      logger.warn(`TmdbHtmlScraper: OMDB falhou, tentando TMDB find direto para ${imdbId}`);
+      logger.warn(`TmdbHtmlScraper: Cinemeta falhou, tentando TMDB find direto para ${imdbId}`);
       const directResult = await getTmdbViaFindEndpoint(imdbId);
       if (directResult) {
         const duration = Date.now() - startTime;
         logger.info(`TmdbHtmlScraper: "${directResult.originalTitle}" [${directResult.mediaType}] em ${duration}ms (via find)`);
         return directResult;
       }
-      logger.warn(`TmdbHtmlScraper: OMDB falhou para ${imdbId}`);
+      logger.warn(`TmdbHtmlScraper: Cinemeta falhou para ${imdbId}`);
       return null;
     }
 
-    // PASSO 2: Busca no TMDB via search HTML — itera resultados até achar um compatível com OMDB
+    // ═══ PASSO 2: AdoroCinema (fonte PT-BR nativa, prioritária) ═══
+    logger.debug(`AdoroCinema: buscando "${imdbData.title}" [${imdbData.type ?? '?'}]`);
+    const adoroCard = await searchAdoroCinema(imdbData.title);
+    if (adoroCard) {
+      const adoroPage = await scrapeAdoroPage(adoroCard.href);
+      if (adoroPage) {
+        const allTitles = [normalizeTitle(adoroPage.titlePt)];
+        if (adoroPage.originalTitle) {
+          const normOrig = normalizeTitle(adoroPage.originalTitle);
+          if (!allTitles.includes(normOrig)) allTitles.push(normOrig);
+        }
+
+        const result: ImdbTitles = {
+          originalTitle: adoroPage.originalTitle
+            ? normalizeTitle(adoroPage.originalTitle)
+            : normalizeTitle(adoroPage.titlePt),
+          portugueseTitle: normalizeTitle(adoroPage.titlePt),
+          portugueseTitleRaw: adoroPage.titlePt,
+          allTitles,
+          foundInPortuguese: true,
+          year: adoroPage.year,
+          mediaType: adoroPage.mediaType,
+          portuguesePriority: true,
+        };
+
+        const duration = Date.now() - startTime;
+        logger.info(`TmdbHtmlScraper: "${adoroPage.titlePt}" [${adoroPage.mediaType}] (${adoroPage.year ?? '?'}) via AdoroCinema em ${duration}ms`);
+        return result;
+      }
+      logger.debug(`AdoroCinema: página ${adoroCard.href} não raspou, caindo pro TMDB HTML`);
+    } else {
+      logger.debug(`AdoroCinema: sem match exato para "${imdbData.title}", caindo pro TMDB HTML`);
+    }
+
+    // ═══ PASSO 3: TMDB search HTML (fallback original) ═══
     const searchResults = await searchTmdbHtmlAll(imdbData.title);
     if (searchResults.length === 0) {
       logger.warn(`TmdbHtmlScraper: TMDB search sem resultados para "${imdbData.title}"`);
       return null;
     }
 
-    // Tenta cada resultado do TMDB até achar um compatível com OMDB (tipo + ano)
     let bestResult: TmdbSearchResult | null = null;
     let bestMetadata: any = null;
     for (const r of searchResults) {
-      // Filtra por tipo se OMDB informou
       if (imdbData.type && r.mediaType !== imdbData.type) continue;
 
       const meta = await scrapeTmdbPage(r.tmdbUrl);
       if (!meta) continue;
 
-      // Valida ano: se OMDB tem ano e TMDB tem ano diferente (>2 anos), é resultado errado
       if (imdbData.year && meta.year && Math.abs(imdbData.year - meta.year) > 2) {
-        logger.debug(`TmdbHtmlScraper: pulando "${meta.originalTitle}" (${meta.year}) — ano diverge do OMDB (${imdbData.year})`);
+        logger.debug(`TmdbHtmlScraper: pulando "${meta.originalTitle}" (${meta.year}) — ano diverge do Cinemeta (${imdbData.year})`);
         continue;
       }
 
@@ -356,7 +474,6 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
     }
 
     if (!bestResult || !bestMetadata) {
-      // Fallback: usa o primeiro resultado como antes
       const fallback = searchResults[0];
       bestResult = fallback;
       bestMetadata = await scrapeTmdbPage(fallback.tmdbUrl);
@@ -368,19 +485,11 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
 
     const metadata = bestMetadata;
     const tmdbResult = bestResult;
-
-    // O ano é enviado para o similarity calculator (Condition C) validar.
-    // Tolerância de 15 anos para TV cobre séries longas (ex: Rick and Morty 2013-2023)
-    // e rejeita adaptações diferentes com mesmo nome (ex: Avatar 2005 vs 2024).
     const finalYear = imdbData.year || metadata.year;
 
-    // Se TMDB achou um filme de ano diferente, usa o título do TMDB mas ano do OMDB
-    const normalized = (t: string) =>
-      t.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^\w\s]/g, ' ').replace(/\s+/g, ' ').trim();
-
-    const allTitles = [normalized(metadata.originalTitle)];
+    const allTitles = [normalizeTitle(metadata.originalTitle)];
     if (metadata.portugueseTitle) {
-      const normPt = normalized(metadata.portugueseTitle);
+      const normPt = normalizeTitle(metadata.portugueseTitle);
       if (!allTitles.includes(normPt)) allTitles.push(normPt);
     }
 

@@ -22,7 +22,6 @@ export class TitleFilter {
   extrairMetadados(titulo: string): SeriesMetadata {
     const range = extrairRangeEpisodios(titulo);
 
-    // Determina se é pack completo de temporada ou série completa
     const isCompleteSeason = range
       ? (range.seasonStart > 0 && range.episodeStart === 0 && range.episodeEnd === 0)
       : this.episodeMatcher.ehPackTemporadaCompleta(titulo);
@@ -60,23 +59,24 @@ export class TitleFilter {
     try {
       const metadados = this.extrairMetadados(tituloTorrent);
 
-      // extrairAno retorna array, então pegamos o primeiro valor
       const anoDoTitulo = extrairAno(tituloTorrent)?.[0];
       const anoDoTituloParaIdioma = tituloParaIdioma ? extrairAno(tituloParaIdioma)?.[0] : undefined;
       const anoTorrent: number | undefined = anoDoScraper || anoDoTitulo || anoDoTituloParaIdioma;
 
-      // Mexi aqui porque tituloParaIdioma é o título do post (usado só pra filtragem de scrapers)
-      // Ele nunca deve influenciar validação de match. Só tituloTorrent (originalTitle do HTML) decide coleção.
       const isCollection = isCollectionTitle(tituloTorrent);
 
+      // Se o parâmetro years não veio, extrai do próprio título do torrent — packs costumam declarar "(2001-2011)".
+      const yearsDoTitulo = extrairAno(tituloTorrent);
+      const yearsEfetivos = (years && years.length > 0) ? years : yearsDoTitulo;
+
       let isYearInCollection = false;
-      if (years && imdbTitles?.year !== undefined) {
-        if (years.length > 1) {
-          const minYear = Math.min(...years);
-          const maxYear = Math.max(...years);
+      if (yearsEfetivos && imdbTitles?.year !== undefined) {
+        if (yearsEfetivos.length > 1) {
+          const minYear = Math.min(...yearsEfetivos);
+          const maxYear = Math.max(...yearsEfetivos);
           isYearInCollection = imdbTitles.year >= minYear && imdbTitles.year <= maxYear;
-        } else if (years.length === 1) {
-          isYearInCollection = Math.abs(years[0] - imdbTitles.year) <= 1;
+        } else if (yearsEfetivos.length === 1) {
+          isYearInCollection = Math.abs(yearsEfetivos[0] - imdbTitles.year) <= 1;
         }
       }
 
@@ -85,8 +85,9 @@ export class TitleFilter {
         anoTorrent,
         imdbAno: imdbTitles?.year,
         isCollection,
-        years,
-        isYearInCollection
+        years: yearsEfetivos,
+        isYearInCollection,
+        imdbConfirmed: imdbConfirmed ?? false,
       });
 
       if (
@@ -105,17 +106,46 @@ export class TitleFilter {
         };
       }
 
+      if (
+        imdbConfirmed &&
+        !isCollection &&
+        anoTorrent !== undefined &&
+        imdbTitles?.year !== undefined &&
+        Math.abs(anoTorrent - imdbTitles.year) > 1
+      ) {
+        this.logger.debug(
+          `SKIP_ANO_POR_IMDB_CONFIRMADO | "${tituloTorrent.substring(0, 50)}" | ano=${anoTorrent} imdbAno=${imdbTitles.year} diff=${Math.abs(anoTorrent - imdbTitles.year)}`
+        );
+      }
+
       if (isCollection && isYearInCollection) {
         this.logger.info('Coleção/franquia aceita por faixa de anos', {
           tituloTorrent,
           imdbAno: imdbTitles?.year,
-          years
+          years: yearsEfetivos
         });
         return {
           matches: true,
           similarity: 0.8,
           torrentMetadata: metadados,
           reason: 'Coleção/franquia com ano na faixa'
+        };
+      }
+
+      // Coleção com range de anos declarado que NÃO contém o alvo → rejeita direto.
+      // Não cai pro similarity: o próprio título já disse que o filme não está no pack.
+      if (
+        isCollection &&
+        yearsEfetivos &&
+        yearsEfetivos.length > 1 &&
+        imdbTitles?.year !== undefined &&
+        !isYearInCollection
+      ) {
+        return {
+          matches: false,
+          similarity: 0,
+          torrentMetadata: metadados,
+          reason: `Coleção ${yearsEfetivos.join('-')} não contém ${imdbTitles.year}`
         };
       }
 
@@ -151,7 +181,6 @@ export class TitleFilter {
             };
           }
         } else {
-          //Aqui ele aceita pack de temporada quando o alvo cabe no range
           const isSeasonPack = range && range.seasonStart > 0 && range.episodeStart === 0 && range.episodeEnd === 0;
           if (isSeasonPack && temporadaAlvo !== undefined && temporadaAlvoNoRange(range, temporadaAlvo)) {
             // Pack de temporada: aceita como fallback
@@ -159,7 +188,6 @@ export class TitleFilter {
         }
       }
 
-      //Aqui ele checa se o alvo cabe no range de temporada declarado
       if (range && temporadaAlvo !== undefined && !temporadaAlvoNoRange(range, temporadaAlvo)) {
         return {
           matches: false,
@@ -169,9 +197,6 @@ export class TitleFilter {
         };
       }
 
-      // ✅ IMDb confirmado no HTML do post → pula similarity (economiza CPU/RAM)
-      // Todas as validações acima (ano, range S/E, temporada) já rodaram. Só o fuzzy é pulado.
-      // Seguro porque imdbConfirmed só vira true quando o link IMDb do post bate com o imdbId do request.
       if (imdbConfirmed && !isCollection) {
         this.logger.debug(
           `IMDB_CONFIRMADO_SKIP_SIMILARITY | torrent="${tituloTorrent.substring(0, 50)}" | imdbId=${imdbId}`
@@ -186,13 +211,12 @@ export class TitleFilter {
 
       const seasonParaSimilaridade = temporadaAlvo;
 
-      // Mexi aqui pra rastrear que o years chega no Similarity, sem isso não dava pra saber se ia ou não
-      this.logger.debug(`TITLEFILTER_REPASSA | torrent="${tituloTorrent.substring(0, 50)}" | year=${anoTorrent ?? '-'} | years=[${years?.join(',') ?? '-'}] | imdbAno=${imdbTitles?.year ?? '-'} | isYearInCollection=${isYearInCollection}`);
+      this.logger.debug(`TITLEFILTER_REPASSA | torrent="${tituloTorrent.substring(0, 50)}" | year=${anoTorrent ?? '-'} | years=[${yearsEfetivos?.join(',') ?? '-'}] | imdbAno=${imdbTitles?.year ?? '-'} | isYearInCollection=${isYearInCollection}`);
 
       const resultado = await this.similarityCalculator.smartTitleContainsCheck(
         tituloTorrent,
         imdbId,
-        { year: anoTorrent, season: seasonParaSimilaridade, years },
+        { year: anoTorrent, season: seasonParaSimilaridade, years: yearsEfetivos },
         tituloParaIdioma,
         imdbTitles ?? undefined
       );

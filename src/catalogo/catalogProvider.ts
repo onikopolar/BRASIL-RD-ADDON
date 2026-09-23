@@ -8,7 +8,7 @@ import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.j
 import { TitleFilter } from '../titulos/titleFilter.js';
 import { AutoMagnetService } from '../debrid/AutoMagnetService.js';
 import { metricsService } from '../catalogo/MetricsService.js';
-import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, temporadaAlvoNoRange, normalizarTexto, TipoConteudo } from '../titulos/TechnicalWords.js';
+import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, temporadaAlvoNoRange, normalizarTexto, isCollectionTitle, TipoConteudo } from '../titulos/TechnicalWords.js';
 
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
@@ -206,14 +206,11 @@ export class CatalogProvider {
       return [];
     }
 
-    // Tipo do conteúdo pro isCollectionTitle escolher o conjunto certo em technical-words.
-    // Vem do Stremio (movie/series, sempre preenchido). Pra 'anime' e 'other' cai pro TMDB
-    // quando disponível; senão undefined — isCollectionTitle usa a união (comportamento antigo).
     const mediaTypeEfetivo: TipoConteudo =
       type === 'movie' ? 'movie' :
-      type === 'series' ? 'series' :
-      (tmdb.mediaType === 'movie' || tmdb.mediaType === 'tv') ? tmdb.mediaType :
-      undefined;
+        type === 'series' ? 'series' :
+          (tmdb.mediaType === 'movie' || tmdb.mediaType === 'tv') ? tmdb.mediaType :
+            undefined;
 
     if (finalSeason !== undefined && tmdb.imdbTitles?.episodeTitles) {
       const lista = tmdb.imdbTitles.episodeTitles;
@@ -242,11 +239,21 @@ export class CatalogProvider {
     await this.enrichTorrentsWithMagnetData(torrentResults);
     this.logarResumo('PÓS-ENRICH', torrentResults);
 
+    const imdbConfirmados = torrentResults.filter(t => t.imdbConfirmed);
+    if (imdbConfirmados.length > 0) {
+      const porProvider = new Map<string, number>();
+      for (const t of imdbConfirmados) {
+        porProvider.set(t.provider, (porProvider.get(t.provider) || 0) + 1);
+      }
+      const resumo = [...porProvider.entries()].map(([p, n]) => `${p}=${n}`).join(', ');
+      this.logger.debug(`IMDB_CONFIRMADOS | total=${imdbConfirmados.length} | ${resumo}`);
+    }
+
     const uniqueTorrents = await this.deduplicateTorrentsByMagnet(torrentResults);
 
     const { valid, invalid } = await this.filterAndValidateTorrents(
       uniqueTorrents, imdbId, request, finalSeason, finalEpisode,
-      tmdb.imdbTitles
+      tmdb.imdbTitles, mediaTypeEfetivo
     );
 
     if (valid.length === 0) {
@@ -279,7 +286,6 @@ export class CatalogProvider {
     return this.processTorrentsWithOptimization(valid, request, finalSeason, finalEpisode);
   }
 
-  // Log agregado: 1 linha por provider com contagem + hash de exemplo. Substitui N linhas por torrent.
   private logarResumo(prefixo: string, torrents: ScrapedTorrent[]): void {
     if (torrents.length === 0) {
       this.logger.debug(`${prefixo} | total=0`);
@@ -340,7 +346,38 @@ export class CatalogProvider {
     return unique;
   }
 
-  private escolherTituloParaValidar(original: string | undefined, title: string | undefined): string {
+  // Verifica se um texto cita alguma palavra (>3 chars) dos títulos do TMDB.
+  private mencionaTituloTmdb(texto: string | undefined, imdbTitles: ImdbTitles | null): boolean {
+    if (!texto || !imdbTitles) return false;
+
+    const palavras = normalizarTexto(texto).split(' ').filter(p => p.length > 3);
+    if (palavras.length === 0) return false;
+
+    const palavrasTmdb = new Set(
+      imdbTitles.allTitles
+        .flatMap(t => normalizarTexto(t).split(' '))
+        .filter(p => p.length > 3)
+    );
+
+    return palavras.some(p => palavrasTmdb.has(p));
+  }
+
+  // Coleção: prioriza htmlTitle ou canonicalName que citem o título TMDB.
+  // Se nenhum citar, cai pro originalTitle como fallback.
+  private escolherTituloParaValidar(
+    original: string | undefined,
+    title: string | undefined,
+    htmlTitle: string | undefined,
+    canonicalName: string | undefined,
+    isCollection: boolean,
+    imdbTitles: ImdbTitles | null
+  ): string {
+    if (isCollection) {
+      if (this.mencionaTituloTmdb(htmlTitle, imdbTitles)) return htmlTitle!;
+      if (this.mencionaTituloTmdb(canonicalName, imdbTitles)) return canonicalName!;
+      if (htmlTitle && normalizarTexto(htmlTitle).length > 0) return htmlTitle;
+      if (canonicalName && normalizarTexto(canonicalName).length > 0) return canonicalName;
+    }
     if (original && normalizarTexto(original).length > 0) return original;
     return title || '';
   }
@@ -351,7 +388,8 @@ export class CatalogProvider {
     request: any,
     season?: number,
     episode?: number,
-    imdbTitles: ImdbTitles | null = null
+    imdbTitles: ImdbTitles | null = null,
+    mediaType?: TipoConteudo
   ): Promise<{ valid: ScrapedTorrent[]; invalid: ScrapedTorrent[] }> {
     if (!imdbId) return { valid: torrents, invalid: [] };
 
@@ -359,8 +397,40 @@ export class CatalogProvider {
 
     const results = await Promise.allSettled(
       naoLegendado.map(async (t) => {
-        const tituloParaValidar = this.escolherTituloParaValidar(t.originalTitle, t.title);
+        const isCollection = isCollectionTitle(t.originalTitle || t.title, mediaType);
+
+        // Coleção sem nenhuma pista de título (nem htmlTitle nem dn) = pack genérico. Aceita direto.
+        if (
+          isCollection &&
+          !this.mencionaTituloTmdb(t.htmlTitle, imdbTitles) &&
+          !this.mencionaTituloTmdb(t.canonicalName, imdbTitles)
+        ) {
+          // Nome do post é o único identificador humano disponível — usa ele na exibição.
+          const tituloExibicao = t.originalTitle || t.title;
+          t.canonicalName = tituloExibicao;
+
+          this.logger.info('🎯 ACEITO (pack de coleção sem título)', {
+            imdbId,
+            torrent: tituloExibicao.substring(0, 70),
+            provider: t.provider,
+            infoHash: t.infoHash?.substring(0, 12) || 'N/A',
+          });
+          return {
+            torrent: t,
+            result: { matches: true, similarity: 0.8, reason: 'Pack de coleção sem título' } as any,
+          };
+        }
+
+        const tituloParaValidar = this.escolherTituloParaValidar(
+          t.originalTitle, t.title, t.htmlTitle, t.canonicalName, isCollection, imdbTitles
+        );
         const tituloParaIdioma = t.title || t.originalTitle || '';
+
+        this.logger.debug(
+          `TITLEFILTER_IN | "${(tituloParaValidar || t.title).substring(0, 60)}" | ` +
+          `isCollection=${isCollection} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
+          `imdbConfirmed=${t.imdbConfirmed ?? false} provider=${t.provider}`
+        );
 
         const result = await this.titleFilter.titulosCombinam(
           tituloParaValidar,
@@ -387,13 +457,15 @@ export class CatalogProvider {
       if (res.status === 'fulfilled') {
         const { torrent, result } = res.value;
         if (result.matches) {
-          this.logger.info('🎯 ACEITO', {
-            imdbId,
-            alvo: `S${season ?? '?'}E${episode ?? '?'}`,
-            torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
-            provider: torrent.provider,
-            infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
-          });
+          if (result.reason !== 'Pack de coleção sem título') {
+            this.logger.info('🎯 ACEITO', {
+              imdbId,
+              alvo: `S${season ?? '?'}E${episode ?? '?'}`,
+              torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+              provider: torrent.provider,
+              infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
+            });
+          }
           valid.push(torrent);
         } else {
           invalid.push(torrent);
@@ -597,8 +669,8 @@ export class CatalogProvider {
   }
 
   private extractBaseImdbId(id: string): string | null {
-    const m = id.match(/^(tt\d+)/);
-    return m ? m[1] : null;
+    const m = id.match(/^tt\d+/);
+    return m ? m[0] : null;
   }
 
   clearTmdbCache(): void {

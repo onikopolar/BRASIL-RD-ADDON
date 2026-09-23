@@ -11,6 +11,10 @@ import { CacheService } from '../../debrid/CacheService.js';
 import { INDICADORES_INTERNACIONAL_TORRENTS, extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade, extrairAno, TipoConteudo } from '../../titulos/TechnicalWords.js';
 import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
+// IDs via /wp-json/wp/v2/categories?slug=filmes|series — pré-filtro server-side por tipo.
+const CAT_FILMES = 38;
+const CAT_SERIES = 43;
+
 const LEGENDADO_REGEX = new RegExp(
   '\\b(' + INDICADORES_INTERNACIONAL_TORRENTS
     .filter(w => /^leg/i.test(w))
@@ -185,8 +189,9 @@ export class WordPressScraper {
     mediaType?: TipoConteudo
   ): Promise<TorrentResult[]> {
     const searchQuery = query.trim();
-    const searchUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(searchQuery)}&per_page=20&_fields=id,title,link`;
-    logger.debug(`GET posts search="${searchQuery}"`);
+    const catId = type === 'movie' ? CAT_FILMES : CAT_SERIES;
+    const searchUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(searchQuery)}&per_page=20&_fields=id,title,link&categories=${catId}`;
+    logger.debug(`GET posts search="${searchQuery}" cat=${catId}`);
 
     const response = await axios.get(searchUrl, jsonAxiosConfig);
     const posts = response.data;
@@ -281,7 +286,12 @@ export class WordPressScraper {
 
     const tituloLimpo = limparPorRaridade(post.title, tokensRuido);
     const resultado = this.similarity.compararComTitulos([...frases], tituloLimpo);
-    const isCollection = isCollectionTitle(post.title, mediaType);
+
+    // Só FILME usa collection no pré-filtro.
+    // Série: "1ª Temporada Completa" é só uma temporada, não pack.
+    // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
+    const ehSerie = mediaType === 'series' || mediaType === 'tv';
+    const isCollection = !ehSerie && isCollectionTitle(post.title, mediaType);
 
     if (!resultado.match && !isCollection) {
       logger.debug(`post rejeitado`, { score: resultado.score.toFixed(2), titulo: post.title.substring(0, 60) });
@@ -356,9 +366,7 @@ export class WordPressScraper {
     return quality ? `${episode}: ${quality}` : episode;
   }
 
-  // Pega o contexto local do magnet: rótulo no MESMO <p> antes do <a>, ou no <p> anterior como fallback.
-  // Layout moderno (Comando, Demolidor) tem <p><strong>Episódio 01</strong><a>…</a></p> — o rótulo fica
-  // dentro do mesmo <p>. Layout antigo (Scary Movie) tem <p><b>Título</b></p><p><a>…</a></p> — irmão anterior.
+  // Rótulo do magnet: <strong>/<b> no mesmo <p> antes do <a>, senão no <p> anterior.
   private extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
     const $el = $(el);
     const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
@@ -368,7 +376,6 @@ export class WordPressScraper {
 
     const $pai = $el.parent();
 
-    // 1) <strong>/<b> dentro do MESMO <p>, antes do <a>
     const $rotulo = $pai.find('strong, b').first();
     if ($rotulo.length) {
       const idxRotulo = $rotulo.index();
@@ -382,7 +389,6 @@ export class WordPressScraper {
       }
     }
 
-    // 2) Fallback pro <p> anterior — só quando nada foi achado no próprio <p>
     if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
       let irmao = $pai.prev();
       for (let passo = 0; passo < 3 && irmao.length; passo++) {
@@ -542,7 +548,7 @@ export class WordPressScraper {
 
     let imdbConfirmed = false;
     if (imdbId) {
-      const imdbIdDoPost = contentHtml.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+      const imdbIdDoPost = contentHtml.match(/imdb\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(tt\d+)/i)?.[1] || null;
       if (imdbIdDoPost) {
         const isCollection = isCollectionTitle(titleRendered, mediaType);
         if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
@@ -558,7 +564,8 @@ export class WordPressScraper {
     const html = $.html();
 
     const infoBlock = this.extractInfoBlock($, html);
-    const globalOriginalTitle = infoBlock.originalTitle || undefined;
+    // Prioriza o título traduzido. Se não tiver, cai pro original.
+    const globalOriginalTitle = infoBlock.translatedTitle || infoBlock.originalTitle || undefined;
     const year = infoBlock.year;
     const years = infoBlock.years || (infoBlock.year ? [infoBlock.year] : undefined);
 
@@ -566,7 +573,7 @@ export class WordPressScraper {
       provider,
       postId,
       isCollection: isCollectionTitle(titleRendered, mediaType),
-      originalTitle: infoBlock.originalTitle || '-',
+      originalTitle: globalOriginalTitle || '-',
       year: year ?? '-',
       years: years?.join(',') || '-',
       size: infoBlock.size || '-'
@@ -633,7 +640,6 @@ export class WordPressScraper {
     if (imdbConfirmed) for (const r of results) r.imdbConfirmed = true;
     return results;
   }
-
   private async processarMagnets(
     elements: any[],
     $: any,
@@ -753,8 +759,7 @@ export class WordPressScraper {
       displayTitle = this.extractTitleFromPostTitle(postTitle) || canonicalName || postTitle;
     }
 
-    // Ano: rótulo do item manda; se ele não tiver ano, cai pro dn; por último, o year do post.
-    // Preserva o array inteiro de anos — coleções declaram range (ex: 2001-2011) e o TitleFilter usa isso.
+    // Ano: rótulo do item > dn > year do post. Preserva array pra coleções com range.
     const anosDoItem = originalTitleFinal ? extrairAno(originalTitleFinal) : undefined;
     const anosDoDnFallback = fonteOriginal !== 'dn' && canonicalName ? extrairAno(canonicalName) : undefined;
 
@@ -776,20 +781,6 @@ export class WordPressScraper {
       yearsFinal,
       quality
     );
-
-    logger.debug(`magnet`, {
-      provider,
-      hash: dados?.infoHash?.substring(0, 12) || '-',
-      quality,
-      fonte: fonteQualidade,
-      isCollection: isPostCollection,
-      original: (originalTitleFinal || '-').substring(0, 60),
-      dn: (canonicalName || '-').substring(0, 60),
-      year: yearFinal ?? '-',
-      anos: yearsFinal?.join(',') ?? '-',
-      fonteAno,
-      language
-    });
 
     return {
       title: this.cleanTitle(displayTitle),
@@ -869,16 +860,40 @@ export class WordPressScraper {
 
     const sizeMatch = articleText.match(/Tamanho:\s*([^\n]+)/i);
 
-    const originalBruto = originalMatch?.[1]?.trim();
-    const originalTitle = originalBruto ? this.limparTituloBase(originalBruto) : undefined;
+    const originalLimpo = originalMatch?.[1]?.trim()
+      ? this.limparTituloBase(originalMatch[1].trim())
+      : undefined;
+    const translatedLimpo = translatedMatch?.[1]?.trim()
+      ? this.limparTituloBase(translatedMatch[1].trim())
+      : undefined;
+    const altImagem = ($('img[alt]').first().attr('alt') || '').trim();
+
+    const originalTitle = this.escolherOriginalLatino(originalLimpo, translatedLimpo, altImagem);
 
     return {
       originalTitle,
-      translatedTitle: translatedMatch?.[1]?.trim(),
+      translatedTitle: translatedLimpo,
       year: years.length > 0 ? years[0] : undefined,
       years,
       size: sizeMatch?.[1]?.trim(),
     };
+  }
+
+  private escolherOriginalLatino(
+    original: string | undefined,
+    translated: string | undefined,
+    alt: string
+  ): string | undefined {
+    if (this.ehLatino(original)) return original;
+    if (this.ehLatino(translated)) return translated;
+    if (this.ehLatino(alt)) return alt;
+    return original;
+  }
+
+  private ehLatino(texto: string | undefined): boolean {
+    if (!texto) return false;
+    const letras = texto.replace(/[^a-zA-ZÀ-ÿ]/g, '');
+    return letras.length / Math.max(texto.length, 1) > 0.6;
   }
 
   async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
