@@ -8,8 +8,6 @@ import {
   normalizarTexto,
   isCollectionTitle,
   temporadaAlvoNoRange,
-  calcularTokensRuido,
-  limparPorRaridade,
   EpisodeRange,
   TipoConteudo,
 } from '../../titulos/TechnicalWords.js';
@@ -19,6 +17,9 @@ import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 const logger = new Logger('HdrScraper');
 
 export const HDR_BASE = 'https://hdrtorrents.net';
+
+// Identificador da fonte pro circuit breaker. Estrutura pronta pra outras fontes no futuro.
+const FONTE = 'hdr';
 
 export interface HdrTorrent {
   title: string;
@@ -37,7 +38,7 @@ export interface HdrTorrent {
   episode?: number;
 }
 
-// Headers de navegador real — o WAF do HDR bloqueia 403 se faltar Sec-Fetch-* ou Accept-Language.
+// Headers de navegador real — sem Sec-Fetch-* ou Accept-Language o WAF devolve 403.
 export const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -59,56 +60,184 @@ export const axiosConfig = {
   headers: BROWSER_HEADERS,
 };
 
-// Sessão do HDR — token CSRF + cookie PHPSESSID. Renova em 30min ou quando o servidor devolve 403.
-export interface HdrSession {
-  token: string;
-  cookie: string;
-  criadaEm: number;
+// Negative cache — bloqueia queries que já retornaram vazio.
+export const NEGATIVE_DEFAULT_TTL_MS = 30 * 60 * 1000;
+export const NEGATIVE_MAX_ENTRIES = 5000;
+
+interface NegativeEntry {
+  ts: number;
+  ttlMs: number;
+  hits: number;
 }
 
-export const SESSION_TTL = 30 * 60 * 1000;
-export let sessaoCache: HdrSession | null = null;
+const negativeStore = new Map<string, NegativeEntry>();
 
-// Extrai cookies do header set-cookie (axios devolve array ou string).
-export function extrairCookies(setCookie: string | string[] | undefined): string {
-  if (!setCookie) return '';
-  const lista = Array.isArray(setCookie) ? setCookie : [setCookie];
-  return lista.map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
+// Chave = fonte + query + contexto. Season entra na chave, episode não.
+export function negativeCacheKey(
+  source: string,
+  query: string,
+  extra?: Record<string, unknown>
+): string {
+  const q = query.trim().toLowerCase();
+  const e = extra ? JSON.stringify(extra) : '';
+  return `${source}|${q}|${e}`;
 }
 
-// Abre a home do HDR, extrai token CSRF e PHPSESSID. Reutiliza enquanto estiver dentro do TTL.
-export async function obterSessao(forcar = false): Promise<HdrSession> {
-  if (!forcar && sessaoCache && (Date.now() - sessaoCache.criadaEm) < SESSION_TTL) {
-    return sessaoCache;
+// Consulta se a chave está bloqueada. Se estiver, incrementa hits.
+export function negativeCacheIsBlocked(key: string): boolean {
+  const entry = negativeStore.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.ts > entry.ttlMs) {
+    negativeStore.delete(key);
+    return false;
+  }
+  entry.hits++;
+  return true;
+}
+
+// Marca uma chave como negativa. FIFO eviction quando estoura o limite.
+export function negativeCacheMark(key: string, ttlMs = NEGATIVE_DEFAULT_TTL_MS): void {
+  if (negativeStore.size >= NEGATIVE_MAX_ENTRIES) {
+    const first = negativeStore.keys().next().value;
+    if (first) negativeStore.delete(first);
+  }
+  negativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+
+export function negativeCacheClear(): void {
+  negativeStore.clear();
+}
+
+export function negativeCacheStats() {
+  const agora = Date.now();
+  return {
+    size: negativeStore.size,
+    maxEntries: NEGATIVE_MAX_ENTRIES,
+    defaultTtlMs: NEGATIVE_DEFAULT_TTL_MS,
+    entries: Array.from(negativeStore.entries()).map(([key, v]) => ({
+      key,
+      ageMs: agora - v.ts,
+      ttlMs: v.ttlMs,
+      expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+      hits: v.hits,
+    })),
+  };
+}
+
+// Circuit breaker — pausa a fonte quando acumula erros.
+export type BreakerState = 'closed' | 'open' | 'half-open';
+
+export const BREAKER_JANELA_MS = 5 * 60 * 1000;
+export const BREAKER_LIMITE_ERROS = 5;
+export const BREAKER_COOLDOWN_MS = 15 * 60 * 1000;
+
+interface BreakerEntry {
+  erros: number;
+  ultimaFalha: number;
+  abertoEm: number;
+  estado: BreakerState;
+}
+
+const breakerStore = new Map<string, BreakerEntry>();
+
+function getBreaker(fonte: string): BreakerEntry {
+  let e = breakerStore.get(fonte);
+  if (!e) {
+    e = { erros: 0, ultimaFalha: 0, abertoEm: 0, estado: 'closed' };
+    breakerStore.set(fonte, e);
+  }
+  return e;
+}
+
+export function breakerStatus(fonte: string): BreakerState {
+  return getBreaker(fonte).estado;
+}
+
+// Verifica se pode usar a fonte. Consome o slot de half-open — chamar 1x por operação.
+export function breakerPodeUsar(fonte: string): boolean {
+  const e = getBreaker(fonte);
+  if (e.estado === 'closed') return true;
+
+  if (e.estado === 'open') {
+    if (Date.now() - e.abertoEm > BREAKER_COOLDOWN_MS) {
+      e.estado = 'half-open';
+      logger.debug(`HDR: circuit breaker half-open | fonte=${fonte}`);
+      return true;
+    }
+    return false;
   }
 
-  const res = await axios.get(`${HDR_BASE}/`, {
-    ...axiosConfig,
-    headers: BROWSER_HEADERS,
-  });
+  return true;
+}
 
-  const token = res.data.match(/name="token"\s+value="([^"]+)"/)?.[1];
-  if (!token) {
-    throw new Error('HDR: token CSRF não encontrado na home');
+export function breakerRegistrarSucesso(fonte: string): void {
+  const e = getBreaker(fonte);
+  if (e.estado !== 'closed') {
+    logger.info(`HDR: circuit breaker FECHADO | fonte=${fonte}`);
+  }
+  e.erros = 0;
+  e.estado = 'closed';
+  e.abertoEm = 0;
+}
+
+export function breakerRegistrarFalha(fonte: string): void {
+  const e = getBreaker(fonte);
+  const agora = Date.now();
+
+  if (agora - e.ultimaFalha > BREAKER_JANELA_MS) e.erros = 0;
+  e.erros++;
+  e.ultimaFalha = agora;
+
+  if (e.estado === 'half-open') {
+    e.estado = 'open';
+    e.abertoEm = agora;
+    logger.warn(`HDR: circuit breaker REABERTO após falha no half-open | fonte=${fonte}`, { erros: e.erros });
+    return;
   }
 
-  const cookie = extrairCookies(res.headers['set-cookie']);
-  sessaoCache = { token, cookie, criadaEm: Date.now() };
-
-  logger.debug('HDR: sessão renovada', {
-    token: token.substring(0, 8) + '...',
-    temCookie: !!cookie,
-  });
-
-  return sessaoCache;
+  if (e.erros >= BREAKER_LIMITE_ERROS && e.estado === 'closed') {
+    e.estado = 'open';
+    e.abertoEm = agora;
+    logger.warn(`HDR: circuit breaker ABERTO | fonte=${fonte}`, {
+      erros: e.erros,
+      cooldownMs: BREAKER_COOLDOWN_MS,
+    });
+  }
 }
 
-// Usado pelos testes pra zerar sessão entre cenários.
-export function limparSessao(): void {
-  sessaoCache = null;
+export function breakerReset(fonte?: string): void {
+  if (fonte) breakerStore.delete(fonte);
+  else breakerStore.clear();
 }
 
-// Instância única do SimilarityCalculator — mesma régua do TitleFilter.
+export function breakerStats() {
+  const agora = Date.now();
+  return {
+    windowMs: BREAKER_JANELA_MS,
+    threshold: BREAKER_LIMITE_ERROS,
+    cooldownMs: BREAKER_COOLDOWN_MS,
+    entries: Array.from(breakerStore.entries()).map(([fonte, e]) => ({
+      fonte,
+      estado: e.estado,
+      erros: e.erros,
+      ultimaFalhaMs: e.ultimaFalha ? agora - e.ultimaFalha : null,
+      abertoEmMs: e.abertoEm ? agora - e.abertoEm : null,
+      cooldownRestanteMs: e.estado === 'open'
+        ? Math.max(0, BREAKER_COOLDOWN_MS - (agora - e.abertoEm))
+        : null,
+    })),
+  };
+}
+
+// Decide se um erro conta como falha da fonte (network, 5xx, 403, 429) ou só do item (4xx).
+export function classificarErroFonte(err: any): 'fonte' | 'item' {
+  const status = err?.response?.status;
+  if (!status) return 'fonte';
+  if (status >= 500) return 'fonte';
+  if (status === 403 || status === 429) return 'fonte';
+  return 'item';
+}
+
 export const similarity = SimilarityCalculator.getInstance();
 
 export function detectSeasonRange(text: string): EpisodeRange | null {
@@ -144,7 +273,7 @@ export function extractLanguage(parentText: string): string {
   return '';
 }
 
-// Leitura genérica de <dl class="item-specs">... — layout novo do HDR.
+// Lê metadados do layout <dl class="item-specs">.
 export function parseSpecsList($: any): Record<string, string> {
   const specs: Record<string, string> = {};
   $('dl.item-specs > div').each((_i: number, el: any) => {
@@ -158,7 +287,7 @@ export function parseSpecsList($: any): Record<string, string> {
   return specs;
 }
 
-// Remove sufixos do título original — "We Bare Bears - Complete S01", "Temporada Completa", etc.
+// Remove sufixos de pack do título original.
 export function limparTituloOriginal(titulo: string): string {
   return titulo
     .replace(/\s*[-–—]\s*(complete|completa?)\s*s\d{1,2}$/i, '')
@@ -169,11 +298,9 @@ export function limparTituloOriginal(titulo: string): string {
     .trim();
 }
 
-// Origem de cada metadado — usado no log pra saber se o JSON-LD do post está funcionando.
 export type OrigemMetadado = 'jsonld' | 'html' | 'none';
 
-// Metadados ricos do post em JSON-LD (TVSeries/Movie) — fonte estruturada, sem regex.
-// Tem alternateName (título original) e datePublished (ano) que o HTML repete, mas em formato mais estável.
+// Extrai alternateName (título original) e datePublished (ano) do JSON-LD.
 export function extrairMetadadosDoJsonLd(blocks: any[]): { originalTitleBruto?: string; year?: number } {
   const meta = blocks.find(b => b && (b['@type'] === 'TVSeries' || b['@type'] === 'Movie'));
   if (!meta) return {};
@@ -192,8 +319,7 @@ export function extrairMetadadosDoJsonLd(blocks: any[]): { originalTitleBruto?: 
   return out;
 }
 
-// Metadados do post — JSON-LD primeiro (estruturado), HTML só pra complementar o que falta.
-// Devolve a origem de title e year pra log/observabilidade.
+// Metadados do post — JSON-LD primeiro, HTML complementa o que faltar.
 export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
   originalTitle?: string;
   originalTitleBruto?: string;
@@ -217,7 +343,6 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
     origem: { title: OrigemMetadado; year: OrigemMetadado };
   } = { origem: { title: 'none', year: 'none' } };
 
-  // 1. JSON-LD primeiro — se tiver, é a fonte mais estável pra título original e ano.
   if (jsonLdBlocks && jsonLdBlocks.length > 0) {
     const meta = extrairMetadadosDoJsonLd(jsonLdBlocks);
     if (meta.originalTitleBruto) {
@@ -231,8 +356,7 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
     }
   }
 
-  // 2. HTML — completa o que o JSON-LD não trouxe + campos que só existem no HTML (quality, size, format, duration).
-  // Layout ANTIGO: <p><b>Rótulo</b> Valor<br>...</p>
+  // Layout antigo: <p><b>Rótulo</b> Valor<br>...</p>
   const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
 
   if (paragrafo.length) {
@@ -263,7 +387,6 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
       }
     });
 
-    // Se JSON-LD não trouxe, tenta o <a> depois do link IMDb no parágrafo.
     if (!result.originalTitle) {
       const tituloBase = extrairTituloBasePosImdb($, paragrafo);
       const originalFinal = tituloBase || result.originalTitleBruto;
@@ -282,7 +405,7 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
     return result;
   }
 
-  // Layout NOVO: <dl class="item-specs">
+  // Layout novo: <dl class="item-specs">.
   const specs = parseSpecsList($);
   if (Object.keys(specs).length === 0) return result;
 
@@ -310,6 +433,7 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
   return result;
 }
 
+// Pega o texto do <a> logo depois do link IMDb no parágrafo.
 export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   const imdbLink = paragrafo.find('a[href*="imdb.com/title/"]').first();
   if (!imdbLink.length) return null;
@@ -337,7 +461,7 @@ export function extrairDnDoMagnet(magnet: string): string | undefined {
   }
 }
 
-// Encontra o container de texto do magnet — layout novo (.download-row) ou antigo (<p>).
+// Acha o texto do container do magnet — layout novo (.download-row) ou antigo (<p>).
 export function getContainerText($: any, el: any): string {
   const row = $(el).closest('.download-row');
   if (row.length) {
@@ -351,7 +475,7 @@ export function getContainerText($: any, el: any): string {
   return $(el).text().trim();
 }
 
-// Classifica cabeçalho de seção — cobre "VERSÃO MKV DUAL ÁUDIO", "VERSÃO MP4 LEGENDADO", "::DUBLADO::".
+// Classifica cabeçalho de seção como DUAL, LEGENDADO ou NONE.
 export function classificarSecao(texto: string): 'DUAL' | 'LEGENDADO' | 'NONE' {
   const t = normalizarTexto(texto).trim();
   if (!t || t.length > 60) return 'NONE';
@@ -371,38 +495,39 @@ export interface SearchResultItem {
   postUrl: string;
 }
 
-// Monta a URL de busca — espaços viram "+", não "%20", porque o WAF bloqueia 403 com %20.
-export function montarUrlBusca(query: string, token: string): string {
-  const termo = encodeURIComponent(query.trim()).replace(/%20/g, '+');
-  return `${HDR_BASE}/pesquisa/${termo}/?hp_bot_check=&token=${token}`;
+// Resultado discriminado — separa "vazio" de "erro", essencial pro negative cache.
+export interface SearchLinksResult {
+  status: 'ok' | 'empty' | 'error' | 'blocked';
+  items: SearchResultItem[];
+  error?: string;
+  reason?: string;
 }
 
-// GET com cookie + headers de navegador. Renova sessão e retenta uma vez em caso de 403.
-export async function fetchComSessao(url: string, tentativa = 0): Promise<string> {
-  const sessao = await obterSessao(tentativa > 0);
+// Monta a URL de busca. O HDR não usa mais token/sessão (out/2026).
+export function montarUrlBusca(query: string): string {
+  const termo = encodeURIComponent(query.trim()).replace(/%20/g, '+');
+  return `${HDR_BASE}/pesquisa/${termo}/`;
+}
 
+// GET com headers de navegador. Retry só em 5xx (falha transiente).
+export async function fetchComSessao(url: string, tentativa = 0): Promise<string> {
   try {
     const res = await axios.get(url, {
       ...axiosConfig,
-      headers: {
-        ...BROWSER_HEADERS,
-        'Cookie': sessao.cookie,
-        'Referer': `${HDR_BASE}/`,
-      },
+      headers: { ...BROWSER_HEADERS, 'Referer': `${HDR_BASE}/` },
     });
     return res.data;
   } catch (err: any) {
     const status = err.response?.status;
-    if (status === 403 && tentativa === 0) {
-      logger.debug('HDR: 403 detectado, renovando sessão e retentando');
-      sessaoCache = null;
+    if (status >= 500 && tentativa === 0) {
+      logger.debug('HDR: erro 5xx, retentando');
       return fetchComSessao(url, 1);
     }
     throw err;
   }
 }
 
-// Lê todos os blocos JSON-LD da página. Devolve blocos válidos + contagem de malformados.
+// Lê todos os blocos JSON-LD. Devolve blocos válidos + contagem de malformados.
 export function parseJsonLdBlocks($: any): { blocks: any[]; malformados: number } {
   const blocks: any[] = [];
   let malformados = 0;
@@ -418,22 +543,28 @@ export function parseJsonLdBlocks($: any): { blocks: any[]; malformados: number 
   return { blocks, malformados };
 }
 
-// Converte o mediaType do catalog pro @type do JSON-LD do HDR — 'tv' é o rótulo do TMDB pra série.
-// Devolve null quando o tipo não foi declarado (aceita os dois, comportamento antigo).
+// Converte o mediaType do catalog pro @type do JSON-LD.
 export function mapearTipoEsperado(mediaType?: TipoConteudo): string | null {
   if (mediaType === 'series' || mediaType === 'tv') return 'TVSeries';
   if (mediaType === 'movie') return 'Movie';
   return null;
 }
 
-// Pré-filtro via JSON-LD: o HDR expõe os 20 resultados da busca num bloco CollectionPage (SEO).
-// Não dependemos de classes CSS — o schema muda menos que o layout.
-export async function searchHdrLinks(query: string, targetSeason?: number, mediaType?: TipoConteudo): Promise<SearchResultItem[]> {
+// Busca os links da página de resultados. Não abre posts — só lista.
+export async function searchHdrLinks(
+  query: string,
+  targetSeason?: number,
+  mediaType?: TipoConteudo
+): Promise<SearchLinksResult> {
   const t0 = Date.now();
-  try {
-    const sessao = await obterSessao();
-    const url = montarUrlBusca(query, sessao.token);
 
+  if (!breakerPodeUsar(FONTE)) {
+    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${query.substring(0, 40)}"`);
+    return { status: 'blocked', items: [], reason: 'circuit breaker open' };
+  }
+
+  try {
+    const url = montarUrlBusca(query);
     const html = await fetchComSessao(url);
     const $ = cheerio.load(html);
 
@@ -444,21 +575,23 @@ export async function searchHdrLinks(query: string, targetSeason?: number, media
 
     const collectionPage = blocks.find(b => b && b['@type'] === 'CollectionPage');
     if (!collectionPage) {
+      // Sem CollectionPage pode ser WAF mascarado ou mudança de layout — trata como falha.
       logger.warn('HDR: JSON-LD sem CollectionPage', {
         query: query.substring(0, 40),
         blocos: blocks.map(b => b?.['@type'] ?? '?').join(','),
       });
-      return [];
+      breakerRegistrarFalha(FONTE);
+      return { status: 'error', items: [], reason: 'no CollectionPage' };
     }
 
     const items = collectionPage.mainEntity?.itemListElement;
     if (!Array.isArray(items) || items.length === 0) {
-      logger.warn('HDR: CollectionPage sem itens', { query: query.substring(0, 40) });
-      return [];
+      breakerRegistrarSucesso(FONTE);
+      logger.debug(`HDR: CollectionPage vazia | "${query.substring(0, 40)}"`);
+      return { status: 'empty', items: [] };
     }
 
     const tipoEsperado = mapearTipoEsperado(mediaType);
-
     const results: SearchResultItem[] = [];
     const seen = new Set<string>();
     let cortadosPorTipo = 0;
@@ -468,8 +601,6 @@ export async function searchHdrLinks(query: string, targetSeason?: number, media
       const rawUrl: string | undefined = entry?.item?.url || entry?.url;
       if (!title || !rawUrl) continue;
 
-      // Corta item incompatível com o tipo do catalog ANTES de abrir o post.
-      // Sem similarity, sem magnet, sem HTML — economia de requests ao HDR.
       if (tipoEsperado && entry?.item?.['@type'] !== tipoEsperado) {
         cortadosPorTipo++;
         continue;
@@ -484,17 +615,18 @@ export async function searchHdrLinks(query: string, targetSeason?: number, media
       results.push({ title, postUrl: absoluteHref });
     }
 
-    // Resumo por query: total de itens, cortados por tipo, e os que sobraram após filtro de temporada.
+    breakerRegistrarSucesso(FONTE);
     logger.debug(`HDR: "${query.substring(0, 40)}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
 
-    return results.slice(0, 40);
+    return { status: 'ok', items: results.slice(0, 40) };
   } catch (err: any) {
     logger.warn('HDR busca falhou', {
       query: query.substring(0, 50),
       status: err.response?.status || '-',
       error: err.message,
     });
-    return [];
+    breakerRegistrarFalha(FONTE);
+    return { status: 'error', items: [], error: err.message };
   }
 }
 
@@ -512,13 +644,10 @@ export async function extractMagnetsFromPost(
   const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
   const pageTitle = h1Title || titleTag || postTitle;
 
-  // Parseia o JSON-LD uma vez e repassa pro extractHdrMetadata — evita reparsear.
   const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
   const metadata = extractHdrMetadata($, jsonLdBlocks);
 
-  // originalTitle SEMPRE vem do metadado do post (JSON-LD/HTML).
-  // Nunca do dn do magnet — dn é nome de arquivo do uploader, pode ser coleção,
-  // spin-off ou lixo. Comparar isso contra o TMDB gera falso positivo.
+  // originalTitle sempre vem do metadado do post, nunca do dn do magnet.
   const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
 
   const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
@@ -602,10 +731,8 @@ export async function extractMagnetsFromPost(
         canonicalName = undefined;
       }
 
-      // originalTitle sempre do metadado do post — nunca do dn.
       const originalTitle = tituloDoPost;
 
-      // Ano/anos: extrai do containerText. Se não tiver, usa metadata.
       const anosDoMagnet = extrairAno(raw.containerText);
       const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
       const year = years ? years[0] : metadata.year;
@@ -674,21 +801,22 @@ export async function extractMagnetsFromPost(
   return results;
 }
 
-// Busca um único post do HDR: faz o GET, valida IMDb (se aplicável) e extrai os magnets.
+// Busca um único post. Só registra falha no breaker se for erro de fonte.
 export async function processarPostHdr(
   item: SearchResultItem,
   imdbId: string | undefined,
   targetSeason: number | undefined,
   mediaType?: TipoConteudo
 ): Promise<{ torrents: HdrTorrent[]; imdbConfirmed: boolean }> {
-  // Cada busca consome o par token+cookie — renovar antes do GET do post.
-  limparSessao();
-
   let html: string;
   try {
     html = await fetchComSessao(item.postUrl);
   } catch (err) {
-    logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${(err as Error).message}`);
+    const classificacao = classificarErroFonte(err);
+    if (classificacao === 'fonte') {
+      breakerRegistrarFalha(FONTE);
+    }
+    logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${classificacao} | ${(err as Error).message}`);
     return { torrents: [], imdbConfirmed: false };
   }
 
@@ -726,43 +854,67 @@ export async function searchHdr(
   const startTime = Date.now();
 
   const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
-
   const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
+
+  // Negative cache primeiro — se a query já foi vista vazia, sai rápido.
+  const ncKey = negativeCacheKey(FONTE, query, {
+    type,
+    season: targetSeason ?? 0,
+    mediaType: mediaType ?? null,
+  });
+  if (negativeCacheIsBlocked(ncKey)) {
+    logger.debug(`HDR: negative cache HIT | "${query.substring(0, 40)}"`);
+    return [];
+  }
+
+  // Circuit breaker — se a fonte está aberta, nem tenta.
+  if (!breakerPodeUsar(FONTE)) {
+    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${query.substring(0, 40)}"`);
+    return [];
+  }
 
   try {
     const allResults: HdrTorrent[] = [];
     const seenInfoHashes = new Set<string>();
     const seenPostUrls = new Set<string>();
     let queriesComResultado = 0;
+    let houveErro = false;
+    let houveSucesso = false;
 
     for (const q of queriesParaBusca) {
       const t0 = Date.now();
 
-      // HDR invalida token+cookie após 1 busca — renova a sessão antes de cada query.
-      // Sem isso, a 2ª query em diante cai na home (fallback) e devolve lixo.
-      limparSessao();
+      const searchResult = await searchHdrLinks(q, targetSeason, mediaType);
 
-      const links = await searchHdrLinks(q, targetSeason, mediaType);
+      if (searchResult.status === 'blocked') {
+        logger.debug(`HDR: breaker abriu no meio do loop | "${q.substring(0, 40)}"`);
+        break;
+      }
+
+      if (searchResult.status === 'error') {
+        houveErro = true;
+        continue;
+      }
+
+      if (searchResult.status === 'empty') {
+        houveSucesso = true;
+        continue;
+      }
+
+      houveSucesso = true;
+      const links = searchResult.items;
 
       if (links.length === 0) {
         logger.debug(`HDR: "${q.substring(0, 40)}" | 0 links (${Date.now() - t0}ms)`);
         continue;
       }
 
-      const tokensRuido = calcularTokensRuido(links.map(l => l.title));
-
-      // Só FILME usa collection no pré-filtro.
-      // Série: "1ª Temporada Completa" é só uma temporada, não pack.
-      // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
-      const ehSerie = mediaType === 'series' || mediaType === 'tv';
-
       const filtrados = links.filter(link => {
-        const tituloLimpo = limparPorRaridade(link.title, tokensRuido);
-        const resultado = similarity.compararComTitulos(frasesValidas, tituloLimpo);
-        const isCollection = !ehSerie && isCollectionTitle(link.title, mediaType);
+        const resultado = similarity.preFiltroContem(frasesValidas, link.title);
+        const isCollection = isCollectionTitle(link.title, mediaType);
 
         if (!resultado.match && !isCollection) {
-          logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} nivel=${resultado.nivel}`);
+          logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
           return false;
         }
         return true;
@@ -806,10 +958,18 @@ export async function searchHdr(
     }
 
     const duration = Date.now() - startTime;
+
+    // Só marca negative cache quando: 0 resultados E houve sucesso E nenhum erro.
+    if (allResults.length === 0 && houveSucesso && !houveErro) {
+      negativeCacheMark(ncKey);
+      logger.info(`HDR: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${NEGATIVE_DEFAULT_TTL_MS}`);
+    }
+
     logger.info(`HDR: ${allResults.length} magnets em ${duration}ms | queries=${queriesParaBusca.length} comResultado=${queriesComResultado}`);
     return allResults;
   } catch (err: any) {
     logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });
+    breakerRegistrarFalha(FONTE);
     return [];
   }
 }

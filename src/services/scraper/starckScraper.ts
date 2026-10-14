@@ -16,12 +16,68 @@ import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const logger = new Logger('StarckScraper');
 
-const STARCK_BASE = 'https://www.starckfilmes-v24.com';
+const STARCK_BASE = 'https://starckfilmes-v26.com';
 
 const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
 
 // Mesma instância usada pelo TitleFilter e pelos outros scrapers.
 const similarity = SimilarityCalculator.getInstance();
+
+// Negative cache local do Starck. Cada scraper tem seu veredito independente.
+const STARCK_NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const STARCK_NEGATIVE_MAX = 5000;
+
+interface StarckNegativeEntry {
+  ts: number;
+  ttlMs: number;
+  hits: number;
+}
+
+const starckNegativeStore = new Map<string, StarckNegativeEntry>();
+
+function starckNegativeKey(query: string, extra: Record<string, unknown>): string {
+  const q = query.trim().toLowerCase();
+  return `starck|${q}|${JSON.stringify(extra)}`;
+}
+
+function starckNegativeIsBlocked(key: string): boolean {
+  const entry = starckNegativeStore.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.ts > entry.ttlMs) {
+    starckNegativeStore.delete(key);
+    return false;
+  }
+  entry.hits++;
+  return true;
+}
+
+function starckNegativeMark(key: string, ttlMs = STARCK_NEGATIVE_TTL_MS): void {
+  if (starckNegativeStore.size >= STARCK_NEGATIVE_MAX) {
+    const first = starckNegativeStore.keys().next().value;
+    if (first) starckNegativeStore.delete(first);
+  }
+  starckNegativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+
+export function starckNegativeClear(): void {
+  starckNegativeStore.clear();
+}
+
+export function starckNegativeStats() {
+  const agora = Date.now();
+  return {
+    size: starckNegativeStore.size,
+    maxEntries: STARCK_NEGATIVE_MAX,
+    defaultTtlMs: STARCK_NEGATIVE_TTL_MS,
+    entries: Array.from(starckNegativeStore.entries()).map(([key, v]) => ({
+      key,
+      ageMs: agora - v.ts,
+      ttlMs: v.ttlMs,
+      expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+      hits: v.hits,
+    })),
+  };
+}
 
 export interface StarckTorrent {
   magnet: string;
@@ -80,6 +136,13 @@ export interface SearchResultItem {
   postUrl: string;
   slugTitle: string;
   range: EpisodeRange | null;
+}
+
+// Resultado discriminado — separa "site respondeu" de "site falhou". Essencial pro negative cache.
+export interface SearchLinksResult {
+  status: 'ok' | 'error';
+  items: SearchResultItem[];
+  error?: string;
 }
 
 export interface ContagemClassificacao {
@@ -172,7 +235,7 @@ export async function searchStarckLinks(
   targetYear?: number,
   mediaType?: TipoConteudo,
   type?: 'movie' | 'series'
-): Promise<SearchResultItem[]> {
+): Promise<SearchLinksResult> {
   const searchUrl = `${STARCK_BASE}/?s=${encodeURIComponent(searchQuery)}`;
 
   try {
@@ -210,11 +273,6 @@ export async function searchStarckLinks(
     const results = [...itemsMap.values()];
     const frasesArr = [...construirFrases(allQueries)];
 
-    // Só FILME usa collection pra bypassar similaridade.
-    // Série: "1ª Temporada Completa" é só uma temporada, não pack.
-    // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
-    const ehSerie = mediaType === 'series' || mediaType === 'tv';
-
     let descartadosPorTipo = 0;
     let descartadosPorTemporada = 0;
     let descartadosPorSimilaridade = 0;
@@ -222,7 +280,7 @@ export async function searchStarckLinks(
 
     const filtered = results.filter(item => {
       // Pré-filtro de tipo via slug: range != null sinaliza série; coleção de série cobre pack sem range.
-      const isCollection = !ehSerie && isCollectionTitle(item.slugTitle, mediaType);
+      const isCollection = isCollectionTitle(item.slugTitle, mediaType);
       const isCollectionSeries = isCollectionTitle(item.slugTitle, 'series');
       const pareceSerie = item.range !== null || isCollectionSeries;
 
@@ -240,7 +298,7 @@ export async function searchStarckLinks(
         return false;
       }
 
-      const resultado = similarity.compararComTitulos(frasesArr, item.slugTitle);
+      const resultado = similarity.preFiltroContem(frasesArr, item.slugTitle);
 
       if (!resultado.match && !isCollection) {
         descartadosPorSimilaridade++;
@@ -259,10 +317,10 @@ export async function searchStarckLinks(
       ` | type=${type ?? '-'} mediaType=${mediaType ?? '-'}`
     );
 
-    return filtered.slice(0, 40);
+    return { status: 'ok', items: filtered.slice(0, 40) };
   } catch (err: any) {
     logger.warn('Starck busca falhou', { query: searchQuery.substring(0, 50), error: err.message });
-    return [];
+    return { status: 'error', items: [], error: err.message };
   }
 }
 
@@ -697,10 +755,22 @@ export async function searchStarck(
 
   const allQueries = [...new Set([query, ...(searchQueries || [])])];
 
+  // Negative cache — pula tudo se a query já foi vista vazia.
+  const ncKey = starckNegativeKey(query, {
+    type,
+    season: targetSeason ?? 0,
+    mediaType: mediaType ?? null,
+  });
+  if (starckNegativeIsBlocked(ncKey)) {
+    logger.debug(`Starck: negative cache HIT | "${query.substring(0, 40)}"`);
+    return [];
+  }
+
   const allResults: StarckTorrent[] = [];
   const seenInfoHashes = new Set<string>();
 
-  const links = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType, type);
+  const linksResult = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType, type);
+  const links = linksResult.items;
 
   if (links.length > 0) {
     let processedPosts = 0;
@@ -772,6 +842,12 @@ export async function searchStarck(
         processedPosts++;
       }
     }
+  }
+
+  // Marca negative cache só quando 0 resultados E o site respondeu OK (não erro de rede).
+  if (allResults.length === 0 && linksResult.status === 'ok') {
+    starckNegativeMark(ncKey);
+    logger.info(`Starck: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${STARCK_NEGATIVE_TTL_MS}`);
   }
 
   const duration = Date.now() - startTime;

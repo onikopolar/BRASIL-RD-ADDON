@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { normalizarTexto, isCollectionTitle, extrairNumeroParte, getPotentialSequelNumbers } from './TechnicalWords.js';
+import { normalizarTexto, isCollectionTitle, extrairNumeroParte, getPotentialSequelNumbers, extrairRangeEpisodios, TipoConteudo } from './TechnicalWords.js';
 import { CacheService } from '../debrid/CacheService.js';
 
 export interface ScoreDetalhes {
@@ -29,6 +29,12 @@ export interface ResultadoComparacao {
   nivel: 'N1' | 'N2' | 'N3' | 'N4' | 'N5' | 'vazio' | 'nenhum';
   tituloVencedor?: string;
   detalhes?: ScoreDetalhes;
+}
+
+export interface ResultadoPreFiltro {
+  match: boolean;
+  score: number;
+  fraseVencedora?: string;
 }
 
 export class SimilarityCalculator {
@@ -72,7 +78,29 @@ export class SimilarityCalculator {
     this.tmdbLocalCache = new CacheService({ name: 'sim:tmdb' });
   }
 
-  //  API PÚBLICA — PRÉ-FILTRO
+  //  API PÚBLICA — PRÉ-FILTRO BARATO
+
+  // Checagem barata: alguma frase de busca aparece como substring no título, com boundary de palavra.
+  // Cobre "it" (2 chars) sem strip words. Sem fuzzy, sem cascata N1-N5, sem tokenização.
+  preFiltroContem(frases: string[], tituloCandidato: string): ResultadoPreFiltro {
+    const t = normalizarTexto(tituloCandidato);
+    if (!t) return { match: false, score: 0 };
+
+    for (const frase of frases) {
+      const fn = normalizarTexto(frase);
+      if (!fn) continue;
+
+      const escaped = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`);
+      if (re.test(t)) {
+        return { match: true, score: 1, fraseVencedora: frase };
+      }
+    }
+
+    return { match: false, score: 0 };
+  }
+
+  //  API PÚBLICA — PRÉ-FILTRO COMPLETO (fuzzy)
 
   compararComTitulos(
     titulosTmdb: string[],
@@ -120,7 +148,7 @@ export class SimilarityCalculator {
   async smartTitleContainsCheck(
     torrentTitle: string,
     imdbId: string,
-    _torrentMetadata?: { year?: number; season?: number; years?: number[] },
+    _torrentMetadata?: { year?: number; season?: number; years?: number[]; tipoConteudo?: TipoConteudo },
     rawTitleForLanguage?: string,
     preFetchedTmdbData?: ImdbTitles | null
   ): Promise<SmartTitleMatch> {
@@ -186,7 +214,22 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
-    const seqTorrent = getPotentialSequelNumbers(torrentTitle);
+    // Em série, número no título é TEMPORADA, não sequência. Remove da lista de
+    // "sequências potenciais" o número que bate com a temporada declarada no título.
+    // Stremio tem prioridade sobre TMDB — o mediaType do TMDB vem undefined com frequência.
+    const tipoEfetivo: TipoConteudo = _torrentMetadata?.tipoConteudo ?? movieInfo.mediaType;
+    const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
+    const rangeTorrent = extrairRangeEpisodios(torrentTitle);
+    const seasonDoTitulo = rangeTorrent?.seasonStart;
+
+    let seqTorrent = getPotentialSequelNumbers(torrentTitle);
+    if (isSerie && seasonDoTitulo !== undefined && seasonDoTitulo > 0) {
+      const antes = seqTorrent.length;
+      seqTorrent = seqTorrent.filter(n => n !== seasonDoTitulo);
+      if (antes !== seqTorrent.length) {
+        this.logger.debug(`SEQUENCIA ignorada por ser série | "${torrentTitle.substring(0, 50)}" | removido ${seasonDoTitulo} (temporada)`);
+      }
+    }
 
     // Sequência confirmada quando algum título TMDB declara o mesmo número do torrent.
     const tmdbDeclaraMesmoNumero = seqTorrent.length > 0
@@ -355,7 +398,6 @@ export class SimilarityCalculator {
   //  NÚCLEO DE SIMILARIDADE — 5 NÍVEIS EM CASCATA
 
   calcularScore(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
-    // Guarda: se ambos declaram número de parte e diferem, rejeita direto sem fuzzy.
     const parteTmdb = extrairNumeroParte(tmdbTokens.join(' '));
     const parteTorrent = extrairNumeroParte(torrentTokens.join(' '));
     if (parteTmdb !== null && parteTorrent !== null && parteTmdb !== parteTorrent) {
@@ -397,7 +439,7 @@ export class SimilarityCalculator {
     if (tmdbTokens.length !== 1) return false;
 
     const tokenTmdb = tmdbTokens[0];
-    if (tokenTmdb.length > 3) return false;  // só guarda tokens curtos/ambíguos (it, up, us, her)
+    if (tokenTmdb.length > 3) return false;
 
     if (torrentTokens.length < 3) return false;
 

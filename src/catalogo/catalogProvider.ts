@@ -346,7 +346,6 @@ export class CatalogProvider {
     return unique;
   }
 
-  // Verifica se um texto cita alguma palavra (>3 chars) dos títulos do TMDB.
   private mencionaTituloTmdb(texto: string | undefined, imdbTitles: ImdbTitles | null): boolean {
     if (!texto || !imdbTitles) return false;
 
@@ -362,8 +361,6 @@ export class CatalogProvider {
     return palavras.some(p => palavrasTmdb.has(p));
   }
 
-  // Coleção: prioriza htmlTitle ou canonicalName que citem o título TMDB.
-  // Se nenhum citar, cai pro originalTitle como fallback.
   private escolherTituloParaValidar(
     original: string | undefined,
     title: string | undefined,
@@ -399,19 +396,18 @@ export class CatalogProvider {
       naoLegendado.map(async (t) => {
         const isCollection = isCollectionTitle(t.originalTitle || t.title, mediaType);
 
-        // Coleção sem nenhuma pista de título (nem htmlTitle nem dn) = pack genérico. Aceita direto.
         if (
           isCollection &&
           !this.mencionaTituloTmdb(t.htmlTitle, imdbTitles) &&
           !this.mencionaTituloTmdb(t.canonicalName, imdbTitles)
         ) {
-          // Nome do post é o único identificador humano disponível — usa ele na exibição.
           const tituloExibicao = t.originalTitle || t.title;
           t.canonicalName = tituloExibicao;
 
           this.logger.info('🎯 ACEITO (pack de coleção sem título)', {
             imdbId,
             torrent: tituloExibicao.substring(0, 70),
+            quality: t.quality,
             provider: t.provider,
             infoHash: t.infoHash?.substring(0, 12) || 'N/A',
           });
@@ -426,9 +422,12 @@ export class CatalogProvider {
         );
         const tituloParaIdioma = t.title || t.originalTitle || '';
 
+        // isCollection do log reflete a string que vai pro TitleFilter (tituloParaValidar), não o originalTitle do post — antes os dois divergiam (ex.: S01E03 CORRIGIDO logava true aqui e false no TF-STEP-1).
+        const isCollectionTitulo = isCollectionTitle(tituloParaValidar || t.title, mediaType);
+
         this.logger.debug(
           `TITLEFILTER_IN | "${(tituloParaValidar || t.title).substring(0, 60)}" | ` +
-          `isCollection=${isCollection} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
+          `isCollection=${isCollectionTitulo} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
           `imdbConfirmed=${t.imdbConfirmed ?? false} provider=${t.provider}`
         );
 
@@ -443,7 +442,8 @@ export class CatalogProvider {
           t.htmlTitle,
           t.episode,
           t.imdbConfirmed,
-          t.years
+          t.years,
+          mediaType
         );
 
         return { torrent: t, result };
@@ -462,6 +462,7 @@ export class CatalogProvider {
               imdbId,
               alvo: `S${season ?? '?'}E${episode ?? '?'}`,
               torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+              quality: torrent.quality,
               provider: torrent.provider,
               infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
             });

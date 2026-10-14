@@ -72,6 +72,7 @@ const _ALL_NON_TITLE_WORDS = new Set<string>([
   ...INTERNATIONAL_TRACKERS,
 ].map(w => w.toLowerCase()));
 
+
 export function isTechnicalWord(word: string): boolean {
   return _ALL_NON_TITLE_WORDS.has(word.toLowerCase());
 }
@@ -138,6 +139,11 @@ export const INDICADORES_INTERNACIONAL_TORRENTS = [
   'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
 
+// topo do arquivo, perto dos outros exports
+export const RANGE_TEMPORADA_REGEX =
+  /\b(\d{1,2})\s*[ªº°]?\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\s*[ªº°]?\s*temporadas?\b/i;
+
+
 export const COLLECTION_WORDS_FILMES = new Set([
   'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
   'coletanea', 'franquia', 'duologia',
@@ -146,10 +152,10 @@ export const COLLECTION_WORDS_FILMES = new Set([
   'todos os filmes', 'all movies', 'all films', 'todos filmes',
 ]);
 
-export const COLLECTION_WORDS_SERIES = new Set([
-  'todas as temporadas',
-  'temporada completa', 'season pack', 'pack completo',
+export const COLLECTION_WORDS_SERIES: Set<string | RegExp> = new Set([
+  'todas as temporadas', 'season pack', 'pack completo',
   'complete series', 'full collection', 'extended collection',
+  RANGE_TEMPORADA_REGEX,
 ]);
 
 // Tipo do conteúdo conforme o TMDB/Stremio. 'tv' é o rótulo do TMDB pra série.
@@ -157,15 +163,17 @@ export type TipoConteudo = 'movie' | 'series' | 'tv' | null | undefined;
 
 // Escolhe o conjunto de palavras de coleção conforme o tipo.
 // Sem tipo declarado, une os dois — compatibilidade com chamadas antigas.
-function palavrasDeColecao(tipo: TipoConteudo): Set<string> {
-  if (tipo === 'series' || tipo === 'tv') return COLLECTION_WORDS_SERIES;
+function palavrasDeColecao(tipo: TipoConteudo): Set<string | RegExp> {  // ← falta o |RegExp
+  if (tipo === 'series' || tipo === 'tv') return COLLECTION_WORDS_SERIES;  // line 167
   if (tipo === 'movie') return COLLECTION_WORDS_FILMES;
-  return new Set([...COLLECTION_WORDS_FILMES, ...COLLECTION_WORDS_SERIES]);
+  return new Set([...COLLECTION_WORDS_FILMES, ...COLLECTION_WORDS_SERIES]);  // line 169
 }
+
 
 // Detecta título de coleção/franquia/pack. Normaliza internamente.
 // Se `tipo` for informado, restringe ao conjunto correto (filmes ou séries).
 export function isCollectionTitle(title: string, tipo?: TipoConteudo): boolean {
+
   if (!title) return false;
   const normalizado = normalizarTexto(title);
   if (!normalizado) return false;
@@ -173,6 +181,12 @@ export function isCollectionTitle(title: string, tipo?: TipoConteudo): boolean {
   const palavras = palavrasDeColecao(tipo);
 
   for (const termo of palavras) {
+    // RegExp entra direto (ex: range "1 a 4 temporada").
+    if (termo instanceof RegExp) {
+      if (termo.test(normalizado)) return true;
+      continue;
+    }
+
     const termoNorm = normalizarTexto(termo);
     if (!termoNorm) continue;
 
@@ -394,6 +408,9 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const t = title
     .toLowerCase()
     .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    // "_" é \w em regex e quebra o \b antes de "Episodio"/"SxxExx".
+    // Trocar por espaço faz o \b funcionar: "DBZ_Episodio 200" → "dbz episodio 200".
+    .replace(/_/g, ' ')
     .trim();
 
   // Padrão 1: SxxExx (com múltiplos episódios opcionais)
@@ -524,6 +541,17 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     };
   }
 
+  // Padrão 4d: Ep N ao M / Ep N e M / Ep N-M (Ep curto, com ou sem colchetes)
+  const epRangeShort = t.match(/\bep\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e|-|–|—|~)\s*(\d{1,3})\b/i);
+  if (epRangeShort) {
+    return {
+      seasonStart: 0,
+      seasonEnd: 0,
+      episodeStart: parseInt(epRangeShort[1]),
+      episodeEnd: parseInt(epRangeShort[2]),
+    };
+  }
+
   // Padrão 5b: Nº episódio
   const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
   if (ptSingleComOrdinal) {
@@ -535,6 +563,13 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
   if (episodioOnly) {
     const ep = parseInt(episodioOnly[1]);
+    return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
+  }
+
+  // Padrão 5c: Ep N (Ep curto, com ou sem colchetes)
+  const epSingleShort = t.match(/\bep\s*(\d{1,3})\b/i);
+  if (epSingleShort) {
+    const ep = parseInt(epSingleShort[1]);
     return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
   }
 
@@ -556,7 +591,7 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
   }
 
   // Padrão 6.5: Nª À Mª TEMPORADA — range ordinal em PT
-  const ordinalRange = t.match(/\b(\d{1,2})\s*[ªº°]?\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\s*[ªº°]?\s*temporadas?\b/i);
+  const ordinalRange = t.match(RANGE_TEMPORADA_REGEX);
   if (ordinalRange) {
     const start = parseInt(ordinalRange[1]);
     const end = parseInt(ordinalRange[2]);
@@ -575,8 +610,8 @@ export function extrairRangeEpisodios(title: string): EpisodeRange | null {
     }
   }
 
-  // Padrão 7: Nª temporada (temporada única)
-  const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
+  // Padrão 7: Nª temporada / N temp (temporada única)
+  const tempPack = t.match(/\b(\d{1,2})\s*[ªº°a]?\s*(?:temporada|temp\.?)\b/i);
   if (tempPack) {
     const s = parseInt(tempPack[1]);
     return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };

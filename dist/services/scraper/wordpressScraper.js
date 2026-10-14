@@ -36,7 +36,10 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.WordPressScraper = exports.jsonAxiosConfig = exports.WP_SITES = exports.lookupCustomizado = exports.agenteHttps = void 0;
+exports.WordPressScraper = exports.jsonAxiosConfig = exports.WP_SITES = exports.lookupCustomizado = exports.agenteHttps = exports.dnsAgent = exports.DnsAgent = exports.logger = exports.QUALIDADE_PURA_REGEX = exports.LEGENDADO_CABECALHO_REGEX = exports.LEGENDADO_REGEX = exports.CAT_SERIES = exports.CAT_FILMES = void 0;
+exports.wpNegativeClear = wpNegativeClear;
+exports.wpNegativeStats = wpNegativeStats;
+exports.decodeHtmlEntities = decodeHtmlEntities;
 exports.criarLookup = criarLookup;
 const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
@@ -49,15 +52,60 @@ const magnetHelper_js_1 = require("../../magnet/magnetHelper.js");
 const CacheService_js_1 = require("../../debrid/CacheService.js");
 const TechnicalWords_js_1 = require("../../titulos/TechnicalWords.js");
 const SimilarityCalculator_js_1 = require("../../titulos/SimilarityCalculator.js");
-const CAT_FILMES = 38;
-const CAT_SERIES = 43;
-const LEGENDADO_REGEX = new RegExp('\\b(' + TechnicalWords_js_1.INDICADORES_INTERNACIONAL_TORRENTS
+exports.CAT_FILMES = 38;
+exports.CAT_SERIES = 43;
+exports.LEGENDADO_REGEX = new RegExp('\\b(' + TechnicalWords_js_1.INDICADORES_INTERNACIONAL_TORRENTS
     .filter(w => /^leg/i.test(w))
     .join('|') + ')\\b', 'i');
-const LEGENDADO_CABECALHO_REGEX = /\blegendad[ao]s?\b/i;
-const QUALIDADE_PURA_REGEX = /^\s*(?:qualidade:?\s*)?(\d{3,4}p|4k|uhd|full\s*hd)\s*$/i;
-const logger = new logger_js_1.Logger('WordPressScraper');
+exports.LEGENDADO_CABECALHO_REGEX = /\blegendad[ao]s?\b/i;
+exports.QUALIDADE_PURA_REGEX = /^\s*(?:qualidade:?\s*)?(\d{3,4}p|4k|uhd|full\s*hd)\s*$/i;
+exports.logger = new logger_js_1.Logger('WordPressScraper');
+const LYRA_MARK = 'data-lyra-h';
 dns_1.default.setServers(['8.8.8.8', '1.1.1.1']);
+const WP_NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const WP_NEGATIVE_MAX = 5000;
+const wpNegativeStore = new Map();
+function wpNegativeKey(site, query, extra) {
+    const q = query.trim().toLowerCase();
+    return `wp:${site}|${q}|${JSON.stringify(extra)}`;
+}
+function wpNegativeIsBlocked(key) {
+    const entry = wpNegativeStore.get(key);
+    if (!entry)
+        return false;
+    if (Date.now() - entry.ts > entry.ttlMs) {
+        wpNegativeStore.delete(key);
+        return false;
+    }
+    entry.hits++;
+    return true;
+}
+function wpNegativeMark(key, ttlMs = WP_NEGATIVE_TTL_MS) {
+    if (wpNegativeStore.size >= WP_NEGATIVE_MAX) {
+        const first = wpNegativeStore.keys().next().value;
+        if (first)
+            wpNegativeStore.delete(first);
+    }
+    wpNegativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+function wpNegativeClear() {
+    wpNegativeStore.clear();
+}
+function wpNegativeStats() {
+    const agora = Date.now();
+    return {
+        size: wpNegativeStore.size,
+        maxEntries: WP_NEGATIVE_MAX,
+        defaultTtlMs: WP_NEGATIVE_TTL_MS,
+        entries: Array.from(wpNegativeStore.entries()).map(([key, v]) => ({
+            key,
+            ageMs: agora - v.ts,
+            ttlMs: v.ttlMs,
+            expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+            hits: v.hits,
+        })),
+    };
+}
 function decodeHtmlEntities(texto) {
     if (!texto || (!texto.includes('&') && !texto.includes('&#')))
         return texto;
@@ -88,8 +136,9 @@ class DnsAgent extends https_1.default.Agent {
         return undefined;
     }
 }
-const dnsAgent = new DnsAgent({ keepAlive: true });
-exports.agenteHttps = dnsAgent;
+exports.DnsAgent = DnsAgent;
+exports.dnsAgent = new DnsAgent({ keepAlive: true });
+exports.agenteHttps = exports.dnsAgent;
 function criarLookup() {
     return (hostname, _opts, cb) => {
         dns_1.default.resolve4(hostname, (err, addresses) => {
@@ -110,7 +159,7 @@ exports.WP_SITES = [
 ];
 exports.jsonAxiosConfig = {
     timeout: 15000,
-    httpsAgent: dnsAgent,
+    httpsAgent: exports.dnsAgent,
     lookup: exports.lookupCustomizado,
     headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
@@ -133,13 +182,33 @@ class WordPressScraper {
             : [query];
         const activeSites = exports.WP_SITES.filter(s => s.priority > 0).sort((a, b) => b.priority - a.priority);
         for (const q of queriesParaBusca) {
-            logger.debug(`search query="${q}"`);
-            const resultados = await Promise.all(activeSites.map(site => this.searchSite(site, q, type, targetSeason, searchQueries, imdbId, mediaType).catch(err => {
-                logger.warn(`site falhou`, { site: site.name, query: q, error: err.code || err.message });
-                return [];
-            }))).then(arrays => arrays.flat());
+            exports.logger.debug(`search query="${q}"`);
+            const respostas = await Promise.all(activeSites.map(async (site) => {
+                const ncKey = wpNegativeKey(site.name, q, {
+                    type,
+                    season: targetSeason ?? 0,
+                    mediaType: mediaType ?? null,
+                });
+                if (wpNegativeIsBlocked(ncKey)) {
+                    exports.logger.debug(`WP: negative cache HIT | site=${site.name} | "${q.substring(0, 40)}"`);
+                    return [];
+                }
+                try {
+                    const r = await this.searchSite(site, q, type, targetSeason, searchQueries, imdbId, mediaType);
+                    if (r.length === 0) {
+                        wpNegativeMark(ncKey);
+                        exports.logger.info(`WP: 0 resultados, cacheado negativo | site=${site.name} | "${q.substring(0, 40)}"`);
+                    }
+                    return r;
+                }
+                catch (err) {
+                    exports.logger.warn(`site falhou`, { site: site.name, query: q, error: err.code || err.message });
+                    return [];
+                }
+            }));
+            const resultados = respostas.flat();
             if (resultados.length > 0) {
-                logger.debug(`query "${q}" retornou ${resultados.length}`);
+                exports.logger.debug(`query "${q}" retornou ${resultados.length}`);
                 return resultados;
             }
         }
@@ -147,9 +216,9 @@ class WordPressScraper {
     }
     async searchSite(site, query, type, targetSeason, searchQueries, imdbId, mediaType) {
         const searchQuery = query.trim();
-        const catId = type === 'movie' ? CAT_FILMES : CAT_SERIES;
-        const searchUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(searchQuery)}&per_page=20&_fields=id,title,link&categories=${catId}`;
-        logger.debug(`GET posts search="${searchQuery}" cat=${catId}`);
+        const catId = type === 'movie' ? exports.CAT_FILMES : exports.CAT_SERIES;
+        const searchUrl = `${site.baseUrl}/wp-json/wp/v2/posts?search=${encodeURIComponent(searchQuery)}&per_page=100&_fields=id,title,link&categories=${catId}`;
+        exports.logger.debug(`GET posts search="${searchQuery}" cat=${catId}`);
         const response = await axios_1.default.get(searchUrl, exports.jsonAxiosConfig);
         const posts = response.data;
         const postItems = [];
@@ -167,15 +236,14 @@ class WordPressScraper {
         const queryRange = (0, TechnicalWords_js_1.extrairRangeEpisodios)(searchQuery);
         const querySeason = targetSeason ?? queryRange?.seasonStart;
         const frases = this.montarFrasesDeBusca(searchQuery, searchQueries);
-        const tokensRuido = (0, TechnicalWords_js_1.calcularTokensRuido)(postItems.map(p => p.title));
-        const relevantPosts = postItems.filter(post => this.postRelevante(post, querySeason, frases, site.name, tokensRuido, mediaType));
-        logger.debug(`posts API=${postItems.length} relevantes=${relevantPosts.length} season=${querySeason ?? '-'}`);
+        const relevantPosts = postItems.filter(post => this.postRelevante(post, querySeason, frases, site.name, mediaType));
+        exports.logger.debug(`posts API=${postItems.length} relevantes=${relevantPosts.length} season=${querySeason ?? '-'}`);
         const results = [];
         for (let i = 0; i < relevantPosts.length; i += this.POST_BATCH_SIZE) {
             const batch = relevantPosts.slice(i, i + this.POST_BATCH_SIZE);
             const batchPromises = batch.map(post => this.scrapePostApi(post.id, post.title, site.name, type, imdbId, mediaType)
                 .catch(err => {
-                logger.warn(`post falhou`, { post: post.title.substring(0, 50), error: err.message });
+                exports.logger.warn(`post falhou`, { post: post.title.substring(0, 50), error: err.message });
                 return [];
             }));
             const batchResults = await Promise.all(batchPromises);
@@ -189,7 +257,7 @@ class WordPressScraper {
                     r.season = querySeason;
             }
         }
-        logger.debug(`site=${site.name} total=${results.length}`);
+        exports.logger.debug(`site=${site.name} total=${results.length}`);
         return results;
     }
     montarFrasesDeBusca(searchQuery, searchQueries) {
@@ -205,7 +273,7 @@ class WordPressScraper {
         }
         return frases;
     }
-    postRelevante(post, querySeason, frases, siteName, tokensRuido, mediaType) {
+    postRelevante(post, querySeason, frases, siteName, mediaType) {
         const lowerTitle = post.title.toLowerCase();
         if (/\blist[aã]o\b/i.test(lowerTitle))
             return false;
@@ -214,19 +282,17 @@ class WordPressScraper {
             if (!(0, TechnicalWords_js_1.temporadaAlvoNoRange)(range, querySeason))
                 return false;
         }
-        const tituloLimpo = (0, TechnicalWords_js_1.limparPorRaridade)(post.title, tokensRuido);
-        const resultado = this.similarity.compararComTitulos([...frases], tituloLimpo);
-        const ehSerie = mediaType === 'series' || mediaType === 'tv';
-        const isCollection = !ehSerie && (0, TechnicalWords_js_1.isCollectionTitle)(post.title, mediaType);
+        const resultado = this.similarity.preFiltroContem([...frases], post.title);
+        const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(post.title, mediaType);
         if (!resultado.match && !isCollection) {
-            logger.debug(`post rejeitado`, { score: resultado.score.toFixed(2), titulo: post.title.substring(0, 60) });
+            exports.logger.debug(`post rejeitado`, { score: resultado.score.toFixed(2), titulo: post.title.substring(0, 60) });
             return false;
         }
         if (!resultado.match && isCollection) {
-            logger.debug(`coleção aceita pré-filtro`, { titulo: post.title.substring(0, 60), mediaType: mediaType ?? '-' });
+            exports.logger.debug(`coleção aceita pré-filtro`, { titulo: post.title.substring(0, 60), mediaType: mediaType ?? '-' });
             return true;
         }
-        logger.debug(`post aceito`, { score: resultado.score.toFixed(2), nivel: resultado.nivel, titulo: post.title.substring(0, 60) });
+        exports.logger.debug(`post aceito`, { score: resultado.score.toFixed(2), frase: resultado.fraseVencedora || '-', titulo: post.title.substring(0, 60) });
         return true;
     }
     classificarTextoIdioma(texto) {
@@ -236,7 +302,7 @@ class WordPressScraper {
             temDual: /\bdual\b/.test(t),
             temAudio: /\baudio\b/.test(t),
             temDublado: /\bdublado\b|\bdublada\b|\bdublagem\b/.test(t),
-            temLegendado: LEGENDADO_CABECALHO_REGEX.test(texto),
+            temLegendado: exports.LEGENDADO_CABECALHO_REGEX.test(texto),
             temLegendaSubstantivo: /\blegenda\b/i.test(texto),
         };
     }
@@ -245,17 +311,6 @@ class WordPressScraper {
             return null;
         const q = this.qualityDetector.extractBestQuality(text);
         return (q && q !== 'HD') ? q : null;
-    }
-    getFullContextText($el) {
-        let current = $el.parent();
-        for (let depth = 0; depth < 4; depth++) {
-            const text = current.text().trim();
-            if (text.length > 10 && /\b(\d{3,4}p|4k|uhd)\b/i.test(text)) {
-                return text;
-            }
-            current = current.parent();
-        }
-        return $el.parent().text().trim();
     }
     cleanHtmlTitle(parentText, linkText, qualityOverride) {
         if (!parentText)
@@ -288,26 +343,41 @@ class WordPressScraper {
         let textoIrmaoAnterior = null;
         let tituloIrmaoAnterior = null;
         const $pai = $el.parent();
-        const $rotulo = $pai.find('strong, b').first();
-        if ($rotulo.length) {
-            const idxRotulo = $rotulo.index();
-            const idxLink = $el.index();
-            if (idxRotulo !== -1 && idxLink !== -1 && idxRotulo < idxLink) {
-                const texto = $rotulo.text().replace(/\s+/g, ' ').trim();
-                if (texto) {
-                    if (QUALIDADE_PURA_REGEX.test(texto))
-                        textoIrmaoAnterior = texto;
-                    if (this.pareceTituloDeItem(texto))
-                        tituloIrmaoAnterior = texto;
+        const idxLink = $el.index();
+        if (idxLink !== -1 && idxLink > 0) {
+            const textoAntes = $pai.contents().slice(0, idxLink).text().replace(/\s+/g, ' ').trim();
+            if (textoAntes) {
+                if (exports.QUALIDADE_PURA_REGEX.test(textoAntes))
+                    textoIrmaoAnterior = textoAntes;
+                if (this.pareceTituloDeItem(textoAntes))
+                    tituloIrmaoAnterior = textoAntes;
+            }
+        }
+        if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
+            const $rotulo = $pai.find('strong, b').first();
+            if ($rotulo.length) {
+                const idxRotulo = $rotulo.index();
+                if (idxRotulo !== -1 && idxLink !== -1 && idxRotulo < idxLink) {
+                    const texto = $rotulo.text().replace(/\s+/g, ' ').trim();
+                    if (texto) {
+                        if (exports.QUALIDADE_PURA_REGEX.test(texto))
+                            textoIrmaoAnterior = texto;
+                        if (this.pareceTituloDeItem(texto))
+                            tituloIrmaoAnterior = texto;
+                    }
                 }
             }
         }
         if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
             let irmao = $pai.prev();
             for (let passo = 0; passo < 3 && irmao.length; passo++) {
+                if (irmao.find('a[href^="magnet:"]').length > 0) {
+                    irmao = irmao.prev();
+                    continue;
+                }
                 const texto = irmao.text().replace(/\s+/g, ' ').trim();
                 if (texto) {
-                    if (QUALIDADE_PURA_REGEX.test(texto))
+                    if (exports.QUALIDADE_PURA_REGEX.test(texto))
                         textoIrmaoAnterior = texto;
                     if (this.pareceTituloDeItem(texto))
                         tituloIrmaoAnterior = texto;
@@ -323,7 +393,7 @@ class WordPressScraper {
             return false;
         if (!/[a-zA-ZÀ-ÿ]/.test(texto))
             return false;
-        if (QUALIDADE_PURA_REGEX.test(texto))
+        if (exports.QUALIDADE_PURA_REGEX.test(texto))
             return false;
         if (/^(assistir|baixar|download|ver|trailer|sinopse|informa[çc]|caso haja|k-lite|codec)/i.test(texto))
             return false;
@@ -331,31 +401,47 @@ class WordPressScraper {
             return false;
         return true;
     }
-    resolverQualidadeEspecifica(canonicalName, ctxLocal, linkText, fullContextText, parentText, postTitle, html) {
+    resolverQualidade(tree, canonicalName, linkText, parentText, postTitle, html) {
+        if (tree.contextoAcima) {
+            const q = this.extractQualityFromText(tree.contextoAcima);
+            if (q)
+                return { qualidade: q, fonte: 'contextoAcima' };
+        }
+        if (tree.proprio) {
+            const q = this.extractQualityFromText(tree.proprio);
+            if (q)
+                return { qualidade: q, fonte: 'proprio' };
+        }
+        if (tree.imgAlt) {
+            const q = this.extractQualityFromText(tree.imgAlt);
+            if (q)
+                return { qualidade: q, fonte: 'imgAlt' };
+        }
+        for (const filho of tree.filhos) {
+            const q = this.extractQualityFromText(filho);
+            if (q)
+                return { qualidade: q, fonte: 'filhos' };
+        }
+        if (tree.paiTexto) {
+            const q = this.extractQualityFromText(tree.paiTexto);
+            if (q)
+                return { qualidade: q, fonte: 'paiTexto' };
+        }
         if (canonicalName) {
             const q = this.extractQualityFromText(canonicalName);
             if (q)
                 return { qualidade: q, fonte: 'canonicalName' };
         }
-        if (ctxLocal.altDaImg) {
-            const q = this.extractQualityFromText(ctxLocal.altDaImg);
+        if (linkText) {
+            const q = this.extractQualityFromText(linkText);
             if (q)
-                return { qualidade: q, fonte: 'altDaImg' };
+                return { qualidade: q, fonte: 'linkText' };
         }
-        if (ctxLocal.textoIrmaoAnterior) {
-            const q = this.extractQualityFromText(ctxLocal.textoIrmaoAnterior);
+        if (parentText) {
+            const q = this.extractQualityFromText(parentText);
             if (q)
-                return { qualidade: q, fonte: 'textoIrmaoAnterior' };
+                return { qualidade: q, fonte: 'parentText' };
         }
-        const qLink = this.extractQualityFromText(linkText);
-        if (qLink)
-            return { qualidade: qLink, fonte: 'linkText' };
-        const qCtx = this.extractQualityFromText(fullContextText);
-        if (qCtx)
-            return { qualidade: qCtx, fonte: 'fullContextText' };
-        const qParent = this.extractQualityFromText(parentText);
-        if (qParent)
-            return { qualidade: qParent, fonte: 'parentText' };
         const qPost = this.extractQualityFromText(postTitle);
         if (qPost)
             return { qualidade: qPost, fonte: 'postTitle' };
@@ -368,8 +454,7 @@ class WordPressScraper {
         const t = (0, TechnicalWords_js_1.normalizarTexto)(text).trim();
         if (/^(assistir|baixar|download|ver|trailer)\b/i.test(t))
             return 'OUTRO';
-        const pareceCabecalho = /^versao\b/i.test(t) || t.length <= 25;
-        if (!pareceCabecalho)
+        if (/^\p{L}{2,15}\s*:\s*\S/iu.test(text.trim()))
             return 'OUTRO';
         const f = this.classificarTextoIdioma(text);
         const temDualCompleto = f.temDual && f.temAudio;
@@ -381,42 +466,43 @@ class WordPressScraper {
         return 'OUTRO';
     }
     findSections($, content) {
-        const selectors = ['strong', 'b'];
-        const cabecalhos = [];
-        for (const sel of selectors) {
-            const elements = $(sel);
-            for (let i = 0; i < elements.length; i++) {
-                const text = $(elements[i]).text().trim();
-                if (!text)
-                    continue;
-                const tipo = this.detectSectionType(text);
-                if (tipo === 'OUTRO')
-                    continue;
-                const pos = content.indexOf($(elements[i]).toString());
-                if (pos === -1)
-                    continue;
-                cabecalhos.push({ tipo, pos });
-            }
-        }
-        cabecalhos.sort((a, b) => a.pos - b.pos);
+        const candidatos = [];
+        $('*').each((_, el) => {
+            const $el = $(el);
+            const texto = $el.text().replace(/\s+/g, ' ').trim();
+            if (texto.length < 3 || texto.length > 200)
+                return;
+            if ($el.find('a[href^="magnet:"]').length > 0)
+                return;
+            const tipo = this.detectSectionType(texto);
+            if (tipo === 'OUTRO')
+                return;
+            const pos = content.indexOf($el.toString());
+            if (pos === -1)
+                return;
+            const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(texto);
+            const season = range && range.seasonStart > 0 && range.seasonStart === range.seasonEnd
+                ? range.seasonStart
+                : null;
+            const tag = ($el.prop('tagName') || '').toLowerCase();
+            candidatos.push({ el, tipo, pos, season, texto, tag });
+        });
+        exports.logger.debug(`findSections candidatos brutos=${candidatos.length}`);
+        const filtrados = candidatos.filter(cab => !candidatos.some(outro => outro !== cab && $(outro.el).find(cab.el).length > 0));
+        filtrados.sort((a, b) => a.pos - b.pos);
         const secoes = [];
-        for (let i = 0; i < cabecalhos.length; i++) {
-            const cab = cabecalhos[i];
-            const proximo = cabecalhos[i + 1];
+        for (let i = 0; i < filtrados.length; i++) {
+            const cab = filtrados[i];
+            const proximo = filtrados[i + 1];
             secoes.push({
                 tipo: cab.tipo,
                 start: cab.pos,
                 end: proximo ? proximo.pos : content.length,
+                season: cab.season,
+                textoHeading: cab.texto,
             });
         }
         return secoes;
-    }
-    findSectionBoundaries($, content) {
-        const secoes = this.findSections($, content);
-        return {
-            dualIndex: secoes.find(s => s.tipo === 'DUAL')?.start ?? null,
-            legendadoIndex: secoes.find(s => s.tipo === 'LEGENDADO')?.start ?? null,
-        };
     }
     secaoDaPosicao(pos, secoes) {
         for (const s of secoes) {
@@ -425,20 +511,120 @@ class WordPressScraper {
         }
         return null;
     }
+    extrairTextoDeHtml(html) {
+        return html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#0?39;|&apos;/gi, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+    extrairTreeDoMagnet($, el, contextoAcima = '') {
+        const $el = $(el);
+        const proprio = $el.text().trim().replace(/\s+/g, ' ');
+        const filhos = [];
+        $el.find('strong, b, span').each((_, child) => {
+            const t = $(child).text().trim().replace(/\s+/g, ' ');
+            if (t && t !== proprio)
+                filhos.push(t);
+        });
+        const $img = $el.find('img').first();
+        const imgAlt = ($img.attr('alt') || $img.attr('title') || '').trim() || null;
+        const $pai = $el.parent();
+        const $paiClone = $pai.clone();
+        $paiClone.find('a').remove();
+        const paiTexto = $paiClone.text().trim().replace(/\s+/g, ' ');
+        const irmaos = [];
+        $pai.children('a').each((_, irmao) => {
+            if (irmao === el)
+                return;
+            const t = $(irmao).text().trim().replace(/\s+/g, ' ');
+            if (t)
+                irmaos.push(t);
+        });
+        return { proprio, filhos, imgAlt, paiTexto, irmaos, contextoAcima };
+    }
+    extractDirectMagnets($, contentHtml, sections) {
+        const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
+        const stats = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
+        const candidatos = [];
+        for (const el of allMagnetAnchors) {
+            const magnet = $(el).attr('href')?.trim();
+            if (!magnet)
+                continue;
+            const htmlStr = $(el).toString();
+            const pos = contentHtml.indexOf(htmlStr);
+            if (pos === -1) {
+                stats.NONE++;
+                continue;
+            }
+            const section = this.secaoDaPosicao(pos, sections);
+            const secao = section?.tipo ?? 'NONE';
+            stats[secao]++;
+            candidatos.push({ el, magnet, pos, htmlLen: htmlStr.length, secao, section });
+        }
+        const contextoPorEl = new Map();
+        const virtualSection = { tipo: 'DUAL', start: 0, end: contentHtml.length, season: null, textoHeading: '' };
+        const porSecaoDual = new Map();
+        for (const c of candidatos) {
+            if (c.secao !== 'DUAL')
+                continue;
+            const key = c.section ?? virtualSection;
+            if (!porSecaoDual.has(key))
+                porSecaoDual.set(key, []);
+            porSecaoDual.get(key).push(c);
+        }
+        for (const [section, mags] of porSecaoDual) {
+            mags.sort((a, b) => a.pos - b.pos);
+            let prevFim = section.start;
+            for (const mag of mags) {
+                if (mag.pos > prevFim) {
+                    const trecho = contentHtml.substring(prevFim, mag.pos);
+                    contextoPorEl.set(mag.el, this.extrairTextoDeHtml(trecho));
+                }
+                else {
+                    contextoPorEl.set(mag.el, '');
+                }
+                prevFim = mag.pos + mag.htmlLen;
+            }
+        }
+        const resultados = [];
+        for (const c of candidatos) {
+            if (c.secao !== 'DUAL')
+                continue;
+            const contextoAcima = contextoPorEl.get(c.el) || '';
+            resultados.push({
+                magnet: c.magnet,
+                tree: this.extrairTreeDoMagnet($, c.el, contextoAcima),
+                secao: c.secao,
+                section: c.section,
+            });
+        }
+        if (allMagnetAnchors.length > 0) {
+            exports.logger.debug(`atribuição | brutos=${allMagnetAnchors.length} | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`);
+        }
+        return resultados;
+    }
     async scrapePostApi(postId, postTitle, provider, type, imdbId, mediaType) {
         const postUrl = `https://comando1.com/wp-json/wp/v2/posts/${postId}?_fields=id,title,link,content`;
         const response = await axios_1.default.get(postUrl, exports.jsonAxiosConfig);
         const post = response.data;
         const titleRenderedBruto = post.title?.rendered || postTitle;
         const titleRendered = decodeHtmlEntities(titleRenderedBruto);
-        const contentHtml = post.content?.rendered || '';
-        if (!contentHtml) {
-            logger.warn(`post sem conteúdo`, { postId });
+        const contentHtmlOriginal = post.content?.rendered || '';
+        if (!contentHtmlOriginal) {
+            exports.logger.warn(`post sem conteúdo`, { postId });
             return [];
         }
         let imdbConfirmed = false;
         if (imdbId) {
-            const imdbIdDoPost = contentHtml.match(/imdb\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(tt\d+)/i)?.[1] || null;
+            const imdbIdDoPost = contentHtmlOriginal.match(/imdb\.com\/(?:[a-z]{2}(?:-[a-z]{2})?\/)?title\/(tt\d+)/i)?.[1] || null;
             if (imdbIdDoPost) {
                 const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(titleRendered, mediaType);
                 if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
@@ -449,13 +635,18 @@ class WordPressScraper {
                 }
             }
         }
-        const $ = cheerio.load(contentHtml);
+        const $ = cheerio.load(contentHtmlOriginal);
+        let counter = 0;
+        $('*').each((_, el) => {
+            $(el).attr(LYRA_MARK, String(counter++));
+        });
         const html = $.html();
+        exports.logger.debug(`marcados=${counter} contentLen=${html.length}`);
         const infoBlock = this.extractInfoBlock($, html);
         const globalOriginalTitle = infoBlock.translatedTitle || infoBlock.originalTitle || undefined;
         const year = infoBlock.year;
         const years = infoBlock.years || (infoBlock.year ? [infoBlock.year] : undefined);
-        logger.debug(`info`, {
+        exports.logger.debug(`info`, {
             provider,
             postId,
             isCollection: (0, TechnicalWords_js_1.isCollectionTitle)(titleRendered, mediaType),
@@ -465,74 +656,59 @@ class WordPressScraper {
             size: infoBlock.size || '-'
         });
         const secoes = this.findSections($, html);
-        logger.debug(`seções`, {
-            provider,
-            postId,
-            mapa: secoes.map(s => `${s.tipo}[${s.start}-${s.end}]`).join(' ') || '(nenhuma)'
-        });
+        exports.logger.debug(`seções do post ${postId}:`);
+        for (const s of secoes) {
+            const tag = s.season != null ? `S${s.season}` : 'range';
+            exports.logger.debug(`   ${s.tipo.padEnd(9)} ${tag.padEnd(6)} [${s.start}..${s.end}] "${s.textoHeading.substring(0, 70)}"`);
+        }
+        if (secoes.length === 0)
+            exports.logger.debug(`   (nenhuma)`);
         const temDual = secoes.some(s => s.tipo === 'DUAL');
         const temLegendado = secoes.some(s => s.tipo === 'LEGENDADO');
         if (!temDual && temLegendado) {
-            logger.debug(`post apenas legendado descartado`, { postId });
+            exports.logger.debug(`post apenas legendado descartado`, { postId });
             return [];
         }
         const secoesValidas = secoes.filter(s => s.tipo === 'DUAL');
         if (secoesValidas.length === 0) {
-            const todos = $('a[href^="magnet:"]').toArray();
-            logger.debug(`sem seções, processando todos`, { postId, magnets: todos.length });
-            const results = await this.processarMagnets(todos, $, html, titleRendered, provider, type, globalOriginalTitle, year, years, mediaType);
+            const allMagnets = this.extractDirectMagnets($, html, []);
+            exports.logger.debug(`sem seções DUAL, processando todos`, { postId, magnets: allMagnets.length });
+            const sampleSize = Math.min(3, allMagnets.length);
+            for (let i = 0; i < sampleSize; i++) {
+                const t = allMagnets[i].tree;
+                exports.logger.debug(`tree #${i + 1} | proprio="${t.proprio.substring(0, 30)}" | img="${t.imgAlt || '-'}" | ` +
+                    `contextoAcima="${t.contextoAcima.substring(0, 45)}"`);
+            }
+            const results = await this.processarMagnets(allMagnets, $, html, titleRendered, provider, type, globalOriginalTitle, year, years, mediaType);
             if (imdbConfirmed)
                 for (const r of results)
                     r.imdbConfirmed = true;
             return results;
         }
-        const magnetElements = $('a[href^="magnet:"]').toArray();
-        const magnetsPorSecao = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
-        const magnetsValidos = [];
-        for (const el of magnetElements) {
-            const pos = html.indexOf($(el).toString());
-            if (pos === -1) {
-                magnetsPorSecao.NONE++;
-                continue;
-            }
-            const secao = this.secaoDaPosicao(pos, secoes);
-            if (!secao) {
-                magnetsPorSecao.NONE++;
-                continue;
-            }
-            if (secao.tipo === 'LEGENDADO') {
-                magnetsPorSecao.LEGENDADO++;
-                continue;
-            }
-            magnetsPorSecao.DUAL++;
-            magnetsValidos.push(el);
+        const magnetsDual = this.extractDirectMagnets($, html, secoes);
+        const sampleSize = Math.min(3, magnetsDual.length);
+        for (let i = 0; i < sampleSize; i++) {
+            const t = magnetsDual[i].tree;
+            exports.logger.debug(`tree #${i + 1} | proprio="${t.proprio.substring(0, 30)}" | img="${t.imgAlt || '-'}" | ` +
+                `contextoAcima="${t.contextoAcima.substring(0, 45)}"`);
         }
-        logger.debug(`magnets por seção`, {
-            postId,
-            DUAL: magnetsPorSecao.DUAL,
-            LEGENDADO: magnetsPorSecao.LEGENDADO,
-            NONE: magnetsPorSecao.NONE
-        });
-        const results = await this.processarMagnets(magnetsValidos, $, html, titleRendered, provider, type, globalOriginalTitle, year, years, mediaType);
+        const results = await this.processarMagnets(magnetsDual, $, html, titleRendered, provider, type, globalOriginalTitle, year, years, mediaType);
         if (imdbConfirmed)
             for (const r of results)
                 r.imdbConfirmed = true;
         return results;
     }
-    async processarMagnets(elements, $, html, postTitle, provider, type, globalOriginalTitle, year, years, mediaType) {
+    async processarMagnets(magnets, $, html, postTitle, provider, type, globalOriginalTitle, year, years, mediaType) {
         const results = [];
         const batchSize = 5;
-        for (let i = 0; i < elements.length; i += batchSize) {
-            const batch = elements.slice(i, i + batchSize);
-            const batchPromises = batch.map(async (el) => {
-                const magnet = $(el).attr('href');
-                if (!magnet)
-                    return null;
-                const parentText = $(el).parent().text().trim();
-                const linkText = $(el).text().trim();
-                const fullContextText = this.getFullContextText($(el));
-                const ctxLocal = this.extrairContextoLocal($, el);
-                return this.processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years, mediaType);
+        for (let i = 0; i < magnets.length; i += batchSize) {
+            const batch = magnets.slice(i, i + batchSize);
+            const batchPromises = batch.map(async (m) => {
+                const el = $(`[${LYRA_MARK}]`).filter((_, e) => ($(e).attr('href') || '') === m.magnet).get(0);
+                const parentText = el ? $(el).parent().text().trim() : '';
+                const linkText = el ? $(el).text().trim() : '';
+                const ctxLocal = el ? this.extrairContextoLocal($, el) : { altDaImg: null, textoIrmaoAnterior: null, tituloIrmaoAnterior: null };
+                return this.processMagnetItem(m, parentText, linkText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years, mediaType);
             });
             const batchResults = await Promise.all(batchPromises);
             for (const r of batchResults) {
@@ -542,19 +718,21 @@ class WordPressScraper {
         }
         return results;
     }
-    async processMagnetItem(magnet, parentText, linkText, fullContextText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years, mediaType) {
-        const dados = await this.analisarMagnetComCache(magnet, provider);
+    async processMagnetItem(m, parentText, linkText, ctxLocal, postTitle, html, provider, type, globalOriginalTitle, year, years, mediaType) {
+        const dados = await this.analisarMagnetComCache(m.magnet, provider);
         const canonicalName = dados?.nome ?? null;
-        const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidadeEspecifica(canonicalName, ctxLocal, linkText, fullContextText, parentText, postTitle, html);
+        const tree = m.tree;
+        const secao = m.section;
+        const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidade(tree, canonicalName, linkText, parentText, postTitle, html);
         if (!this.qualityDetector.isValidQuality(quality)) {
-            logger.warn(`qualidade inválida`, { provider, quality, fonte: fonteQualidade });
+            exports.logger.warn(`qualidade inválida`, { provider, quality, fonte: fonteQualidade });
             return null;
         }
         const sizeParent = this.extractSize(parentText);
         const sizePost = this.extractSize(postTitle);
         const size = sizeParent || sizePost;
         const language = this.extractLanguage(postTitle) || this.extractLanguage(parentText) || 'Desconhecido';
-        const episode = this.extractEpisodeFromText(parentText);
+        const episode = this.extractEpisodeFromText(tree.proprio) ?? this.extractEpisodeFromText(parentText);
         const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
         const isPostCollection = (0, TechnicalWords_js_1.isCollectionTitle)(postTitle, mediaType);
         let originalTitleFinal;
@@ -562,8 +740,19 @@ class WordPressScraper {
         let fonteOriginal = 'post';
         if (isPostCollection) {
             const ctxOriginal = this.extractOriginalTitleFromContext(parentText);
-            if (ctxLocal.tituloIrmaoAnterior) {
-                originalTitleFinal = ctxLocal.tituloIrmaoAnterior;
+            const tituloLocal = ctxLocal.tituloIrmaoAnterior;
+            const rangeLocal = tituloLocal ? (0, TechnicalWords_js_1.extrairRangeEpisodios)(tituloLocal) : null;
+            const localTemTemporada = !!(rangeLocal && rangeLocal.seasonStart > 0);
+            if (tituloLocal && localTemTemporada) {
+                originalTitleFinal = tituloLocal;
+                fonteOriginal = 'html';
+            }
+            else if (secao?.textoHeading) {
+                originalTitleFinal = secao.textoHeading;
+                fonteOriginal = 'heading';
+            }
+            else if (tituloLocal) {
+                originalTitleFinal = tituloLocal;
                 fonteOriginal = 'html';
             }
             else if (canonicalName?.trim()) {
@@ -611,16 +800,24 @@ class WordPressScraper {
         const anosResolvidos = (anosDoItem && anosDoItem.length > 0) ? anosDoItem :
             (anosDoDnFallback && anosDoDnFallback.length > 0) ? anosDoDnFallback :
                 undefined;
-        const yearFinal = anosResolvidos ? anosResolvidos[0] : year;
-        const yearsFinal = anosResolvidos ?? (yearFinal !== undefined ? [yearFinal] : years);
-        const fonteAno = (anosDoItem && anosDoItem.length > 0) ? fonteOriginal :
-            (anosDoDnFallback && anosDoDnFallback.length > 0) ? 'dn' :
-                year !== undefined ? 'post' : 'nenhum';
+        const rangeDoItem = originalTitleFinal ? (0, TechnicalWords_js_1.extrairRangeEpisodios)(originalTitleFinal) : null;
+        const itemTemTemporadaExplicita = !!(rangeDoItem && rangeDoItem.seasonStart > 0);
+        const anoDoPostEhRuido = isPostCollection && itemTemTemporadaExplicita && !anosResolvidos;
+        const yearFinal = anosResolvidos
+            ? anosResolvidos[0]
+            : (anoDoPostEhRuido ? undefined : year);
+        const yearsFinal = anosResolvidos
+            ?? (anoDoPostEhRuido ? undefined : (yearFinal !== undefined ? [yearFinal] : years));
         const canonicalFinal = canonicalName || this.sintetizarCanonicalName(originalTitleFinal || postTitle, yearsFinal, quality);
+        const rangeFinal = originalTitleFinal ? (0, TechnicalWords_js_1.extrairRangeEpisodios)(originalTitleFinal) : null;
+        const rangeStr = rangeFinal
+            ? `S${rangeFinal.seasonStart}${rangeFinal.seasonEnd !== rangeFinal.seasonStart ? `-S${rangeFinal.seasonEnd}` : ''}${rangeFinal.episodeStart > 0 ? `E${rangeFinal.episodeStart}` : ''}`
+            : 'null';
+        exports.logger.debug(`magnet | qual=${quality}(${fonteQualidade}) | ep=${episode ?? '-'} | fonte=${fonteOriginal} | range=${rangeStr} | ctx="${tree.contextoAcima.substring(0, 40)}"`);
         return {
             title: this.cleanTitle(displayTitle),
             htmlTitle: cleanedHtmlTitle || undefined,
-            magnet,
+            magnet: m.magnet,
             seeders: 0,
             leechers: 0,
             size,
@@ -741,7 +938,7 @@ class WordPressScraper {
                     await new Promise(resolve => setTimeout(resolve, 500));
                     continue;
                 }
-                logger.warn(`protetor falhou`, { url: protectorUrl.substring(0, 50), error: err.message });
+                exports.logger.warn(`protetor falhou`, { url: protectorUrl.substring(0, 50), error: err.message });
             }
         }
         return null;
@@ -815,7 +1012,7 @@ class WordPressScraper {
             }
         }
         catch (err) {
-            logger.warn(`magnet análise falhou`, { provider, error: err.message });
+            exports.logger.warn(`magnet análise falhou`, { provider, error: err.message });
         }
         return null;
     }

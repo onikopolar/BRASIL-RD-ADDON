@@ -40,6 +40,10 @@ export interface ImdbTitles {
   mediaType?: 'movie' | 'tv';
   portuguesePriority: boolean;
   episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null;
+  /** episode_count por season_number (sem S00). Ex: {1:39, 2:35, ..., 9:38}.
+   *  Usado pelo EpisodeMatcher pra calcular numeração absoluta em torrents tipo
+   *  "DBZ_Episodio 200" (sem season no nome). */
+  seasonEpisodeCounts?: Record<number, number> | null;
 }
 
 interface GlobalCacheEntry {
@@ -138,7 +142,7 @@ export class ImdbScraperService {
     try {
       const row: any = await ImdbTitleCache.findOne({
         where: { imdbId, season },
-        attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'updatedAt'],
+        attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'seasonEpisodeCounts', 'updatedAt'],
         raw: true,
       });
 
@@ -205,6 +209,7 @@ export class ImdbScraperService {
       mediaType: undefined,
       portuguesePriority: hasPortuguese,
       episodeTitles: row.episodeTitles || null,
+      seasonEpisodeCounts: row.seasonEpisodeCounts || null,
     };
   }
 
@@ -257,6 +262,7 @@ export class ImdbScraperService {
       }
 
       const episodeTitlesLimpos = this.corrigirMojibake(data.episodeTitles ?? null);
+      const seasonCountsLimpos = data.seasonEpisodeCounts ?? null;
 
       await ImdbTitleCache.upsert({
         imdbId,
@@ -265,6 +271,7 @@ export class ImdbScraperService {
         titlesEn,
         year: data.year ?? null,
         episodeTitles: episodeTitlesLimpos,
+        seasonEpisodeCounts: seasonCountsLimpos,
         updatedAt: new Date(),
       } as any);
     } catch (err) {
@@ -359,6 +366,7 @@ export class ImdbScraperService {
         episodeTitles: mediaType === 'tv' && season !== undefined && season > 0
           ? await this.fetchEpisodeTitles(tmdbIdNum, season).catch(() => [])
           : [],
+        seasonEpisodeCounts: mediaType === 'tv' ? (resolved.seasonEpisodeCounts ?? null) : null,
       };
 
       ImdbScraperService.setCache(cacheKey, {
@@ -402,7 +410,12 @@ export class ImdbScraperService {
     mediaType: 'movie' | 'tv',
     imdbId: string,
     season?: number
-  ): Promise<{ originalTitle: string; portugueseTitle: string | null; year?: number }> {
+  ): Promise<{
+    originalTitle: string;
+    portugueseTitle: string | null;
+    year?: number;
+    seasonEpisodeCounts?: Record<number, number> | null;
+  }> {
     if (mediaType === 'movie') {
       const details = await this.fetchDetailsFromTMDB(tmdbId, 'movie');
       if (details) {
@@ -430,10 +443,20 @@ export class ImdbScraperService {
 
       const seriesDetails = await this.fetchDetailsFromTMDB(tmdbId, 'tv');
       if (seriesDetails) {
+        // Extrai episode_count por season (ignora S00/specials) — dado que o TMDB já
+        // devolve no /tv/{id} e que hoje estava sendo descartado.
+        const seasonEpisodeCounts: Record<number, number> = {};
+        for (const s of seriesDetails.seasons || []) {
+          if (typeof s?.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number') {
+            seasonEpisodeCounts[s.season_number] = s.episode_count;
+          }
+        }
+
         return {
           originalTitle: seriesDetails.original_name || seriesDetails.name || '',
           portugueseTitle: seriesDetails.name || null,
           year: year ?? (seriesDetails.first_air_date ? parseInt(seriesDetails.first_air_date.substring(0, 4)) : undefined),
+          seasonEpisodeCounts: Object.keys(seasonEpisodeCounts).length > 0 ? seasonEpisodeCounts : null,
         };
       }
     }
@@ -464,6 +487,8 @@ export class ImdbScraperService {
   }
 
   // Localiza o tmdbId a partir do imdbId. null significa fallback HTML.
+  // Tentativa 1: /find da API do TMDB. Se voltar VAZIO (bug conhecido de mapeamento
+  // — ex: tt0214341/DBZ) ou falhar, cai no fallback Cinemeta → search HTML.
   private async findInTMDB(imdbId: string): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/find/${imdbId}`, {
@@ -483,9 +508,64 @@ export class ImdbScraperService {
         return { tmdbId: response.data.tv_results[0].id, mediaType: 'tv' };
       }
 
-      return null;
+      // /find respondeu 200 mas VAZIO — bug de mapeamento do TMDB em alguns IDs antigos.
+      logger.debug('TMDB /find vazio, tentando fallback Cinemeta', { imdbId });
+      return await this.findViaCinemetaFallback(imdbId);
     } catch (error) {
-      logger.debug('TMDB find falhou, fallback HTML será usado', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
+      logger.debug('TMDB find falhou, tentando fallback Cinemeta', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
+      return await this.findViaCinemetaFallback(imdbId);
+    }
+  }
+
+  // Fallback pra quando /find falha ou volta vazio: Cinemeta → título → busca HTML no TMDB → tmdbId.
+  // Funciona pra casos como tt0214341 (Dragon Ball Z), onde o mapeamento IMDb↔TMDB está quebrado.
+  private async findViaCinemetaFallback(imdbId: string): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
+    try {
+      let title: string | null = null;
+      let mediaType: 'movie' | 'tv' = 'tv';
+
+      // PASSO 1: Cinemeta devolve o título (só tem IDs IMDb, nunca TMDB).
+      for (const tipo of ['series', 'movie'] as const) {
+        try {
+          const r = await axios.get(`https://v3-cinemeta.strem.io/meta/${tipo}/${imdbId}.json`, { timeout: 10000 });
+          if (r.data?.meta?.name) {
+            title = r.data.meta.name;
+            mediaType = tipo === 'series' ? 'tv' : 'movie';
+            break;
+          }
+        } catch { /* tenta o próximo tipo */ }
+      }
+
+      if (!title) {
+        logger.debug('Cinemeta fallback: sem título', { imdbId });
+        return null;
+      }
+
+      // PASSO 2: busca o título no site do TMDB e extrai o tmdbId do href.
+      const searchRes = await axios.get(
+        `https://www.themoviedb.org/search?query=${encodeURIComponent(title)}`,
+        {
+          timeout: 15000,
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
+          },
+        }
+      );
+
+      const wanted = mediaType === 'tv' ? 'tv' : 'movie';
+      const re = new RegExp(`\\/${wanted}\\/(\\d+)`, 'i');
+      const m = searchRes.data.match(re);
+      if (!m) {
+        logger.debug('Cinemeta fallback: search sem match', { imdbId, title, wanted });
+        return null;
+      }
+
+      const tmdbId = parseInt(m[1], 10);
+      logger.debug('Cinemeta fallback OK', { imdbId, title, tmdbId, mediaType });
+      return { tmdbId, mediaType };
+    } catch (error) {
+      logger.debug('Cinemeta fallback falhou', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
       return null;
     }
   }
@@ -644,8 +724,8 @@ export class ImdbScraperService {
     return {
       cacheSize: ImdbScraperService.globalCache.size,
       cacheTTL: this.cacheTTL,
-      version: '2.5.0',
-      feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17)',
+      version: '2.5.1',
+      feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17) + fallback Cinemeta no /find vazio (R18)',
     };
   }
 }

@@ -119,6 +119,11 @@ ImdbTitleCache.init({
         type: sequelize_1.DataTypes.JSONB,
         allowNull: true
     },
+    seasonEpisodeCounts: {
+        type: sequelize_1.DataTypes.JSONB,
+        allowNull: true,
+        defaultValue: null
+    },
     updatedAt: {
         type: sequelize_1.DataTypes.DATE,
         allowNull: false,

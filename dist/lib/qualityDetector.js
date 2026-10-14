@@ -4,31 +4,22 @@ exports.QualityDetector = void 0;
 class QualityDetector {
     constructor() {
         this.explicitResolutionPatterns = [
-            { pattern: /\b(2160p|4k|uhd)\b/i, quality: '2160p', confidence: 100 },
-            { pattern: /\b(1080p|fhd|full hd)\b/i, quality: '1080p', confidence: 100 },
-            { pattern: /\b(720p|hd)\b/i, quality: '720p', confidence: 100 },
-            { pattern: /\b(480p|sd)\b/i, quality: 'SD', confidence: 100 }
-        ];
-        this.sourcePatterns = [
-            { pattern: /\.web-dl\./i, quality: '1080p', confidence: 95 },
-            { pattern: /\.bluray\./i, quality: '1080p', confidence: 90 },
-            { pattern: /\.blu-ray\./i, quality: '1080p', confidence: 90 },
-            { pattern: /\.remux\./i, quality: '2160p', confidence: 95 },
-            { pattern: /\.webrip\./i, quality: '1080p', confidence: 85 },
-            { pattern: /\.hdtv\./i, quality: '720p', confidence: 80 },
-            { pattern: /\.brrip\./i, quality: '1080p', confidence: 85 },
-            { pattern: /\.bdrip\./i, quality: '1080p', confidence: 85 }
+            { pattern: /\b(2160p|4k|uhd)\b/i, quality: '2160p' },
+            { pattern: /\b(1080p|fhd|full hd)\b/i, quality: '1080p' },
+            { pattern: /\b(720p)\b/i, quality: '720p' },
+            { pattern: /\b(480p|sd)\b/i, quality: 'SD' }
         ];
         this.allowedQualities = new Set(['2160p', '1080p', '720p', 'HD']);
         this.qualityOrder = ['2160p', '1080p', '720p', 'HD'];
     }
     static getInstance() {
-        if (!QualityDetector.instance) {
+        if (!QualityDetector.instance)
             QualityDetector.instance = new QualityDetector();
-        }
         return QualityDetector.instance;
     }
     extractAllQualities(title) {
+        if (!title)
+            return ['HD'];
         const cleanTitle = title.toLowerCase();
         const foundQualities = new Set();
         for (const { pattern, quality } of this.explicitResolutionPatterns) {
@@ -36,18 +27,8 @@ class QualityDetector {
                 foundQualities.add(quality);
             }
         }
-        if (foundQualities.size > 0) {
-            return Array.from(foundQualities)
-                .filter(q => this.allowedQualities.has(q))
-                .sort((a, b) => this.qualityOrder.indexOf(a) - this.qualityOrder.indexOf(b));
-        }
-        for (const { pattern, quality } of this.sourcePatterns) {
-            if (pattern.test(cleanTitle) && this.allowedQualities.has(quality)) {
-                foundQualities.add(quality);
-            }
-        }
         if (foundQualities.size === 0) {
-            foundQualities.add(this.inferQualityFromContext(cleanTitle));
+            return ['HD'];
         }
         return Array.from(foundQualities)
             .filter(q => this.allowedQualities.has(q))
@@ -55,7 +36,7 @@ class QualityDetector {
     }
     extractBestQuality(title) {
         const allQualities = this.extractAllQualities(title);
-        return allQualities.length > 0 ? allQualities[0] : this.inferQualityFromContext(title.toLowerCase());
+        return allQualities.length > 0 ? allQualities[0] : 'HD';
     }
     extractWorstQuality(title) {
         const allQualities = this.extractAllQualities(title);
@@ -66,6 +47,8 @@ class QualityDetector {
         return qualities.length > 1;
     }
     expandQualityRange(title) {
+        if (!title)
+            return ['HD'];
         const cleanTitle = title.toLowerCase();
         const qualities = new Set();
         const rangePatterns = [
@@ -127,18 +110,6 @@ class QualityDetector {
     getQualityOrder(quality) {
         const index = this.qualityOrder.indexOf(quality);
         return index !== -1 ? index : this.qualityOrder.length;
-    }
-    inferQualityFromContext(titleLower) {
-        if (titleLower.includes('remux') || titleLower.includes('web-dl')) {
-            return '1080p';
-        }
-        if (titleLower.includes('bluray') || titleLower.includes('blu-ray')) {
-            return '1080p';
-        }
-        if (titleLower.includes('hdtv')) {
-            return '720p';
-        }
-        return 'HD';
     }
 }
 exports.QualityDetector = QualityDetector;

@@ -284,6 +284,7 @@ class CatalogProvider {
                 this.logger.info('🎯 ACEITO (pack de coleção sem título)', {
                     imdbId,
                     torrent: tituloExibicao.substring(0, 70),
+                    quality: t.quality,
                     provider: t.provider,
                     infoHash: t.infoHash?.substring(0, 12) || 'N/A',
                 });
@@ -294,10 +295,11 @@ class CatalogProvider {
             }
             const tituloParaValidar = this.escolherTituloParaValidar(t.originalTitle, t.title, t.htmlTitle, t.canonicalName, isCollection, imdbTitles);
             const tituloParaIdioma = t.title || t.originalTitle || '';
+            const isCollectionTitulo = (0, TechnicalWords_js_1.isCollectionTitle)(tituloParaValidar || t.title, mediaType);
             this.logger.debug(`TITLEFILTER_IN | "${(tituloParaValidar || t.title).substring(0, 60)}" | ` +
-                `isCollection=${isCollection} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
+                `isCollection=${isCollectionTitulo} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
                 `imdbConfirmed=${t.imdbConfirmed ?? false} provider=${t.provider}`);
-            const result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year, imdbTitles, t.htmlTitle, t.episode, t.imdbConfirmed, t.years);
+            const result = await this.titleFilter.titulosCombinam(tituloParaValidar, imdbId, season, episode, tituloParaIdioma, t.year, imdbTitles, t.htmlTitle, t.episode, t.imdbConfirmed, t.years, mediaType);
             return { torrent: t, result };
         }));
         const valid = [];
@@ -311,6 +313,7 @@ class CatalogProvider {
                             imdbId,
                             alvo: `S${season ?? '?'}E${episode ?? '?'}`,
                             torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+                            quality: torrent.quality,
                             provider: torrent.provider,
                             infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
                         });

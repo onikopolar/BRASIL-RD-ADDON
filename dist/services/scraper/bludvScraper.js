@@ -94,6 +94,8 @@ const AXIOS_OPTS = {
 exports.AXIOS_OPTS = AXIOS_OPTS;
 const CAT_FILMES = 92;
 const CAT_SERIES = 10;
+const LYRA_MARK = 'data-lyra-h';
+const SECTION_KEYWORDS = /\b(dual|dublado|dublada|dublagem|legendado|legendada|nacional)\b/gi;
 function pad2(n) {
     return String(n).padStart(2, '0');
 }
@@ -188,14 +190,13 @@ class BludvScraper {
             urlsVistas.add(fullUrl);
             items.push({ title: text, url: fullUrl });
         });
-        const tokensRuido = (0, TechnicalWords_js_1.calcularTokensRuido)(items.map(i => i.title));
         const filtrados = items
-            .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido, mediaType))
+            .filter(item => this.postRelevante(item, targetSeason, frasesBusca, mediaType))
             .slice(0, 5);
         logger.debug(`[BLUDV] "${truncar(query, 40)}" | cat=${catId ?? 'all'} candidatos=${items.length} filtrados=${filtrados.length}`);
         return filtrados;
     }
-    postRelevante(item, targetSeason, frasesBusca, tokensRuido, mediaType) {
+    postRelevante(item, targetSeason, frasesBusca, mediaType) {
         const lowerTitle = item.title.toLowerCase();
         if (LEGENDADO_REGEX.test(lowerTitle) && !/dual|dublado|dublada/i.test(lowerTitle)) {
             logger.debug(`[BLUDV] ignorado legendado: "${truncar(item.title, 55)}"`);
@@ -208,30 +209,34 @@ class BludvScraper {
             if (!(0, TechnicalWords_js_1.temporadaAlvoNoRange)(range, targetSeason))
                 return false;
         }
-        const tituloLimpo = (0, TechnicalWords_js_1.limparPorRaridade)(item.title, tokensRuido);
-        const resultado = this.similarity.compararComTitulos([...frasesBusca.frases], tituloLimpo);
-        const ehSerie = mediaType === 'series' || mediaType === 'tv';
-        const isCollection = !ehSerie && (0, TechnicalWords_js_1.isCollectionTitle)(item.title, mediaType);
+        const resultado = this.similarity.preFiltroContem([...frasesBusca.frases], item.title);
+        const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(item.title, mediaType);
         if (!resultado.match && !isCollection) {
-            logger.debug(`[BLUDV] ignorado (${resultado.score.toFixed(2)} ${resultado.nivel}): "${truncar(item.title, 55)}"`);
+            logger.debug(`[BLUDV] ignorado`, { score: resultado.score.toFixed(2), titulo: item.title.substring(0, 60) });
             return false;
         }
         if (!resultado.match && isCollection) {
-            logger.debug(`[BLUDV] aceito coleção: "${truncar(item.title, 60)}" mediaType=${mediaType ?? '-'}`);
+            logger.debug(`[BLUDV] aceito coleção`, { titulo: item.title.substring(0, 60), mediaType: mediaType ?? '-' });
         }
         else {
-            logger.debug(`[BLUDV] aceito (${resultado.nivel} ${resultado.score.toFixed(2)}): "${truncar(item.title, 60)}"`);
+            logger.debug(`[BLUDV] aceito`, { score: resultado.score.toFixed(2), frase: resultado.fraseVencedora || '-', titulo: item.title.substring(0, 60) });
         }
         return true;
     }
     async scrapePost(postUrl, type, targetSeason, imdbId, mediaType) {
         const res = await axios_1.default.get(postUrl, AXIOS_OPTS);
         const $ = cheerio.load(res.data);
-        const contentHtml = $('.content').html() || $('body').html() || '';
-        if (!contentHtml) {
+        const $content = $('.content');
+        if (!$content.length) {
             logger.debug(`[BLUDV] post sem .content: ${postUrl}`);
             return [];
         }
+        let counter = 0;
+        $content.find('*').each((_, el) => {
+            $(el).attr(LYRA_MARK, String(counter++));
+        });
+        const contentHtml = $content.html() || '';
+        logger.debug(`[BLUDV] marcados=${counter} contentLen=${contentHtml.length}`);
         const postTitle = $('h1').first().text().trim() ||
             $('title').first().text().trim().replace(/\s*[-–]\s*BLUDV FILMES.*$/, '');
         let imdbConfirmed = false;
@@ -251,15 +256,16 @@ class BludvScraper {
                 return [];
         }
         const metadata = this.extractPostMetadata($);
-        const sections = this.findSections($, contentHtml, postTitle);
-        logger.debug(`[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`);
+        const sections = this.findSections($, contentHtml);
+        logger.debug(`[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ') || '(nenhuma)'}`);
         const temDual = sections.some(s => s.type === 'DUAL');
         const tituloDeclaraDual = /\bdual\b|\bdublado\b|\bdublada\b|\bnacional\b/i.test(postTitle);
         const metadataDeclaraDual = !!metadata.language
             && /dual|dublado|dublagem|nacional|portugu[eê]s\s*\|\s*ingl[eê]s/i.test(metadata.language);
         const usarFallbackDual = !temDual && (tituloDeclaraDual || metadataDeclaraDual);
         if (!temDual && !usarFallbackDual) {
-            this.logarDiagnosticoSemDual($, contentHtml, postTitle, metadata);
+            logger.debug(`[BLUDV] SEM_DUAL | magnetAnchors=${$('a[href^="magnet:"]').length} ` +
+                `lang="${metadata.language || '-'}" original="${truncar(metadata.originalTitle || '-', 40)}"`);
             return [];
         }
         if (usarFallbackDual) {
@@ -269,46 +275,49 @@ class BludvScraper {
         const sectionsEfetivas = temDual
             ? sections
             : [{ type: 'DUAL', start: 0, end: contentHtml.length }];
-        const directMagnets = this.extractDirectMagnets($, contentHtml, sectionsEfetivas, postTitle);
-        const protectorLinks = this.extractProtectorLinks($, contentHtml, sectionsEfetivas, postTitle);
-        const dirDual = directMagnets.filter(m => m.secao === 'DUAL').length;
-        const proDual = protectorLinks.filter(l => l.secao === 'DUAL').length;
+        const directMagnets = this.extractDirectMagnets($, contentHtml, sectionsEfetivas);
+        const protectorLinks = this.extractProtectorLinks($, contentHtml, sectionsEfetivas);
+        const dirDual = directMagnets.length;
+        const proDual = protectorLinks.length;
         const protectorMagnets = await this.resolverMagnetsDoProtetor(protectorLinks);
         const allMagnets = dedupByMagnet([...directMagnets, ...protectorMagnets]);
         if (allMagnets.length === 0) {
             logger.debug(`[BLUDV] magnet DUAL diretos=${dirDual} protetores=${proDual} → 0 válidos`);
             return [];
         }
-        const analyzedMagnets = await Promise.all(allMagnets.map(async ({ magnet, link, secao }) => {
+        const sampleSize = Math.min(3, allMagnets.length);
+        for (let i = 0; i < sampleSize; i++) {
+            const t = allMagnets[i].tree;
+            logger.debug(`[BLUDV] tree #${i + 1} | proprio="${truncar(t.proprio, 30)}" | img="${t.imgAlt || '-'}" | ` +
+                `contextoAcima="${truncar(t.contextoAcima, 45)}"`);
+        }
+        const analyzedMagnets = await Promise.all(allMagnets.map(async ({ magnet, tree, secao }) => {
             let canonicalName;
             try {
                 const dados = await (0, magnetHelper_js_1.analisarMagnet)(magnet);
                 canonicalName = dados?.nome || undefined;
             }
             catch { }
-            return { magnet, link, canonicalName, secao };
+            return { magnet, tree, canonicalName, secao };
         }));
         const results = [];
-        const magnetsVistos = new Set();
         const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
-        for (const { magnet, link, canonicalName, secao } of analyzedMagnets) {
-            if (magnetsVistos.has(magnet))
-                continue;
-            magnetsVistos.add(magnet);
-            const { qualidade: quality } = this.resolverQualidadeComFonte(canonicalName, link, postTitle, metadata.quality);
-            const { episode, episodeRangeText } = this.resolverEpisodio(canonicalName, link);
+        for (const { magnet, tree, canonicalName, secao } of analyzedMagnets) {
+            const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidade(tree, canonicalName, metadata.quality, postTitle);
+            const { episode, episodeRangeText } = this.resolverEpisodio(tree, canonicalName);
             const language = this.resolverIdioma(secao, metadata.language);
             const dnColecao = canonicalName && (0, TechnicalWords_js_1.isCollectionTitle)(canonicalName, mediaType) ? canonicalName : null;
             const originalTitleFinal = dnColecao || metadata.originalTitle || cleanTitleFromPost;
-            const displayTitle = originalTitleFinal || canonicalName || postTitle;
+            const displayTitle = originalTitleFinal || postTitle;
             const canonicalFinal = canonicalName || this.sintetizarCanonicalName(originalTitleFinal || postTitle, metadata.years, quality);
             const size = metadata.size
-                || this.extrairTamanhoDoContexto(link.fullContextText)
-                || this.extrairTamanhoDoContexto(link.parentText)
+                || this.extrairTamanhoDoContexto(tree.contextoAcima)
                 || 'Desconhecido';
             const cleanedHtmlTitle = episodeRangeText
                 ? `${episodeRangeText}: ${quality}`
-                : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, quality);
+                : undefined;
+            logger.debug(`[BLUDV] magnet | qual=${quality}(${fonteQualidade}) | ep=${episode ?? '-'} | ` +
+                `ctx="${truncar(tree.contextoAcima, 40)}"`);
             results.push({
                 title: this.cleanTitle(displayTitle),
                 htmlTitle: cleanedHtmlTitle || undefined,
@@ -336,76 +345,106 @@ class BludvScraper {
         logger.debug(`[BLUDV] "${truncar(postTitle, 55)}" → DUAL diretos=${dirDual} protetores=${proDual} válidos=${results.length}`);
         return results;
     }
-    logarDiagnosticoSemDual($, contentHtml, postTitle, metadata) {
-        const strongs = $('.content strong, .content b').toArray();
-        const totalStrongs = strongs.length;
-        const totalMagnetAnchors = $('a[href^="magnet:"]').length;
-        const totalProtetores = $('a[href*="systemads1.com"]').length;
-        logger.debug(`[BLUDV] SEM_DUAL | "${truncar(postTitle, 60)}" | ` +
-            `strongs=${totalStrongs} magnetAnchors=${totalMagnetAnchors} protetores=${totalProtetores} | ` +
-            `lang="${metadata.language || '-'}" quality="${metadata.quality || '-'}" ` +
-            `original="${truncar(metadata.originalTitle || '-', 40)}"`);
-        const amostra = strongs.slice(0, 8).map((el) => {
-            const texto = $(el).text().trim();
-            if (!texto)
-                return '(vazio)';
-            const diag = this.diagnosticarSecao(texto);
-            return `"${truncar(texto, 30)}"→${diag.tipo}:${diag.motivo}`;
-        });
-        logger.debug(`[BLUDV] SEM_DUAL amostra strongs | ${amostra.join(' | ') || '(nenhum)'}`);
-    }
-    extrairTamanhoDoContexto(texto) {
-        if (!texto)
-            return undefined;
-        const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
-        return m ? m[0] : undefined;
-    }
-    sintetizarCanonicalName(base, years, quality) {
-        const anos = years && years.length > 0
-            ? (years.length === 1
-                ? `${years[0]}`
-                : `${years[0]}-${years[years.length - 1]}`)
-            : null;
-        return [base, anos, quality].filter(Boolean).join(' ').trim();
-    }
-    findSections($, contentHtml, postTitle) {
-        const strongEls = $('.content strong, .content b').toArray();
-        const headers = [];
+    findSections($, contentHtml) {
+        const encontrados = new Map();
+        const textNodes = />([^<]+)</g;
+        let m;
+        while ((m = textNodes.exec(contentHtml)) !== null) {
+            const texto = m[1];
+            const basePos = m.index + 1;
+            SECTION_KEYWORDS.lastIndex = 0;
+            let km;
+            while ((km = SECTION_KEYWORDS.exec(texto)) !== null) {
+                const posHtml = basePos + km.index;
+                const ultimaMarca = contentHtml.lastIndexOf(`${LYRA_MARK}="`, posHtml);
+                if (ultimaMarca === -1)
+                    continue;
+                const resto = contentHtml.substring(ultimaMarca + LYRA_MARK.length + 2);
+                const fimAspas = resto.indexOf('"');
+                if (fimAspas === -1)
+                    continue;
+                const elIdx = resto.substring(0, fimAspas);
+                if (!encontrados.has(elIdx)) {
+                    encontrados.set(elIdx, { posHtml, texto: texto.trim() });
+                }
+            }
+        }
+        logger.debug(`[BLUDV] findSections matches únicos=${encontrados.size}`);
+        const candidatos = [];
         const descartados = [];
-        for (const el of strongEls) {
-            const texto = $(el).text().trim();
-            if (!texto)
+        for (const [elIdx, info] of encontrados) {
+            const $el = $(`[${LYRA_MARK}="${elIdx}"]`);
+            if (!$el.length)
                 continue;
-            const diag = this.diagnosticarSecao(texto);
-            if (diag.tipo === 'NONE') {
-                const potencial = texto.length <= 60 && (diag.flags.dual || diag.flags.dublado || diag.flags.nacional || diag.flags.legendado || !diag.flags.ruido);
-                if (potencial)
-                    descartados.push({ texto, tipo: diag.tipo, motivo: diag.motivo });
+            const tag = ($el.prop('tagName') || '').toLowerCase();
+            const textoEl = $el.text().replace(/\s+/g, ' ').trim();
+            const textoCurto = truncar(textoEl, 45);
+            const r1MagnetDesc = $el.find('a[href^="magnet:"]').length;
+            const r1 = r1MagnetDesc > 0 ? 'REJEITA' : 'passa';
+            let r2 = 'passa';
+            let r2Detalhe = 'sem-ancestral-com-magnet';
+            let $pai = $el.parent();
+            for (let nivel = 0; nivel < 3 && $pai.length; nivel++) {
+                const qtd = $pai.children('a[href^="magnet:"]').length;
+                if (qtd > 0) {
+                    r2 = 'REJEITA';
+                    const tagPai = ($pai.prop('tagName') || '').toLowerCase();
+                    r2Detalhe = `n${nivel + 1}=${tagPai}(${qtd}magnet)`;
+                    break;
+                }
+                $pai = $pai.parent();
+            }
+            logger.debug(`   [check] <${tag}> "${textoCurto}" | r1=${r1}(desc=${r1MagnetDesc}) | r2=${r2}(${r2Detalhe})`);
+            if (tag === 'script' || tag === 'style') {
+                descartados.push({ texto: textoEl, motivo: `tag-${tag}` });
                 continue;
             }
-            const pos = contentHtml.indexOf($(el).toString());
-            if (pos === -1)
+            if (!textoEl)
                 continue;
-            headers.push({ pos, type: diag.tipo });
+            if (r1MagnetDesc > 0) {
+                descartados.push({ texto: textoEl, motivo: 'r1:magnet-descendente' });
+                continue;
+            }
+            if (r2 === 'REJEITA') {
+                descartados.push({ texto: textoEl, motivo: `r2:${r2Detalhe}` });
+                continue;
+            }
+            const diag = this.diagnosticarSecao(textoEl);
+            if (diag.tipo === 'NONE') {
+                descartados.push({ texto: textoEl, motivo: diag.motivo });
+                continue;
+            }
+            const pos = contentHtml.indexOf($el.toString());
+            if (pos === -1) {
+                descartados.push({ texto: textoEl, motivo: 'pos-nao-encontrada' });
+                continue;
+            }
+            candidatos.push({ tipo: diag.tipo, pos, texto: textoEl });
         }
-        headers.sort((a, b) => a.pos - b.pos);
-        if (headers.length === 0 && strongEls.length > 0) {
-            const amostra = descartados.slice(0, 8).map(d => `"${truncar(d.texto, 30)}"→${d.tipo}:${d.motivo}`);
-            logger.debug(`[BLUDV] sem headers | strongs=${strongEls.length} descartados=${descartados.length} | ` +
-                `amostra: ${amostra.join(' | ') || '(nenhum relevante)'}`);
+        logger.debug(`[BLUDV] findSections candidatos=${candidatos.length} descartados=${descartados.length}`);
+        for (const d of descartados.slice(0, 10)) {
+            logger.debug(`   [descarte] "${truncar(d.texto, 40)}" → ${d.motivo}`);
         }
-        const contentLength = contentHtml.length;
+        candidatos.sort((a, b) => a.pos - b.pos);
+        if (candidatos.length === 0) {
+            return [{ type: 'NONE', start: 0, end: contentHtml.length }];
+        }
         const sections = [];
-        if (headers.length === 0) {
-            return [{ type: 'NONE', start: 0, end: contentLength }];
+        if (candidatos[0].pos > 0) {
+            sections.push({ type: 'NONE', start: 0, end: candidatos[0].pos });
         }
-        if (headers[0].pos > 0) {
-            sections.push({ type: 'NONE', start: 0, end: headers[0].pos });
+        for (let i = 0; i < candidatos.length; i++) {
+            const c = candidatos[i];
+            const prox = candidatos[i + 1];
+            sections.push({
+                type: c.tipo,
+                start: c.pos,
+                end: prox ? prox.pos : contentHtml.length,
+            });
         }
-        for (let i = 0; i < headers.length; i++) {
-            const start = headers[i].pos;
-            const end = i + 1 < headers.length ? headers[i + 1].pos : contentLength;
-            sections.push({ type: headers[i].type, start, end });
+        logger.debug(`[BLUDV] findSections secoes=${sections.length}`);
+        for (const s of sections) {
+            logger.debug(`   [secao] ${s.type} [${s.start}..${s.end}] (len=${s.end - s.start})`);
         }
         return sections;
     }
@@ -452,19 +491,55 @@ class BludvScraper {
         }
         return { tipo: 'NONE', motivo: 'sem-indicador', flags };
     }
-    extractDirectMagnets($, contentHtml, sections, postTitle) {
-        const resultados = [];
-        const stats = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
-        const centerSpanCache = new Map();
-        for (const centerEl of $('center').toArray()) {
-            centerSpanCache.set(centerEl, $(centerEl).find('span').first().text().trim());
-        }
+    extrairTextoDeHtml(html) {
+        return html
+            .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+            .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/&nbsp;/gi, ' ')
+            .replace(/&amp;/gi, '&')
+            .replace(/&lt;/gi, '<')
+            .replace(/&gt;/gi, '>')
+            .replace(/&quot;/gi, '"')
+            .replace(/&#0?39;|&apos;/gi, "'")
+            .replace(/\s+/g, ' ')
+            .trim();
+    }
+    extrairTreeDoMagnet($, el, contextoAcima = '') {
+        const $el = $(el);
+        const proprio = $el.text().trim().replace(/\s+/g, ' ');
+        const filhos = [];
+        $el.find('strong, b, span').each((_, child) => {
+            const t = $(child).text().trim().replace(/\s+/g, ' ');
+            if (t && t !== proprio)
+                filhos.push(t);
+        });
+        const $img = $el.find('img').first();
+        const imgAlt = ($img.attr('alt') || $img.attr('title') || '').trim() || null;
+        const $pai = $el.parent();
+        const $paiClone = $pai.clone();
+        $paiClone.find('a').remove();
+        const paiTexto = $paiClone.text().trim().replace(/\s+/g, ' ');
+        const irmaos = [];
+        $pai.children('a').each((_, irmao) => {
+            if (irmao === el)
+                return;
+            const t = $(irmao).text().trim().replace(/\s+/g, ' ');
+            if (t)
+                irmaos.push(t);
+        });
+        return { proprio, filhos, imgAlt, paiTexto, irmaos, contextoAcima };
+    }
+    extractDirectMagnets($, contentHtml, sections) {
         const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
+        const stats = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
+        const candidatos = [];
         for (const el of allMagnetAnchors) {
             const magnet = $(el).attr('href')?.trim();
             if (!magnet)
                 continue;
-            const pos = contentHtml.indexOf($(el).toString());
+            const htmlStr = $(el).toString();
+            const pos = contentHtml.indexOf(htmlStr);
             if (pos === -1) {
                 stats.NONE++;
                 continue;
@@ -472,20 +547,40 @@ class BludvScraper {
             const section = this.findSectionForPosition(pos, sections);
             const secao = section?.type ?? 'NONE';
             stats[secao]++;
-            if (secao !== 'DUAL')
+            candidatos.push({ el, magnet, pos, htmlLen: htmlStr.length, secao, section });
+        }
+        const contextoPorEl = new Map();
+        const porSecaoDual = new Map();
+        for (const c of candidatos) {
+            if (c.secao !== 'DUAL' || !c.section)
                 continue;
-            const $el = $(el);
-            const closestCenter = $el.closest('center').get(0);
-            const spanText = closestCenter ? (centerSpanCache.get(closestCenter) ?? '') : '';
-            const ctx = this.buildLinkContext($, el);
+            if (!porSecaoDual.has(c.section))
+                porSecaoDual.set(c.section, []);
+            porSecaoDual.get(c.section).push(c);
+        }
+        for (const [section, mags] of porSecaoDual) {
+            mags.sort((a, b) => a.pos - b.pos);
+            let prevFim = section.start;
+            for (const mag of mags) {
+                if (mag.pos > prevFim) {
+                    const trecho = contentHtml.substring(prevFim, mag.pos);
+                    contextoPorEl.set(mag.el, this.extrairTextoDeHtml(trecho));
+                }
+                else {
+                    contextoPorEl.set(mag.el, '');
+                }
+                prevFim = mag.pos + mag.htmlLen;
+            }
+        }
+        const resultados = [];
+        for (const c of candidatos) {
+            if (c.secao !== 'DUAL')
+                continue;
+            const contextoAcima = contextoPorEl.get(c.el) || '';
             resultados.push({
-                magnet,
-                link: {
-                    linkText: ctx.linkText,
-                    parentText: ctx.parentText,
-                    fullContextText: spanText || ctx.fullContextText,
-                },
-                secao,
+                magnet: c.magnet,
+                tree: this.extrairTreeDoMagnet($, c.el, contextoAcima),
+                secao: c.secao,
             });
         }
         if (allMagnetAnchors.length > 0) {
@@ -493,7 +588,7 @@ class BludvScraper {
         }
         return resultados;
     }
-    extractProtectorLinks($, contentHtml, sections, postTitle) {
+    extractProtectorLinks($, contentHtml, sections) {
         const allLinks = $('a[href*="systemads1.com"]').toArray();
         if (!allLinks.length)
             return [];
@@ -512,8 +607,8 @@ class BludvScraper {
                 continue;
             result.push({
                 url: $(el).attr('href'),
+                tree: this.extrairTreeDoMagnet($, el),
                 secao,
-                ...this.buildLinkContext($, el),
             });
         }
         logger.debug(`[BLUDV] protetores brutos=${allLinks.length} | DUAL=${stats.DUAL} LEGENDADO=${stats.LEGENDADO} NONE=${stats.NONE}`);
@@ -527,15 +622,7 @@ class BludvScraper {
                 const magnet = await this.extractMagnetFromProtector(link.url);
                 if (!magnet)
                     return null;
-                return {
-                    magnet,
-                    link: {
-                        linkText: link.linkText,
-                        parentText: link.parentText,
-                        fullContextText: link.fullContextText,
-                    },
-                    secao: link.secao,
-                };
+                return { magnet, tree: link.tree, secao: link.secao };
             }));
             for (const r of batchResults) {
                 if (r)
@@ -564,26 +651,37 @@ class BludvScraper {
             return 'Legendado';
         return metaLanguage;
     }
-    resolverQualidadeComFonte(canonicalName, link, postTitle, metadataQuality) {
+    resolverQualidade(tree, canonicalName, metadataQuality, postTitle) {
+        if (tree.contextoAcima) {
+            const q = this.qualityDetector.extractBestQuality(tree.contextoAcima);
+            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') {
+                return { qualidade: q, fonte: 'contextoAcima' };
+            }
+        }
+        if (tree.proprio) {
+            const q = this.qualityDetector.extractBestQuality(tree.proprio);
+            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
+                return { qualidade: q, fonte: 'proprio' };
+        }
+        if (tree.imgAlt) {
+            const q = this.qualityDetector.extractBestQuality(tree.imgAlt);
+            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
+                return { qualidade: q, fonte: 'imgAlt' };
+        }
+        for (const filho of tree.filhos) {
+            const q = this.qualityDetector.extractBestQuality(filho);
+            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
+                return { qualidade: q, fonte: 'filhos' };
+        }
+        if (tree.paiTexto) {
+            const q = this.qualityDetector.extractBestQuality(tree.paiTexto);
+            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
+                return { qualidade: q, fonte: 'paiTexto' };
+        }
         if (canonicalName) {
             const q = this.qualityDetector.extractBestQuality(canonicalName);
             if (q && this.qualityDetector.isValidQuality(q))
                 return { qualidade: q, fonte: 'canonicalName' };
-        }
-        if (link.fullContextText) {
-            const q = this.qualityDetector.extractBestQuality(link.fullContextText);
-            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
-                return { qualidade: q, fonte: 'fullContextText' };
-        }
-        if (link.linkText) {
-            const q = this.qualityDetector.extractBestQuality(link.linkText);
-            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
-                return { qualidade: q, fonte: 'linkText' };
-        }
-        if (link.parentText) {
-            const q = this.qualityDetector.extractBestQuality(link.parentText);
-            if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD')
-                return { qualidade: q, fonte: 'parentText' };
         }
         if (metadataQuality) {
             const q = this.qualityDetector.extractBestQuality(metadataQuality);
@@ -597,23 +695,49 @@ class BludvScraper {
         }
         return { qualidade: 'HD', fonte: 'fallback' };
     }
-    resolverQualidade(canonicalName, link, postTitle, metadataQuality) {
-        return this.resolverQualidadeComFonte(canonicalName, link, postTitle, metadataQuality).qualidade;
-    }
-    resolverEpisodio(canonicalName, link) {
-        if (canonicalName) {
-            const r = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(canonicalName));
+    resolverEpisodio(tree, canonicalName) {
+        const r1 = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(tree.proprio));
+        if (r1)
+            return r1;
+        for (const filho of tree.filhos) {
+            const r = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(filho));
             if (r)
                 return r;
         }
-        const contexto = link.fullContextText || link.linkText;
-        const r = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(contexto));
-        if (r)
-            return r;
-        const epMatch = contexto.match(/EPISÓDIO\s*(\d+)/i);
+        const epMatch = (tree.proprio + ' ' + tree.filhos.join(' ')).match(/EPIS[OÓ]DIO\s*(\d+)/i);
         if (epMatch) {
             const ep = parseInt(epMatch[1], 10);
             return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+        }
+        if (tree.contextoAcima) {
+            const rCtx = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(tree.contextoAcima));
+            if (rCtx)
+                return rCtx;
+            const epCtx = tree.contextoAcima.match(/EPIS[OÓ]DIO\s*(\d+)/i);
+            if (epCtx) {
+                const ep = parseInt(epCtx[1], 10);
+                return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+            }
+        }
+        if (tree.paiTexto) {
+            const r4 = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(tree.paiTexto));
+            if (r4)
+                return r4;
+        }
+        for (const ir of tree.irmaos) {
+            const r = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(ir));
+            if (r)
+                return r;
+            const irMatch = ir.match(/EPIS[OÓ]DIO\s*(\d+)/i);
+            if (irMatch) {
+                const ep = parseInt(irMatch[1], 10);
+                return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+            }
+        }
+        if (canonicalName) {
+            const r6 = this.formatarRange((0, TechnicalWords_js_1.extrairRangeEpisodios)(canonicalName));
+            if (r6)
+                return r6;
         }
         return {};
     }
@@ -711,14 +835,6 @@ class BludvScraper {
             years,
         };
     }
-    buildLinkContext($, el) {
-        const $el = $(el);
-        return {
-            linkText: $el.text().trim(),
-            parentText: $el.parent().text().trim(),
-            fullContextText: this.getFullContextText($el),
-        };
-    }
     async extractMagnetFromProtector(protectorUrl) {
         try {
             const res = await axios_1.default.get(protectorUrl, { ...AXIOS_OPTS, timeout: 8000, maxRedirects: 5 });
@@ -730,47 +846,19 @@ class BludvScraper {
             return null;
         }
     }
-    getFullContextText($el) {
-        const prevSpan = $el.parent().prev('span');
-        if (prevSpan.length) {
-            const text = prevSpan.text().trim();
-            if (text)
-                return text;
-        }
-        let current = $el.parent();
-        for (let depth = 0; depth < 4; depth++) {
-            const text = current.text().trim();
-            if (text.length > 10) {
-                const matches = text.match(/\b(2160p|1080p|720p|480p|4K|HD)\b/gi);
-                if (matches && matches.length === 1)
-                    return text;
-            }
-            current = current.parent();
-        }
-        return $el.parent().text().trim();
+    extrairTamanhoDoContexto(texto) {
+        if (!texto)
+            return undefined;
+        const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
+        return m ? m[0] : undefined;
     }
-    cleanHtmlTitle(contextText, linkText, qualityOverride) {
-        const epPatterns = [
-            /EPIS[OÓ]DIO\s+\d{1,3}\s+AO?\s+\d{1,3}/i,
-            /EPIS[OÓ]DIO\s+\d{1,3}/i,
-            /\bS\d{1,2}\s*E\d{1,3}/i,
-            /\bE\d{1,3}/i
-        ];
-        let episode = '';
-        for (const pattern of epPatterns) {
-            const match = contextText.match(pattern);
-            if (match) {
-                episode = match[0];
-                break;
-            }
-        }
-        if (!episode)
-            return '';
-        let quality = qualityOverride || null;
-        if (!quality) {
-            quality = this.qualityDetector.extractBestQuality(linkText) || this.qualityDetector.extractBestQuality(contextText);
-        }
-        return quality ? `${episode}: ${quality}` : episode;
+    sintetizarCanonicalName(base, years, quality) {
+        const anos = years && years.length > 0
+            ? (years.length === 1
+                ? `${years[0]}`
+                : `${years[0]}-${years[years.length - 1]}`)
+            : null;
+        return [base, anos, quality].filter(Boolean).join(' ').trim();
     }
     cleanTitle(title) {
         return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();

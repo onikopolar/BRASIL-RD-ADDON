@@ -37,6 +37,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.QUALIDADE_VALIDA_REGEX = exports.STARCK_BASE = exports.axiosConfig = void 0;
+exports.starckNegativeClear = starckNegativeClear;
+exports.starckNegativeStats = starckNegativeStats;
 exports.cleanSlug = cleanSlug;
 exports.extrairTituloBaseDoSlug = extrairTituloBaseDoSlug;
 exports.searchStarckLinks = searchStarckLinks;
@@ -59,11 +61,55 @@ const TechnicalWords_js_1 = require("../../titulos/TechnicalWords.js");
 const TechnicalWords_js_2 = require("../../titulos/TechnicalWords.js");
 const SimilarityCalculator_js_1 = require("../../titulos/SimilarityCalculator.js");
 const logger = new logger_js_1.Logger('StarckScraper');
-const STARCK_BASE = 'https://www.starckfilmes-v24.com';
+const STARCK_BASE = 'https://starckfilmes-v26.com';
 exports.STARCK_BASE = STARCK_BASE;
 const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
 exports.QUALIDADE_VALIDA_REGEX = QUALIDADE_VALIDA_REGEX;
 const similarity = SimilarityCalculator_js_1.SimilarityCalculator.getInstance();
+const STARCK_NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const STARCK_NEGATIVE_MAX = 5000;
+const starckNegativeStore = new Map();
+function starckNegativeKey(query, extra) {
+    const q = query.trim().toLowerCase();
+    return `starck|${q}|${JSON.stringify(extra)}`;
+}
+function starckNegativeIsBlocked(key) {
+    const entry = starckNegativeStore.get(key);
+    if (!entry)
+        return false;
+    if (Date.now() - entry.ts > entry.ttlMs) {
+        starckNegativeStore.delete(key);
+        return false;
+    }
+    entry.hits++;
+    return true;
+}
+function starckNegativeMark(key, ttlMs = STARCK_NEGATIVE_TTL_MS) {
+    if (starckNegativeStore.size >= STARCK_NEGATIVE_MAX) {
+        const first = starckNegativeStore.keys().next().value;
+        if (first)
+            starckNegativeStore.delete(first);
+    }
+    starckNegativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+function starckNegativeClear() {
+    starckNegativeStore.clear();
+}
+function starckNegativeStats() {
+    const agora = Date.now();
+    return {
+        size: starckNegativeStore.size,
+        maxEntries: STARCK_NEGATIVE_MAX,
+        defaultTtlMs: STARCK_NEGATIVE_TTL_MS,
+        entries: Array.from(starckNegativeStore.entries()).map(([key, v]) => ({
+            key,
+            ageMs: agora - v.ts,
+            ttlMs: v.ttlMs,
+            expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+            hits: v.hits,
+        })),
+    };
+}
 exports.axiosConfig = {
     timeout: 15000,
     httpsAgent: wordpressScraper_js_1.agenteHttps,
@@ -153,13 +199,12 @@ async function searchStarckLinks(searchQuery, allQueries, targetSeason, targetYe
         });
         const results = [...itemsMap.values()];
         const frasesArr = [...construirFrases(allQueries)];
-        const ehSerie = mediaType === 'series' || mediaType === 'tv';
         let descartadosPorTipo = 0;
         let descartadosPorTemporada = 0;
         let descartadosPorSimilaridade = 0;
         let aceitosPorColecao = 0;
         const filtered = results.filter(item => {
-            const isCollection = !ehSerie && (0, TechnicalWords_js_2.isCollectionTitle)(item.slugTitle, mediaType);
+            const isCollection = (0, TechnicalWords_js_2.isCollectionTitle)(item.slugTitle, mediaType);
             const isCollectionSeries = (0, TechnicalWords_js_2.isCollectionTitle)(item.slugTitle, 'series');
             const pareceSerie = item.range !== null || isCollectionSeries;
             if (type === 'movie' && pareceSerie) {
@@ -174,7 +219,7 @@ async function searchStarckLinks(searchQuery, allQueries, targetSeason, targetYe
                 descartadosPorTemporada++;
                 return false;
             }
-            const resultado = similarity.compararComTitulos(frasesArr, item.slugTitle);
+            const resultado = similarity.preFiltroContem(frasesArr, item.slugTitle);
             if (!resultado.match && !isCollection) {
                 descartadosPorSimilaridade++;
                 return false;
@@ -187,11 +232,11 @@ async function searchStarckLinks(searchQuery, allQueries, targetSeason, targetYe
             ` | descartados: tipo=${descartadosPorTipo} temporada=${descartadosPorTemporada} similaridade=${descartadosPorSimilaridade}` +
             (aceitosPorColecao > 0 ? ` | coleções=${aceitosPorColecao}` : '') +
             ` | type=${type ?? '-'} mediaType=${mediaType ?? '-'}`);
-        return filtered.slice(0, 40);
+        return { status: 'ok', items: filtered.slice(0, 40) };
     }
     catch (err) {
         logger.warn('Starck busca falhou', { query: searchQuery.substring(0, 50), error: err.message });
-        return [];
+        return { status: 'error', items: [], error: err.message };
     }
 }
 function extractPostMetadata($) {
@@ -552,9 +597,19 @@ async function decodeBase64Magnets($, html, postTitle, metadata) {
 async function searchStarck(query, type = 'movie', targetSeason, searchQueries, targetYear, imdbId, mediaType) {
     const startTime = Date.now();
     const allQueries = [...new Set([query, ...(searchQueries || [])])];
+    const ncKey = starckNegativeKey(query, {
+        type,
+        season: targetSeason ?? 0,
+        mediaType: mediaType ?? null,
+    });
+    if (starckNegativeIsBlocked(ncKey)) {
+        logger.debug(`Starck: negative cache HIT | "${query.substring(0, 40)}"`);
+        return [];
+    }
     const allResults = [];
     const seenInfoHashes = new Set();
-    const links = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType, type);
+    const linksResult = await searchStarckLinks(query, allQueries, targetSeason, targetYear, mediaType, type);
+    const links = linksResult.items;
     if (links.length > 0) {
         let processedPosts = 0;
         for (const link of links) {
@@ -615,6 +670,10 @@ async function searchStarck(query, type = 'movie', targetSeason, searchQueries, 
                 processedPosts++;
             }
         }
+    }
+    if (allResults.length === 0 && linksResult.status === 'ok') {
+        starckNegativeMark(ncKey);
+        logger.info(`Starck: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${STARCK_NEGATIVE_TTL_MS}`);
     }
     const duration = Date.now() - startTime;
     logger.info(`Starck: ${allResults.length} magnets em ${duration}ms para "${query.substring(0, 50)}"`);

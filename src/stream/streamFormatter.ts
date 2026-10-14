@@ -396,14 +396,29 @@ export class StreamFormatter {
     return stream;
   }
 
+  // A qualidade do scraper é soberana. Só cai pro dn/nome do magnet quando o scraper não trouxe qualidade real.
   private determinarQualidadeReal(qualidadeScraper: string, nomeMagnet?: string | null): string {
-    if (!nomeMagnet) return qualidadeScraper;
-    const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(nomeMagnet);
-    if (qualidadeDoMagnet && qualidadeDoMagnet !== 'HD' && qualidadeDoMagnet !== 'Desconhecido') {
-      this.logger.debug(`Qualidade do magnet (${qualidadeDoMagnet}) substitui a do scraper (${qualidadeScraper})`);
-      return qualidadeDoMagnet;
+    const scraperTemQualidadeReal =
+      !!qualidadeScraper &&
+      qualidadeScraper !== 'HD' &&
+      qualidadeScraper !== 'Desconhecido' &&
+      this.qualityDetector.isValidQuality(qualidadeScraper);
+
+    if (scraperTemQualidadeReal) {
+      return qualidadeScraper;
     }
-    return qualidadeScraper;
+
+    if (nomeMagnet) {
+      const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(nomeMagnet);
+      if (qualidadeDoMagnet && qualidadeDoMagnet !== 'HD' && qualidadeDoMagnet !== 'Desconhecido') {
+        this.logger.debug(
+          `Qualidade do magnet (${qualidadeDoMagnet}) usada porque o scraper não trouxe qualidade real (${qualidadeScraper || 'vazio'})`
+        );
+        return qualidadeDoMagnet;
+      }
+    }
+
+    return qualidadeScraper || 'HD';
   }
 
   private atualizarQualidadeNoTitulo(titulo: string, qualidade: string): string {

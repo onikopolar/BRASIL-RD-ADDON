@@ -47,9 +47,7 @@ const axiosConfigEn = {
   headers: { ...axiosConfig.headers, 'Accept-Language': 'en-US,en;q=0.9' },
 };
 
-// ═══════════════════════════════════════════════════════════════════════
 //  HELPERS
-// ═══════════════════════════════════════════════════════════════════════
 
 function normalizeTitle(t: string): string {
   return t
@@ -75,9 +73,7 @@ async function retryAxios<T>(fn: () => Promise<T>, maxRetries: number, delayMs: 
   throw lastErr;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  FALLBACK: TMDB /find/{imdb_id}
-// ═══════════════════════════════════════════════════════════════════════
 
 async function getTmdbViaFindEndpoint(imdbId: string): Promise<ImdbTitles | null> {
   try {
@@ -144,9 +140,7 @@ async function getTmdbViaFindEndpoint(imdbId: string): Promise<ImdbTitles | null
   return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
 //  PASSO 1: Pega título via Cinemeta (substitui OMDB)
-// ═══════════════════════════════════════════════════════════════════════
 
 async function getCinemetaTitle(imdbId: string): Promise<{ title: string; year?: number; type?: 'tv' | 'movie' } | null> {
   for (const tipo of ['series', 'movie'] as const) {
@@ -179,115 +173,7 @@ async function getCinemetaTitle(imdbId: string): Promise<{ title: string; year?:
   return null;
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  PASSO 2: AdoroCinema — fonte PT-BR nativa
-//  O AdoroCinema ofusca os hrefs em base64 dentro da classe CSS.
-//  Decodifica e faz exact match por título + tipo.
-// ═══════════════════════════════════════════════════════════════════════
-
-interface AdoroCard {
-  title: string;
-  href: string;
-  mediaType: 'movie' | 'tv';
-  year?: number;
-}
-
-// Decodifica classe ofuscada do AdoroCinema: "ACrL3Nlcmllcy9zZXJpZS0zNDU5Lw=="
-// → remove "ACr" → "/series/serie-3459/"
-function decodeAdoroClass(cls: string | undefined): string | null {
-  if (!cls) return null;
-  const cleaned = cls.replace(/ACr/g, '');
-  try {
-    const decoded = Buffer.from(cleaned, 'base64').toString('utf-8');
-    const m = decoded.match(/^\/(series\/serie-\d+|filmes\/filme-\d+)\//);
-    return m ? `/${m[1]}/` : null;
-  } catch {
-    return null;
-  }
-}
-
-// O AdoroCinema resolve o match sozinho: o ?q= dele cruza títulos PT e EN
-// (buscar "Ice Age: The Meltdown" devolve "A Era do Gelo 2").
-// Se retornou card, é o título certo — não precisa de exact match nem tipo.
-async function searchAdoroCinema(title: string): Promise<AdoroCard | null> {
-  try {
-    const url = `https://www.adorocinema.com/pesquisar/?q=${encodeURIComponent(title)}`;
-    const res = await axios.get(url, axiosConfig);
-    const $ = cheerio.load(res.data);
-
-    const cards: AdoroCard[] = [];
-    $('.card.entity-card').each((_i, el) => {
-      const t = $(el).find('.meta-title-link').text().trim();
-      const cls = $(el).find('.meta-title-link').attr('class')
-        || $(el).find('.thumbnail-container').attr('class')
-        || '';
-      const href = decodeAdoroClass(cls);
-      if (!t || !href) return;
-
-      const mediaType: 'movie' | 'tv' = href.includes('/series/') ? 'tv' : 'movie';
-      const yearText = $(el).find('.meta-body-info').text().replace(/\s+/g, ' ').trim();
-      const ym = yearText.match(/(\d{4})/);
-
-      cards.push({
-        title: t,
-        href,
-        mediaType,
-        year: ym ? parseInt(ym[1], 10) : undefined,
-      });
-    });
-
-    if (cards.length === 0) {
-      logger.debug(`AdoroCinema: 0 cards para "${title}"`);
-      return null;
-    }
-
-    logger.debug(`AdoroCinema: "${title}" → "${cards[0].title}" (${cards[0].year ?? '?'}) ${cards[0].href}`);
-    return cards[0];
-  } catch (err: any) {
-    logger.warn(`AdoroCinema search falhou para "${title}": ${err.message}`);
-    return null;
-  }
-}
-async function scrapeAdoroPage(href: string): Promise<{
-  titlePt: string;
-  originalTitle: string | null;
-  year?: number;
-  mediaType: 'movie' | 'tv';
-} | null> {
-  try {
-    const url = `https://www.adorocinema.com${href}`;
-    const res = await axios.get(url, axiosConfig);
-    const $ = cheerio.load(res.data);
-
-    const titlePt = $('h1').first().text().trim();
-    if (!titlePt) return null;
-
-    // Título original — estrutura muda entre filme e série.
-    // Série: .meta-body-original-title strong
-    // Filme: .meta-body-item com .light contendo "Título original", strong dentro
-    let originalTitle = $('.meta-body-original-title strong').text().trim() || null;
-    if (!originalTitle) {
-      const origWrap = $('.meta-body-item')
-        .filter((_i, el) => $(el).find('.light').text().includes('Título original'))
-        .first();
-      originalTitle = origWrap.find('strong').text().trim() || null;
-    }
-
-    const metaInfo = $('.meta-body-info').text().replace(/\s+/g, ' ').trim();
-    const year = parseInt(metaInfo.match(/(\d{4})/)?.[1] ?? '', 10) || undefined;
-
-    const mediaType: 'movie' | 'tv' = href.includes('/series/') ? 'tv' : 'movie';
-
-    return { titlePt, originalTitle, year, mediaType };
-  } catch (err: any) {
-    logger.warn(`AdoroCinema scrape falhou para ${href}: ${err.message}`);
-    return null;
-  }
-}
-
-// ═══════════════════════════════════════════════════════════════════════
-//  PASSO 3: Busca o título no TMDB via search HTML (fallback)
-// ═══════════════════════════════════════════════════════════════════════
+//  PASSO 2: Busca o título no TMDB via search HTML
 
 interface TmdbSearchResult {
   tmdbUrl: string;
@@ -343,9 +229,7 @@ async function searchTmdbHtmlAll(query: string): Promise<TmdbSearchResult[]> {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════
-//  PASSO 3b: Extrai metadados da página do TMDB (pt-BR + en)
-// ═══════════════════════════════════════════════════════════════════════
+//  PASSO 3: Extrai metadados da página do TMDB (pt-BR + en)
 
 async function scrapeTmdbPage(tmdbUrl: string): Promise<{
   originalTitle: string;
@@ -414,41 +298,7 @@ export async function getTmdbTitlesViaHtml(imdbId: string): Promise<ImdbTitles |
       return null;
     }
 
-    // ═══ PASSO 2: AdoroCinema (fonte PT-BR nativa, prioritária) ═══
-    logger.debug(`AdoroCinema: buscando "${imdbData.title}" [${imdbData.type ?? '?'}]`);
-    const adoroCard = await searchAdoroCinema(imdbData.title);
-    if (adoroCard) {
-      const adoroPage = await scrapeAdoroPage(adoroCard.href);
-      if (adoroPage) {
-        const allTitles = [normalizeTitle(adoroPage.titlePt)];
-        if (adoroPage.originalTitle) {
-          const normOrig = normalizeTitle(adoroPage.originalTitle);
-          if (!allTitles.includes(normOrig)) allTitles.push(normOrig);
-        }
-
-        const result: ImdbTitles = {
-          originalTitle: adoroPage.originalTitle
-            ? normalizeTitle(adoroPage.originalTitle)
-            : normalizeTitle(adoroPage.titlePt),
-          portugueseTitle: normalizeTitle(adoroPage.titlePt),
-          portugueseTitleRaw: adoroPage.titlePt,
-          allTitles,
-          foundInPortuguese: true,
-          year: adoroPage.year,
-          mediaType: adoroPage.mediaType,
-          portuguesePriority: true,
-        };
-
-        const duration = Date.now() - startTime;
-        logger.info(`TmdbHtmlScraper: "${adoroPage.titlePt}" [${adoroPage.mediaType}] (${adoroPage.year ?? '?'}) via AdoroCinema em ${duration}ms`);
-        return result;
-      }
-      logger.debug(`AdoroCinema: página ${adoroCard.href} não raspou, caindo pro TMDB HTML`);
-    } else {
-      logger.debug(`AdoroCinema: sem match exato para "${imdbData.title}", caindo pro TMDB HTML`);
-    }
-
-    // ═══ PASSO 3: TMDB search HTML (fallback original) ═══
+    // PASSO 2: TMDB search HTML
     const searchResults = await searchTmdbHtmlAll(imdbData.title);
     if (searchResults.length === 0) {
       logger.warn(`TmdbHtmlScraper: TMDB search sem resultados para "${imdbData.title}"`);

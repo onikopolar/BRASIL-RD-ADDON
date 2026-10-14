@@ -40,10 +40,12 @@ export class EpisodeMatcher {
     caminhoCompleto: string,
     temporadaAlvo: number,
     episodioAlvo: number,
-    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null
+    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null,
+    seasonEpisodeCounts?: Record<number, number> | null
   ): boolean {
     if (!this.ehArquivoDeVideo(caminhoCompleto)) return false;
 
+    // Tentativa 1: match por nome de episódio (quando temos os nomes PT/EN do TMDB).
     if (episodeTitles && episodeTitles.length > 0) {
       const epData = episodeTitles.find(ep => ep.episodeNumber === episodioAlvo);
       if (epData) {
@@ -59,12 +61,63 @@ export class EpisodeMatcher {
         if (nomesNormalizados.some(nome => nomeArquivo.includes(nome) || nome.includes(nomeArquivo))) {
           return true;
         }
-
-        return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
       }
     }
 
-    return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
+    // Tentativa 2: match normal por SxxExx (caminho de sempre).
+    if (this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo)) {
+      return true;
+    }
+
+    // Tentativa 3: numeração absoluta — arquivo sem season ("Episodio 200") e temos
+    // a contagem por temporada pra calcular o offset (S07E06 → 194 + 6 = 200).
+    if (seasonEpisodeCounts) {
+      if (this.arquivoPertenceAoEpisodioAbsoluto(caminhoCompleto, temporadaAlvo, episodioAlvo, seasonEpisodeCounts)) {
+        return true;
+      }
+    }
+
+    return false;
+  }
+
+  // Match por numeração absoluta. O parser (extrairRangeEpisodios) já sinaliza esse
+  // caso com seasonStart === 0; aqui só interpretamos à luz do que sabemos da série.
+  private arquivoPertenceAoEpisodioAbsoluto(
+    caminhoCompleto: string,
+    temporadaAlvo: number,
+    episodioAlvo: number,
+    seasonEpisodeCounts: Record<number, number>
+  ): boolean {
+    const nomeArquivo = this.extrairNomeArquivo(caminhoCompleto);
+    const range = extrairRangeEpisodios(nomeArquivo);
+    if (!range) return false;
+
+    // Só vale quando o arquivo NÃO declara season — sinal claro de numeração corrida.
+    // Se tivesse "S07E06" no nome, o match normal já teria resolvido.
+    if (range.seasonStart !== 0) return false;
+
+    // Precisa saber a contagem da temporada alvo.
+    if (!seasonEpisodeCounts[temporadaAlvo]) return false;
+
+    // Soma os episódios de todas as seasons ANTERIORES à alvo (ignora S00/specials).
+    let offset = 0;
+    for (const s of Object.keys(seasonEpisodeCounts).map(Number).sort((a, b) => a - b)) {
+      if (s <= 0 || s >= temporadaAlvo) continue;
+      offset += seasonEpisodeCounts[s];
+    }
+
+    const absoluto = offset + episodioAlvo;
+    const bate = range.episodeStart === absoluto && range.episodeEnd === absoluto;
+
+    if (bate) {
+      console.log(
+        `[EpisodeMatcher] ✅ ABSOLUTO arquivo="${nomeArquivo}" alvo=${temporadaAlvo}x${episodioAlvo} ` +
+        `offset=${offset} esperado=${absoluto} achou=${range.episodeStart}`
+      );
+    }
+
+    return bate;
+    
   }
 
   extractEpisodeInfo(filename: string): EpisodeInfo {

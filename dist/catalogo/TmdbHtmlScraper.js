@@ -191,80 +191,6 @@ async function getCinemetaTitle(imdbId) {
     }
     return null;
 }
-function decodeAdoroClass(cls) {
-    if (!cls)
-        return null;
-    const cleaned = cls.replace(/ACr/g, '');
-    try {
-        const decoded = Buffer.from(cleaned, 'base64').toString('utf-8');
-        const m = decoded.match(/^\/(series\/serie-\d+|filmes\/filme-\d+)\//);
-        return m ? `/${m[1]}/` : null;
-    }
-    catch {
-        return null;
-    }
-}
-async function searchAdoroCinema(title) {
-    try {
-        const url = `https://www.adorocinema.com/pesquisar/?q=${encodeURIComponent(title)}`;
-        const res = await axios_1.default.get(url, axiosConfig);
-        const $ = cheerio.load(res.data);
-        const cards = [];
-        $('.card.entity-card').each((_i, el) => {
-            const t = $(el).find('.meta-title-link').text().trim();
-            const cls = $(el).find('.meta-title-link').attr('class')
-                || $(el).find('.thumbnail-container').attr('class')
-                || '';
-            const href = decodeAdoroClass(cls);
-            if (!t || !href)
-                return;
-            const mediaType = href.includes('/series/') ? 'tv' : 'movie';
-            const yearText = $(el).find('.meta-body-info').text().replace(/\s+/g, ' ').trim();
-            const ym = yearText.match(/(\d{4})/);
-            cards.push({
-                title: t,
-                href,
-                mediaType,
-                year: ym ? parseInt(ym[1], 10) : undefined,
-            });
-        });
-        if (cards.length === 0) {
-            logger.debug(`AdoroCinema: 0 cards para "${title}"`);
-            return null;
-        }
-        logger.debug(`AdoroCinema: "${title}" → "${cards[0].title}" (${cards[0].year ?? '?'}) ${cards[0].href}`);
-        return cards[0];
-    }
-    catch (err) {
-        logger.warn(`AdoroCinema search falhou para "${title}": ${err.message}`);
-        return null;
-    }
-}
-async function scrapeAdoroPage(href) {
-    try {
-        const url = `https://www.adorocinema.com${href}`;
-        const res = await axios_1.default.get(url, axiosConfig);
-        const $ = cheerio.load(res.data);
-        const titlePt = $('h1').first().text().trim();
-        if (!titlePt)
-            return null;
-        let originalTitle = $('.meta-body-original-title strong').text().trim() || null;
-        if (!originalTitle) {
-            const origWrap = $('.meta-body-item')
-                .filter((_i, el) => $(el).find('.light').text().includes('Título original'))
-                .first();
-            originalTitle = origWrap.find('strong').text().trim() || null;
-        }
-        const metaInfo = $('.meta-body-info').text().replace(/\s+/g, ' ').trim();
-        const year = parseInt(metaInfo.match(/(\d{4})/)?.[1] ?? '', 10) || undefined;
-        const mediaType = href.includes('/series/') ? 'tv' : 'movie';
-        return { titlePt, originalTitle, year, mediaType };
-    }
-    catch (err) {
-        logger.warn(`AdoroCinema scrape falhou para ${href}: ${err.message}`);
-        return null;
-    }
-}
 async function searchTmdbHtmlAll(query) {
     try {
         const searchUrl = `https://www.themoviedb.org/search?query=${encodeURIComponent(query)}`;
@@ -357,38 +283,6 @@ async function getTmdbTitlesViaHtml(imdbId) {
             }
             logger.warn(`TmdbHtmlScraper: Cinemeta falhou para ${imdbId}`);
             return null;
-        }
-        logger.debug(`AdoroCinema: buscando "${imdbData.title}" [${imdbData.type ?? '?'}]`);
-        const adoroCard = await searchAdoroCinema(imdbData.title);
-        if (adoroCard) {
-            const adoroPage = await scrapeAdoroPage(adoroCard.href);
-            if (adoroPage) {
-                const allTitles = [normalizeTitle(adoroPage.titlePt)];
-                if (adoroPage.originalTitle) {
-                    const normOrig = normalizeTitle(adoroPage.originalTitle);
-                    if (!allTitles.includes(normOrig))
-                        allTitles.push(normOrig);
-                }
-                const result = {
-                    originalTitle: adoroPage.originalTitle
-                        ? normalizeTitle(adoroPage.originalTitle)
-                        : normalizeTitle(adoroPage.titlePt),
-                    portugueseTitle: normalizeTitle(adoroPage.titlePt),
-                    portugueseTitleRaw: adoroPage.titlePt,
-                    allTitles,
-                    foundInPortuguese: true,
-                    year: adoroPage.year,
-                    mediaType: adoroPage.mediaType,
-                    portuguesePriority: true,
-                };
-                const duration = Date.now() - startTime;
-                logger.info(`TmdbHtmlScraper: "${adoroPage.titlePt}" [${adoroPage.mediaType}] (${adoroPage.year ?? '?'}) via AdoroCinema em ${duration}ms`);
-                return result;
-            }
-            logger.debug(`AdoroCinema: página ${adoroCard.href} não raspou, caindo pro TMDB HTML`);
-        }
-        else {
-            logger.debug(`AdoroCinema: sem match exato para "${imdbData.title}", caindo pro TMDB HTML`);
         }
         const searchResults = await searchTmdbHtmlAll(imdbData.title);
         if (searchResults.length === 0) {

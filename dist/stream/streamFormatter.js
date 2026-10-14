@@ -240,14 +240,21 @@ class StreamFormatter {
         return stream;
     }
     determinarQualidadeReal(qualidadeScraper, nomeMagnet) {
-        if (!nomeMagnet)
+        const scraperTemQualidadeReal = !!qualidadeScraper &&
+            qualidadeScraper !== 'HD' &&
+            qualidadeScraper !== 'Desconhecido' &&
+            this.qualityDetector.isValidQuality(qualidadeScraper);
+        if (scraperTemQualidadeReal) {
             return qualidadeScraper;
-        const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(nomeMagnet);
-        if (qualidadeDoMagnet && qualidadeDoMagnet !== 'HD' && qualidadeDoMagnet !== 'Desconhecido') {
-            this.logger.debug(`Qualidade do magnet (${qualidadeDoMagnet}) substitui a do scraper (${qualidadeScraper})`);
-            return qualidadeDoMagnet;
         }
-        return qualidadeScraper;
+        if (nomeMagnet) {
+            const qualidadeDoMagnet = this.qualityDetector.extractQualityFromFilename(nomeMagnet);
+            if (qualidadeDoMagnet && qualidadeDoMagnet !== 'HD' && qualidadeDoMagnet !== 'Desconhecido') {
+                this.logger.debug(`Qualidade do magnet (${qualidadeDoMagnet}) usada porque o scraper não trouxe qualidade real (${qualidadeScraper || 'vazio'})`);
+                return qualidadeDoMagnet;
+            }
+        }
+        return qualidadeScraper || 'HD';
     }
     atualizarQualidadeNoTitulo(titulo, qualidade) {
         const regexQualidade = new RegExp(`\\b${qualidade}\\b`, 'i');

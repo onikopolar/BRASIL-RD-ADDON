@@ -309,7 +309,8 @@ export class TorboxService {
     targetQuality?: string,
     cachedInfo?: TorboxTorrentInfo,
     targetTitles?: string[],
-    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null
+    episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null,
+    seasonEpisodeCounts?: Record<number, number> | null
   ): Promise<string | null> {
 
     this.logger.info('getStreamLinkForTorrent: início', {
@@ -319,7 +320,8 @@ export class TorboxService {
       targetQuality,
       hasCachedInfo: !!cachedInfo,
       targetTitles: targetTitles || 'não informado',
-      episodeTitles: episodeTitles ? episodeTitles.length : 'não informado'
+      episodeTitles: episodeTitles ? episodeTitles.length : 'não informado',
+      seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE'
     });
 
     try {
@@ -373,10 +375,13 @@ export class TorboxService {
           episodeTitles: statusEp,
           namePt: epData?.namePt || '-',
           nameEn: epData?.nameEn || '-',
+          seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE',
         });
 
         const episodeFiles = candidateFiles.filter(f =>
-          this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(f.name, targetSeason, targetEpisode, episodeTitles)
+          this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(
+            f.name, targetSeason, targetEpisode, episodeTitles, seasonEpisodeCounts
+          )
         );
 
         this.logger.info('📁 Filtro episódio', {

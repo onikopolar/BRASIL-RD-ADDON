@@ -142,6 +142,7 @@ interface ImdbTitleCacheAttributes {
   titlesEn: string[];
   year?: number | null;
   episodeTitles?: any | null;
+  seasonEpisodeCounts?: Record<number, number> | null;
   updatedAt: Date;
 }
 
@@ -154,6 +155,7 @@ class ImdbTitleCache extends Model<ImdbTitleCacheAttributes> implements ImdbTitl
   public titlesEn!: string[];
   public year?: number | null;
   public episodeTitles?: any | null;
+  public seasonEpisodeCounts?: Record<number, number> | null;
   public updatedAt!: Date;
 }
 
@@ -191,6 +193,12 @@ ImdbTitleCache.init(
     episodeTitles: {
       type: DataTypes.JSONB,
       allowNull: true
+    },
+    // episode_count por season_number (sem S00). Ex: {"1":39,"2":35,...,"9":38}
+    seasonEpisodeCounts: {
+      type: DataTypes.JSONB,
+      allowNull: true,
+      defaultValue: null
     },
     updatedAt: {
       type: DataTypes.DATE,

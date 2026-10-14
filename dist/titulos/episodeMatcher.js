@@ -23,7 +23,7 @@ class EpisodeMatcher {
             range.episodeStart === episodioAlvo &&
             range.episodeEnd === episodioAlvo);
     }
-    arquivoPertenceAoEpisodioComTitulos(caminhoCompleto, temporadaAlvo, episodioAlvo, episodeTitles) {
+    arquivoPertenceAoEpisodioComTitulos(caminhoCompleto, temporadaAlvo, episodioAlvo, episodeTitles, seasonEpisodeCounts) {
         if (!this.ehArquivoDeVideo(caminhoCompleto))
             return false;
         if (episodeTitles && episodeTitles.length > 0) {
@@ -38,10 +38,40 @@ class EpisodeMatcher {
                 if (nomesNormalizados.some(nome => nomeArquivo.includes(nome) || nome.includes(nomeArquivo))) {
                     return true;
                 }
-                return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
             }
         }
-        return this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo);
+        if (this.arquivoPertenceAoEpisodio(caminhoCompleto, temporadaAlvo, episodioAlvo)) {
+            return true;
+        }
+        if (seasonEpisodeCounts) {
+            if (this.arquivoPertenceAoEpisodioAbsoluto(caminhoCompleto, temporadaAlvo, episodioAlvo, seasonEpisodeCounts)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    arquivoPertenceAoEpisodioAbsoluto(caminhoCompleto, temporadaAlvo, episodioAlvo, seasonEpisodeCounts) {
+        const nomeArquivo = this.extrairNomeArquivo(caminhoCompleto);
+        const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(nomeArquivo);
+        if (!range)
+            return false;
+        if (range.seasonStart !== 0)
+            return false;
+        if (!seasonEpisodeCounts[temporadaAlvo])
+            return false;
+        let offset = 0;
+        for (const s of Object.keys(seasonEpisodeCounts).map(Number).sort((a, b) => a - b)) {
+            if (s <= 0 || s >= temporadaAlvo)
+                continue;
+            offset += seasonEpisodeCounts[s];
+        }
+        const absoluto = offset + episodioAlvo;
+        const bate = range.episodeStart === absoluto && range.episodeEnd === absoluto;
+        if (bate) {
+            console.log(`[EpisodeMatcher] ✅ ABSOLUTO arquivo="${nomeArquivo}" alvo=${temporadaAlvo}x${episodioAlvo} ` +
+                `offset=${offset} esperado=${absoluto} achou=${range.episodeStart}`);
+        }
+        return bate;
     }
     extractEpisodeInfo(filename) {
         const range = (0, TechnicalWords_js_1.extrairRangeEpisodios)(filename);

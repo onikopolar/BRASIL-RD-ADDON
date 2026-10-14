@@ -127,7 +127,7 @@ class ImdbScraperService {
         try {
             const row = await models_js_1.ImdbTitleCache.findOne({
                 where: { imdbId, season },
-                attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'updatedAt'],
+                attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'seasonEpisodeCounts', 'updatedAt'],
                 raw: true,
             });
             if (!row)
@@ -188,6 +188,7 @@ class ImdbScraperService {
             mediaType: undefined,
             portuguesePriority: hasPortuguese,
             episodeTitles: row.episodeTitles || null,
+            seasonEpisodeCounts: row.seasonEpisodeCounts || null,
         };
     }
     temMojibake(value) {
@@ -235,6 +236,7 @@ class ImdbScraperService {
                 titlesEn.push(t);
             }
             const episodeTitlesLimpos = this.corrigirMojibake(data.episodeTitles ?? null);
+            const seasonCountsLimpos = data.seasonEpisodeCounts ?? null;
             await models_js_1.ImdbTitleCache.upsert({
                 imdbId,
                 season,
@@ -242,6 +244,7 @@ class ImdbScraperService {
                 titlesEn,
                 year: data.year ?? null,
                 episodeTitles: episodeTitlesLimpos,
+                seasonEpisodeCounts: seasonCountsLimpos,
                 updatedAt: new Date(),
             });
         }
@@ -317,6 +320,7 @@ class ImdbScraperService {
                 episodeTitles: mediaType === 'tv' && season !== undefined && season > 0
                     ? await this.fetchEpisodeTitles(tmdbIdNum, season).catch(() => [])
                     : [],
+                seasonEpisodeCounts: mediaType === 'tv' ? (resolved.seasonEpisodeCounts ?? null) : null,
             };
             ImdbScraperService.setCache(cacheKey, {
                 data: result,
@@ -374,10 +378,17 @@ class ImdbScraperService {
             }
             const seriesDetails = await this.fetchDetailsFromTMDB(tmdbId, 'tv');
             if (seriesDetails) {
+                const seasonEpisodeCounts = {};
+                for (const s of seriesDetails.seasons || []) {
+                    if (typeof s?.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number') {
+                        seasonEpisodeCounts[s.season_number] = s.episode_count;
+                    }
+                }
                 return {
                     originalTitle: seriesDetails.original_name || seriesDetails.name || '',
                     portugueseTitle: seriesDetails.name || null,
                     year: year ?? (seriesDetails.first_air_date ? parseInt(seriesDetails.first_air_date.substring(0, 4)) : undefined),
+                    seasonEpisodeCounts: Object.keys(seasonEpisodeCounts).length > 0 ? seasonEpisodeCounts : null,
                 };
             }
         }
@@ -417,10 +428,53 @@ class ImdbScraperService {
             if (response.data.tv_results && response.data.tv_results.length > 0) {
                 return { tmdbId: response.data.tv_results[0].id, mediaType: 'tv' };
             }
-            return null;
+            logger.debug('TMDB /find vazio, tentando fallback Cinemeta', { imdbId });
+            return await this.findViaCinemetaFallback(imdbId);
         }
         catch (error) {
-            logger.debug('TMDB find falhou, fallback HTML será usado', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
+            logger.debug('TMDB find falhou, tentando fallback Cinemeta', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
+            return await this.findViaCinemetaFallback(imdbId);
+        }
+    }
+    async findViaCinemetaFallback(imdbId) {
+        try {
+            let title = null;
+            let mediaType = 'tv';
+            for (const tipo of ['series', 'movie']) {
+                try {
+                    const r = await axios_1.default.get(`https://v3-cinemeta.strem.io/meta/${tipo}/${imdbId}.json`, { timeout: 10000 });
+                    if (r.data?.meta?.name) {
+                        title = r.data.meta.name;
+                        mediaType = tipo === 'series' ? 'tv' : 'movie';
+                        break;
+                    }
+                }
+                catch { }
+            }
+            if (!title) {
+                logger.debug('Cinemeta fallback: sem título', { imdbId });
+                return null;
+            }
+            const searchRes = await axios_1.default.get(`https://www.themoviedb.org/search?query=${encodeURIComponent(title)}`, {
+                timeout: 15000,
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                    'Accept-Language': 'pt-BR,pt;q=0.9',
+                },
+            });
+            const wanted = mediaType === 'tv' ? 'tv' : 'movie';
+            const re = new RegExp(`\\/${wanted}\\/(\\d+)`, 'i');
+            const m = searchRes.data.match(re);
+            if (!m) {
+                logger.debug('Cinemeta fallback: search sem match', { imdbId, title, wanted });
+                return null;
+            }
+            const tmdbId = parseInt(m[1], 10);
+            logger.debug('Cinemeta fallback OK', { imdbId, title, tmdbId, mediaType });
+            return { tmdbId, mediaType };
+        }
+        catch (error) {
+            logger.debug('Cinemeta fallback falhou', { imdbId, error: error instanceof Error ? error.message : 'Erro' });
             return null;
         }
     }
@@ -560,8 +614,8 @@ class ImdbScraperService {
         return {
             cacheSize: ImdbScraperService.globalCache.size,
             cacheTTL: this.cacheTTL,
-            version: '2.5.0',
-            feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17)',
+            version: '2.5.1',
+            feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17) + fallback Cinemeta no /find vazio (R18)',
         };
     }
 }

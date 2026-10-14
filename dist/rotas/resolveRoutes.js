@@ -26,6 +26,7 @@ const resolveLogger = new logger_js_1.Logger('🔄RESOLVE');
 const emVoo = new Map();
 const titlesCache = new Map();
 const episodeTitlesCache = new Map();
+const seasonEpisodeCountsCache = new Map();
 const pendingTorrentCache = new Map();
 const PENDING_TTL_MS = 5 * 60 * 1000;
 const DB_TITLE_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -102,8 +103,18 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
     const cached = titlesCache.get(infoHash);
     if (cached !== undefined) {
         const cachedEpisodes = episodeTitlesCache.get(infoHash);
-        resolveLogger.info('💾 TÍTULOS DO CACHE LOCAL (memória)', { infoHash, titles: cached.join(', '), episodeTitles: cachedEpisodes?.length || 0 });
-        return { titles: cached.length > 0 ? cached : undefined, episodeTitles: cachedEpisodes };
+        const cachedCounts = seasonEpisodeCountsCache.get(infoHash) ?? null;
+        resolveLogger.info('💾 TÍTULOS DO CACHE LOCAL (memória)', {
+            infoHash,
+            titles: cached.join(', '),
+            episodeTitles: cachedEpisodes?.length || 0,
+            seasonEpisodeCounts: cachedCounts ? `${Object.keys(cachedCounts).length} seasons` : 'AUSENTE',
+        });
+        return {
+            titles: cached.length > 0 ? cached : undefined,
+            episodeTitles: cachedEpisodes,
+            seasonEpisodeCounts: cachedCounts,
+        };
     }
     try {
         let imdbId = externalImdbId;
@@ -122,7 +133,8 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
             else {
                 titlesCache.set(infoHash, []);
                 episodeTitlesCache.set(infoHash, null);
-                return { titles: undefined, episodeTitles: undefined };
+                seasonEpisodeCountsCache.set(infoHash, null);
+                return { titles: undefined, episodeTitles: undefined, seasonEpisodeCounts: null };
             }
         }
         else {
@@ -131,7 +143,7 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
         const seasonKey = season ?? 0;
         const cachedTitle = await models_js_1.ImdbTitleCache.findOne({
             where: { imdbId, season: seasonKey },
-            attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'updatedAt'],
+            attributes: ['titlesPt', 'titlesEn', 'year', 'episodeTitles', 'seasonEpisodeCounts', 'updatedAt'],
             raw: true
         });
         if (cachedTitle) {
@@ -146,15 +158,22 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
                 const enriched = year ? allTitles.map(t => `${t} ${year}`) : allTitles;
                 titlesCache.set(infoHash, enriched);
                 const episodeTitlesCached = cachedTitle.episodeTitles;
+                const seasonCountsCached = cachedTitle.seasonEpisodeCounts || null;
                 episodeTitlesCache.set(infoHash, episodeTitlesCached);
+                seasonEpisodeCountsCache.set(infoHash, seasonCountsCached);
                 resolveLogger.info('🗄️ TÍTULOS DO BANCO (cache DB)', {
                     infoHash,
                     imdbId,
                     season: seasonKey,
                     titles: enriched.join(', '),
-                    age: `${Math.round(ageMs / 3600000)}h`
+                    age: `${Math.round(ageMs / 3600000)}h`,
+                    seasonEpisodeCounts: seasonCountsCached ? `${Object.keys(seasonCountsCached).length} seasons` : 'AUSENTE',
                 });
-                return { titles: enriched.length > 0 ? enriched : undefined, episodeTitles: episodeTitlesCached };
+                return {
+                    titles: enriched.length > 0 ? enriched : undefined,
+                    episodeTitles: episodeTitlesCached,
+                    seasonEpisodeCounts: seasonCountsCached,
+                };
             }
             else {
                 resolveLogger.info('⏳ Cache DB expirado, atualizando da API...', { imdbId, season: seasonKey });
@@ -164,7 +183,15 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
         const tmdbData = await streamHandler.catalog.getTmdbSearchData(imdbId, season);
         const titles = tmdbData.imdbTitles?.allTitles || [];
         const year = tmdbData.imdbTitles?.year;
-        resolveLogger.debug('🔎 EPISODE_TITLES_FLOW', { imdbId, season, episodeTitles: tmdbData.imdbTitles?.episodeTitles, hasEpisodes: !!tmdbData.imdbTitles?.episodeTitles });
+        const episodeTitles = tmdbData.imdbTitles?.episodeTitles || null;
+        const seasonEpisodeCounts = tmdbData.imdbTitles?.seasonEpisodeCounts || null;
+        resolveLogger.debug('🔎 EPISODE_TITLES_FLOW', {
+            imdbId,
+            season,
+            episodeTitles: tmdbData.imdbTitles?.episodeTitles,
+            hasEpisodes: !!tmdbData.imdbTitles?.episodeTitles,
+            seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE',
+        });
         if (titles.length === 0) {
             await models_js_1.ImdbTitleCache.upsert({
                 imdbId,
@@ -175,10 +202,10 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
                 updatedAt: new Date()
             });
             titlesCache.set(infoHash, []);
-            return { titles: undefined, episodeTitles: undefined };
+            seasonEpisodeCountsCache.set(infoHash, null);
+            return { titles: undefined, episodeTitles: undefined, seasonEpisodeCounts: null };
         }
         const enriched = year ? titles.map(t => `${t} ${year}`) : titles;
-        const episodeTitles = tmdbData.imdbTitles?.episodeTitles || null;
         titlesCache.set(infoHash, enriched);
         await models_js_1.ImdbTitleCache.upsert({
             imdbId,
@@ -187,16 +214,18 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
             titlesEn: titles,
             year: year ?? null,
             episodeTitles: episodeTitles,
+            seasonEpisodeCounts: seasonEpisodeCounts,
             updatedAt: new Date()
         });
         episodeTitlesCache.set(infoHash, episodeTitles);
+        seasonEpisodeCountsCache.set(infoHash, seasonEpisodeCounts);
         resolveLogger.info('🌐 TÍTULOS DA API (TMDB) salvos no banco', {
             infoHash,
             imdbId,
             season: seasonKey,
             titles: enriched.join(', ')
         });
-        return { titles: enriched, episodeTitles };
+        return { titles: enriched, episodeTitles, seasonEpisodeCounts };
     }
     catch (error) {
         resolveLogger.error('❌ Erro ao obter títulos enriquecidos', {
@@ -204,10 +233,11 @@ async function getEnrichedTitlesForHash(infoHash, externalImdbId, externalSeason
             error: error instanceof Error ? error.message : 'Erro desconhecido'
         });
         titlesCache.set(infoHash, []);
-        return { titles: undefined, episodeTitles: undefined };
+        seasonEpisodeCountsCache.set(infoHash, null);
+        return { titles: undefined, episodeTitles: undefined, seasonEpisodeCounts: null };
     }
 }
-async function processMagnetWithTorbox(magnet, apiKey, infoHash, season, episode, type = 'movie', quality, titles, episodeTitles) {
+async function processMagnetWithTorbox(magnet, apiKey, infoHash, season, episode, type = 'movie', quality, titles, episodeTitles, seasonEpisodeCounts) {
     try {
         const hashKey = infoHash.toLowerCase();
         const pending = pendingTorrentCache.get(hashKey);
@@ -254,7 +284,7 @@ async function processMagnetWithTorbox(magnet, apiKey, infoHash, season, episode
         void gravarSeeders(infoHash, info.seeds);
         let streamLink;
         if (titles && titles.length > 0) {
-            const link = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality, info, titles, episodeTitles);
+            const link = await torboxService.getStreamLinkForTorrent(torrentId, apiKey, season, episode, quality, info, titles, episodeTitles, seasonEpisodeCounts);
             streamLink = link || undefined;
         }
         else {
@@ -342,13 +372,15 @@ const setupResolveRoutes = (app) => {
                     const enrichedTitles = await getEnrichedTitlesForHash(infoHash, imdbId, season);
                     const titles = enrichedTitles.titles;
                     const episodeTitles = enrichedTitles.episodeTitles;
+                    const seasonEpisodeCounts = enrichedTitles.seasonEpisodeCounts;
                     if (titles) {
                         resolveLogger.info('🔤 Títulos obtidos para seleção de arquivo', {
                             infoHash,
                             titles: titles.join(', '),
+                            seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE',
                         });
                     }
-                    return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles, episodeTitles);
+                    return await processMagnetWithTorbox(magnetLink, apiKey, infoHash, season, episode, type, quality, titles, episodeTitles, seasonEpisodeCounts);
                 }
                 finally {
                     emVoo.delete(dedupKey);
@@ -412,7 +444,8 @@ const setupResolveRoutes = (app) => {
             const enrichedTitles = await getEnrichedTitlesForHash(magnetHash, imdbId, season);
             const titles = enrichedTitles.titles;
             const episodeTitles = enrichedTitles.episodeTitles;
-            const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type, undefined, titles, episodeTitles);
+            const seasonEpisodeCounts = enrichedTitles.seasonEpisodeCounts;
+            const tbResult = await processMagnetWithTorbox(magnet, apiKey, magnetHash, season, episode, type, undefined, titles, episodeTitles, seasonEpisodeCounts);
             if (tbResult.success && tbResult.streamLink) {
                 res.setHeader('Access-Control-Allow-Origin', '*');
                 res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');

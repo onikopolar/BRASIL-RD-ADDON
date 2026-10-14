@@ -225,7 +225,7 @@ class TorboxService {
         this.logger.debug('buildStreamPermalink', { torrentId, fileId, url });
         return url;
     }
-    async getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode, targetQuality, cachedInfo, targetTitles, episodeTitles) {
+    async getStreamLinkForTorrent(torrentId, apiKey, targetSeason, targetEpisode, targetQuality, cachedInfo, targetTitles, episodeTitles, seasonEpisodeCounts) {
         this.logger.info('getStreamLinkForTorrent: início', {
             torrentId,
             targetSeason,
@@ -233,7 +233,8 @@ class TorboxService {
             targetQuality,
             hasCachedInfo: !!cachedInfo,
             targetTitles: targetTitles || 'não informado',
-            episodeTitles: episodeTitles ? episodeTitles.length : 'não informado'
+            episodeTitles: episodeTitles ? episodeTitles.length : 'não informado',
+            seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE'
         });
         try {
             const info = cachedInfo || await this.getTorrentInfo(torrentId, apiKey);
@@ -275,8 +276,9 @@ class TorboxService {
                     episodeTitles: statusEp,
                     namePt: epData?.namePt || '-',
                     nameEn: epData?.nameEn || '-',
+                    seasonEpisodeCounts: seasonEpisodeCounts ? `${Object.keys(seasonEpisodeCounts).length} seasons` : 'AUSENTE',
                 });
-                const episodeFiles = candidateFiles.filter(f => this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(f.name, targetSeason, targetEpisode, episodeTitles));
+                const episodeFiles = candidateFiles.filter(f => this.episodeMatcher.arquivoPertenceAoEpisodioComTitulos(f.name, targetSeason, targetEpisode, episodeTitles, seasonEpisodeCounts));
                 this.logger.info('📁 Filtro episódio', {
                     alvo: `${targetSeason}x${targetEpisode}`,
                     antes: candidateFiles.length,

@@ -28,6 +28,22 @@ class SimilarityCalculator {
         this.fuzzyCache = new CacheService_js_1.CacheService({ name: 'sim:fuzzy' });
         this.tmdbLocalCache = new CacheService_js_1.CacheService({ name: 'sim:tmdb' });
     }
+    preFiltroContem(frases, tituloCandidato) {
+        const t = (0, TechnicalWords_js_1.normalizarTexto)(tituloCandidato);
+        if (!t)
+            return { match: false, score: 0 };
+        for (const frase of frases) {
+            const fn = (0, TechnicalWords_js_1.normalizarTexto)(frase);
+            if (!fn)
+                continue;
+            const escaped = fn.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            const re = new RegExp(`(?:^|\\s)${escaped}(?:\\s|$)`);
+            if (re.test(t)) {
+                return { match: true, score: 1, fraseVencedora: frase };
+            }
+        }
+        return { match: false, score: 0 };
+    }
     compararComTitulos(titulosTmdb, tituloCandidato, threshold = SimilarityCalculator.THRESHOLD_PRE_FILTRO) {
         const { tokens: tokensCandidato } = this.tokensAnoCache(tituloCandidato);
         if (tokensCandidato.length === 0) {
@@ -111,7 +127,18 @@ class SimilarityCalculator {
         if (titulosValidos.length === 0) {
             return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
         }
-        const seqTorrent = (0, TechnicalWords_js_1.getPotentialSequelNumbers)(torrentTitle);
+        const tipoEfetivo = _torrentMetadata?.tipoConteudo ?? movieInfo.mediaType;
+        const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
+        const rangeTorrent = (0, TechnicalWords_js_1.extrairRangeEpisodios)(torrentTitle);
+        const seasonDoTitulo = rangeTorrent?.seasonStart;
+        let seqTorrent = (0, TechnicalWords_js_1.getPotentialSequelNumbers)(torrentTitle);
+        if (isSerie && seasonDoTitulo !== undefined && seasonDoTitulo > 0) {
+            const antes = seqTorrent.length;
+            seqTorrent = seqTorrent.filter(n => n !== seasonDoTitulo);
+            if (antes !== seqTorrent.length) {
+                this.logger.debug(`SEQUENCIA ignorada por ser série | "${torrentTitle.substring(0, 50)}" | removido ${seasonDoTitulo} (temporada)`);
+            }
+        }
         const tmdbDeclaraMesmoNumero = seqTorrent.length > 0
             && titulosValidos.some(t => (0, TechnicalWords_js_1.getPotentialSequelNumbers)(t).some(n => seqTorrent.includes(n)));
         let melhor = null;

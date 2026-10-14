@@ -1,3 +1,6 @@
 {
-  "hdr": true
+  "hdr": true,
+  "starck": true,
+  "bludv": false,
+  "wordpress": true
 }

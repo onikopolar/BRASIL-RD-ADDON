@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.COLLECTION_WORDS_SERIES = exports.COLLECTION_WORDS_FILMES = exports.INDICADORES_INTERNACIONAL_TORRENTS = exports.INDICADORES_BRASIL_TORRENTS = exports.BRAZILIAN_RELEASE_GROUPS = exports.INTERNATIONAL_TRACKERS = exports.INTERNATIONAL_RELEASE_GROUPS = exports.TECHNICAL_ACRONYMS = void 0;
+exports.COLLECTION_WORDS_SERIES = exports.COLLECTION_WORDS_FILMES = exports.RANGE_TEMPORADA_REGEX = exports.INDICADORES_INTERNACIONAL_TORRENTS = exports.INDICADORES_BRASIL_TORRENTS = exports.BRAZILIAN_RELEASE_GROUPS = exports.INTERNATIONAL_TRACKERS = exports.INTERNATIONAL_RELEASE_GROUPS = exports.TECHNICAL_ACRONYMS = void 0;
 exports.isTechnicalWord = isTechnicalWord;
 exports.normalizarTexto = normalizarTexto;
 exports.isInternationalReleaseGroup = isInternationalReleaseGroup;
@@ -141,6 +141,7 @@ exports.INDICADORES_INTERNACIONAL_TORRENTS = [
     'g4ris', 'rartv', 'ntb', 'bone', 'BONE', 'ION10', '10bit', 'CM', 'RDNYB', 'DCPRiP',
     'legedando', 'legedanda', 'legedados', 'legedadas',
 ];
+exports.RANGE_TEMPORADA_REGEX = /\b(\d{1,2})\s*[ªº°]?\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\s*[ªº°]?\s*temporadas?\b/i;
 exports.COLLECTION_WORDS_FILMES = new Set([
     'trilogia', 'colecao', 'coleção', 'quadrilogy', 'quadrilogia',
     'coletanea', 'franquia', 'duologia',
@@ -149,9 +150,9 @@ exports.COLLECTION_WORDS_FILMES = new Set([
     'todos os filmes', 'all movies', 'all films', 'todos filmes',
 ]);
 exports.COLLECTION_WORDS_SERIES = new Set([
-    'todas as temporadas',
-    'temporada completa', 'season pack', 'pack completo',
+    'todas as temporadas', 'season pack', 'pack completo',
     'complete series', 'full collection', 'extended collection',
+    exports.RANGE_TEMPORADA_REGEX,
 ]);
 function palavrasDeColecao(tipo) {
     if (tipo === 'series' || tipo === 'tv')
@@ -168,6 +169,11 @@ function isCollectionTitle(title, tipo) {
         return false;
     const palavras = palavrasDeColecao(tipo);
     for (const termo of palavras) {
+        if (termo instanceof RegExp) {
+            if (termo.test(normalizado))
+                return true;
+            continue;
+        }
         const termoNorm = normalizarTexto(termo);
         if (!termoNorm)
             continue;
@@ -360,6 +366,7 @@ function extrairRangeEpisodios(title) {
     const t = title
         .toLowerCase()
         .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/_/g, ' ')
         .trim();
     const sxxExx = t.match(/\bs(\d{1,2})\s*e(\d{1,3})\b/i);
     if (sxxExx) {
@@ -467,6 +474,15 @@ function extrairRangeEpisodios(title) {
             episodeEnd: parseInt(ptRangeComOrdinal[2]),
         };
     }
+    const epRangeShort = t.match(/\bep\s+(\d{1,3})\s*(?:ao?|a|ate|à|aos|e|-|–|—|~)\s*(\d{1,3})\b/i);
+    if (epRangeShort) {
+        return {
+            seasonStart: 0,
+            seasonEnd: 0,
+            episodeStart: parseInt(epRangeShort[1]),
+            episodeEnd: parseInt(epRangeShort[2]),
+        };
+    }
     const ptSingleComOrdinal = t.match(/(\d{1,3})\s*º\s*epis[oó]dio/i);
     if (ptSingleComOrdinal) {
         const ep = parseInt(ptSingleComOrdinal[1]);
@@ -475,6 +491,11 @@ function extrairRangeEpisodios(title) {
     const episodioOnly = t.match(/\bepis[oó]dio\s*(\d{1,3})\b/i);
     if (episodioOnly) {
         const ep = parseInt(episodioOnly[1]);
+        return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
+    }
+    const epSingleShort = t.match(/\bep\s*(\d{1,3})\b/i);
+    if (epSingleShort) {
+        const ep = parseInt(epSingleShort[1]);
         return { seasonStart: 0, seasonEnd: 0, episodeStart: ep, episodeEnd: ep };
     }
     const sOnly = t.match(/^s(\d{1,2})$/i);
@@ -492,7 +513,7 @@ function extrairRangeEpisodios(title) {
         const s = parseInt(xOnly[1]);
         return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };
     }
-    const ordinalRange = t.match(/\b(\d{1,2})\s*[ªº°]?\s*(?:a|ao|aos|ate|-|–|—|~)\s*(\d{1,2})\s*[ªº°]?\s*temporadas?\b/i);
+    const ordinalRange = t.match(exports.RANGE_TEMPORADA_REGEX);
     if (ordinalRange) {
         const start = parseInt(ordinalRange[1]);
         const end = parseInt(ordinalRange[2]);
@@ -508,7 +529,7 @@ function extrairRangeEpisodios(title) {
             return { seasonStart: start, seasonEnd: end, episodeStart: 0, episodeEnd: 0 };
         }
     }
-    const tempPack = t.match(/\b(\d{1,2})\s*[ªº°]?\s*temporada\b/i);
+    const tempPack = t.match(/\b(\d{1,2})\s*[ªº°a]?\s*(?:temporada|temp\.?)\b/i);
     if (tempPack) {
         const s = parseInt(tempPack[1]);
         return { seasonStart: s, seasonEnd: s, episodeStart: 0, episodeEnd: 0 };

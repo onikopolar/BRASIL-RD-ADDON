@@ -7,7 +7,7 @@ import { Logger } from '../../utils/logger.js';
 import { TorrentResult } from './torrentTypes.js';
 import { QualityDetector } from '../../lib/qualityDetector.js';
 import { analisarMagnet } from '../../magnet/magnetHelper.js';
-import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, calcularTokensRuido, limparPorRaridade, INDICADORES_INTERNACIONAL_TORRENTS, TipoConteudo } from '../../titulos/TechnicalWords.js';
+import { extrairRangeEpisodios, normalizarTexto, isCollectionTitle, temporadaAlvoNoRange, INDICADORES_INTERNACIONAL_TORRENTS, TipoConteudo } from '../../titulos/TechnicalWords.js';
 import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const LEGENDADO_REGEX = new RegExp(
@@ -59,27 +59,31 @@ const AXIOS_OPTS = {
   },
 };
 
-// IDs de categoria do WordPress do BLUDV — descobertos via /wp-json/wp/v2/categories?slug=
 const CAT_FILMES = 92;
 const CAT_SERIES = 10;
 
+// Marcador de posição única por elemento. Sem ele, dois <strong> idênticos teriam a mesma string em indexOf.
+const LYRA_MARK = 'data-lyra-h';
+
+// Keywords de seção procuradas no texto do HTML. Sem dependência de tag.
+const SECTION_KEYWORDS = /\b(dual|dublado|dublada|dublagem|legendado|legendada|nacional)\b/gi;
+
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
+export type Section = { type: SectionType; start: number; end: number };
 
-export type Section = {
-  type: SectionType;
-  start: number;
-  end: number;
-};
-
-export type LinkContext = {
-  linkText: string;
-  parentText: string;
-  fullContextText: string;
+// Tree delimitada do magnet + contexto acima dele dentro da seção (texto entre magnet anterior e este).
+export type MagnetTree = {
+  proprio: string;
+  filhos: string[];
+  imgAlt: string | null;
+  paiTexto: string;
+  irmaos: string[];
+  contextoAcima: string;
 };
 
 export type PostItem = { title: string; url: string };
-export type ProtectorLink = { url: string; secao: SectionType } & LinkContext;
-export type ExtractedMagnet = { magnet: string; link: LinkContext; secao: SectionType };
+export type ExtractedMagnet = { magnet: string; tree: MagnetTree; secao: SectionType };
+export type ProtectorLink = { url: string; tree: MagnetTree; secao: SectionType };
 
 export type FrasesBusca = { frases: Set<string> };
 
@@ -90,6 +94,20 @@ export type PostMetadata = {
   originalTitle?: string;
   year?: number;
   years?: number[];
+};
+
+export type DiagnosticoSecao = {
+  tipo: SectionType;
+  motivo: string;
+  flags: {
+    vazio: boolean;
+    ruido: boolean;
+    comprido: boolean;
+    dual: boolean;
+    dublado: boolean;
+    nacional: boolean;
+    legendado: boolean;
+  };
 };
 
 export { BASE_URL, PROVIDER, AXIOS_OPTS };
@@ -111,27 +129,11 @@ function truncar(s: string, n = 60): string {
   return s.length > n ? s.substring(0, n) + '…' : s;
 }
 
-// Converte o mediaType do catalog no ID de categoria do BLUDV — o WordPress filtra server-side via &cat=.
-// 'tv' é o rótulo do TMDB pra série — tratamos igual a 'series'. Sem tipo declarado devolve null.
 function mapearCategoriaBludv(mediaType?: TipoConteudo): number | null {
   if (mediaType === 'movie') return CAT_FILMES;
   if (mediaType === 'series' || mediaType === 'tv') return CAT_SERIES;
   return null;
 }
-
-export type DiagnosticoSecao = {
-  tipo: SectionType;
-  motivo: string;
-  flags: {
-    vazio: boolean;
-    ruido: boolean;
-    comprido: boolean;
-    dual: boolean;
-    dublado: boolean;
-    nacional: boolean;
-    legendado: boolean;
-  };
-};
 
 export class BludvScraper {
   public readonly qualityDetector: QualityDetector;
@@ -236,13 +238,10 @@ export class BludvScraper {
       items.push({ title: text, url: fullUrl });
     });
 
-    const tokensRuido = calcularTokensRuido(items.map(i => i.title));
-
     const filtrados = items
-      .filter(item => this.postRelevante(item, targetSeason, frasesBusca, tokensRuido, mediaType))
+      .filter(item => this.postRelevante(item, targetSeason, frasesBusca, mediaType))
       .slice(0, 5);
 
-    // Uma linha por query — categoria aplicada, candidatos extraídos e quantos passaram no filtro.
     logger.debug(
       `[BLUDV] "${truncar(query, 40)}" | cat=${catId ?? 'all'} candidatos=${items.length} filtrados=${filtrados.length}`
     );
@@ -250,11 +249,11 @@ export class BludvScraper {
     return filtrados;
   }
 
+  // Pré-filtro barato: substring com boundary, mesma função usada pelo WordPress.
   postRelevante(
     item: PostItem,
     targetSeason: number | undefined,
     frasesBusca: FrasesBusca,
-    tokensRuido: Set<string>,
     mediaType?: TipoConteudo
   ): boolean {
     const lowerTitle = item.title.toLowerCase();
@@ -271,24 +270,19 @@ export class BludvScraper {
       if (!temporadaAlvoNoRange(range, targetSeason)) return false;
     }
 
-    const tituloLimpo = limparPorRaridade(item.title, tokensRuido);
-    const resultado = this.similarity.compararComTitulos([...frasesBusca.frases], tituloLimpo);
+    const resultado = this.similarity.preFiltroContem([...frasesBusca.frases], item.title);
 
-    // Só FILME usa collection no pré-filtro.
-    // Série: "1ª Temporada Completa" é só uma temporada, não pack.
-    // Deixar collection ativo em série aceitava spin-off (Dragon Ball Super).
-    const ehSerie = mediaType === 'series' || mediaType === 'tv';
-    const isCollection = !ehSerie && isCollectionTitle(item.title, mediaType);
+    const isCollection = isCollectionTitle(item.title, mediaType);
 
     if (!resultado.match && !isCollection) {
-      logger.debug(`[BLUDV] ignorado (${resultado.score.toFixed(2)} ${resultado.nivel}): "${truncar(item.title, 55)}"`);
+      logger.debug(`[BLUDV] ignorado`, { score: resultado.score.toFixed(2), titulo: item.title.substring(0, 60) });
       return false;
     }
 
     if (!resultado.match && isCollection) {
-      logger.debug(`[BLUDV] aceito coleção: "${truncar(item.title, 60)}" mediaType=${mediaType ?? '-'}`);
+      logger.debug(`[BLUDV] aceito coleção`, { titulo: item.title.substring(0, 60), mediaType: mediaType ?? '-' });
     } else {
-      logger.debug(`[BLUDV] aceito (${resultado.nivel} ${resultado.score.toFixed(2)}): "${truncar(item.title, 60)}"`);
+      logger.debug(`[BLUDV] aceito`, { score: resultado.score.toFixed(2), frase: resultado.fraseVencedora || '-', titulo: item.title.substring(0, 60) });
     }
 
     return true;
@@ -304,11 +298,19 @@ export class BludvScraper {
     const res = await axios.get(postUrl, AXIOS_OPTS);
     const $ = cheerio.load(res.data);
 
-    const contentHtml = $('.content').html() || $('body').html() || '';
-    if (!contentHtml) {
+    const $content = $('.content');
+    if (!$content.length) {
       logger.debug(`[BLUDV] post sem .content: ${postUrl}`);
       return [];
     }
+
+    // Marca cada elemento com índice único — sem isso, dois <strong> idênticos teriam a mesma string em indexOf.
+    let counter = 0;
+    $content.find('*').each((_: number, el: any) => {
+      $(el).attr(LYRA_MARK, String(counter++));
+    });
+    const contentHtml = $content.html() || '';
+    logger.debug(`[BLUDV] marcados=${counter} contentLen=${contentHtml.length}`);
 
     const postTitle =
       $('h1').first().text().trim() ||
@@ -330,20 +332,23 @@ export class BludvScraper {
     }
 
     const metadata = this.extractPostMetadata($);
-    const sections = this.findSections($, contentHtml, postTitle);
+    const sections = this.findSections($, contentHtml);
 
-    logger.debug(`[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ')}`);
+    logger.debug(`[BLUDV] seções | ${sections.map(s => `${s.type}[${s.start}-${s.end}]`).join(' ') || '(nenhuma)'}`);
 
     const temDual = sections.some(s => s.type === 'DUAL');
 
-    // Formato legado: post sem seções, com um único magnet e o idioma declarado só no título/metadata.
+    // Formato legado: post sem seções, com idioma declarado só no título/metadata.
     const tituloDeclaraDual = /\bdual\b|\bdublado\b|\bdublada\b|\bnacional\b/i.test(postTitle);
     const metadataDeclaraDual = !!metadata.language
       && /dual|dublado|dublagem|nacional|portugu[eê]s\s*\|\s*ingl[eê]s/i.test(metadata.language);
     const usarFallbackDual = !temDual && (tituloDeclaraDual || metadataDeclaraDual);
 
     if (!temDual && !usarFallbackDual) {
-      this.logarDiagnosticoSemDual($, contentHtml, postTitle, metadata);
+      logger.debug(
+        `[BLUDV] SEM_DUAL | magnetAnchors=${$('a[href^="magnet:"]').length} ` +
+        `lang="${metadata.language || '-'}" original="${truncar(metadata.originalTitle || '-', 40)}"`
+      );
       return [];
     }
 
@@ -358,11 +363,11 @@ export class BludvScraper {
       ? sections
       : [{ type: 'DUAL', start: 0, end: contentHtml.length }];
 
-    const directMagnets = this.extractDirectMagnets($, contentHtml, sectionsEfetivas, postTitle);
-    const protectorLinks = this.extractProtectorLinks($, contentHtml, sectionsEfetivas, postTitle);
+    const directMagnets = this.extractDirectMagnets($, contentHtml, sectionsEfetivas);
+    const protectorLinks = this.extractProtectorLinks($, contentHtml, sectionsEfetivas);
 
-    const dirDual = directMagnets.filter(m => m.secao === 'DUAL').length;
-    const proDual = protectorLinks.filter(l => l.secao === 'DUAL').length;
+    const dirDual = directMagnets.length;
+    const proDual = protectorLinks.length;
 
     const protectorMagnets = await this.resolverMagnetsDoProtetor(protectorLinks);
     const allMagnets = dedupByMagnet([...directMagnets, ...protectorMagnets]);
@@ -372,38 +377,38 @@ export class BludvScraper {
       return [];
     }
 
+    const sampleSize = Math.min(3, allMagnets.length);
+    for (let i = 0; i < sampleSize; i++) {
+      const t = allMagnets[i].tree;
+      logger.debug(
+        `[BLUDV] tree #${i + 1} | proprio="${truncar(t.proprio, 30)}" | img="${t.imgAlt || '-'}" | ` +
+        `contextoAcima="${truncar(t.contextoAcima, 45)}"`
+      );
+    }
+
     const analyzedMagnets = await Promise.all(
-      allMagnets.map(async ({ magnet, link, secao }) => {
+      allMagnets.map(async ({ magnet, tree, secao }) => {
         let canonicalName: string | undefined;
         try {
           const dados = await analisarMagnet(magnet);
           canonicalName = dados?.nome || undefined;
         } catch { }
-        return { magnet, link, canonicalName, secao };
+        return { magnet, tree, canonicalName, secao };
       })
     );
 
     const results: TorrentResult[] = [];
-    const magnetsVistos = new Set<string>();
     const cleanTitleFromPost = this.extractTitleFromPostTitle(postTitle);
 
-    for (const { magnet, link, canonicalName, secao } of analyzedMagnets) {
-      if (magnetsVistos.has(magnet)) continue;
-      magnetsVistos.add(magnet);
-
-      const { qualidade: quality } = this.resolverQualidadeComFonte(
-        canonicalName,
-        link,
-        postTitle,
-        metadata.quality
-      );
-      const { episode, episodeRangeText } = this.resolverEpisodio(canonicalName, link);
+    for (const { magnet, tree, canonicalName, secao } of analyzedMagnets) {
+      const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidade(tree, canonicalName, metadata.quality, postTitle);
+      const { episode, episodeRangeText } = this.resolverEpisodio(tree, canonicalName);
       const language = this.resolverIdioma(secao, metadata.language);
 
-      // dn de coleção é mais específico que o título original do metadata — prioriza ele.
+      // dn só vira título quando é coleção — em episódio, título sempre vem do metadata do post.
       const dnColecao = canonicalName && isCollectionTitle(canonicalName, mediaType) ? canonicalName : null;
       const originalTitleFinal = dnColecao || metadata.originalTitle || cleanTitleFromPost;
-      const displayTitle = originalTitleFinal || canonicalName || postTitle;
+      const displayTitle = originalTitleFinal || postTitle;
 
       const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
         originalTitleFinal || postTitle,
@@ -412,13 +417,17 @@ export class BludvScraper {
       );
 
       const size = metadata.size
-        || this.extrairTamanhoDoContexto(link.fullContextText)
-        || this.extrairTamanhoDoContexto(link.parentText)
+        || this.extrairTamanhoDoContexto(tree.contextoAcima)
         || 'Desconhecido';
 
       const cleanedHtmlTitle = episodeRangeText
         ? `${episodeRangeText}: ${quality}`
-        : this.cleanHtmlTitle(link.fullContextText || link.linkText, link.linkText, quality);
+        : undefined;
+
+      logger.debug(
+        `[BLUDV] magnet | qual=${quality}(${fonteQualidade}) | ep=${episode ?? '-'} | ` +
+        `ctx="${truncar(tree.contextoAcima, 40)}"`
+      );
 
       results.push({
         title: this.cleanTitle(displayTitle),
@@ -450,93 +459,128 @@ export class BludvScraper {
     return results;
   }
 
-  // Diagnóstico quando o post cai fora por falta de DUAL e sem fallback possível.
-  private logarDiagnosticoSemDual($: any, contentHtml: string, postTitle: string, metadata: PostMetadata): void {
-    const strongs = $('.content strong, .content b').toArray();
-    const totalStrongs = strongs.length;
-    const totalMagnetAnchors = $('a[href^="magnet:"]').length;
-    const totalProtetores = $('a[href*="systemads1.com"]').length;
+  // Procura strings de seção no HTML; cada match passa por r1 (descendente) e r2 (ancestral próximo) — as duas logam veredito.
+  findSections($: any, contentHtml: string): Section[] {
+    const encontrados = new Map<string, { posHtml: number; texto: string }>();
+    const textNodes = />([^<]+)</g;
+    let m: RegExpExecArray | null;
 
-    logger.debug(
-      `[BLUDV] SEM_DUAL | "${truncar(postTitle, 60)}" | ` +
-      `strongs=${totalStrongs} magnetAnchors=${totalMagnetAnchors} protetores=${totalProtetores} | ` +
-      `lang="${metadata.language || '-'}" quality="${metadata.quality || '-'}" ` +
-      `original="${truncar(metadata.originalTitle || '-', 40)}"`
-    );
+    while ((m = textNodes.exec(contentHtml)) !== null) {
+      const texto = m[1];
+      const basePos = m.index + 1;
 
-    const amostra = strongs.slice(0, 8).map((el: any) => {
-      const texto = $(el).text().trim();
-      if (!texto) return '(vazio)';
-      const diag = this.diagnosticarSecao(texto);
-      return `"${truncar(texto, 30)}"→${diag.tipo}:${diag.motivo}`;
-    });
-    logger.debug(`[BLUDV] SEM_DUAL amostra strongs | ${amostra.join(' | ') || '(nenhum)'}`);
-  }
+      SECTION_KEYWORDS.lastIndex = 0;
+      let km: RegExpExecArray | null;
+      while ((km = SECTION_KEYWORDS.exec(texto)) !== null) {
+        const posHtml = basePos + km.index;
 
-  private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
-    if (!texto) return undefined;
-    const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
-    return m ? m[0] : undefined;
-  }
+        const ultimaMarca = contentHtml.lastIndexOf(`${LYRA_MARK}="`, posHtml);
+        if (ultimaMarca === -1) continue;
+        const resto = contentHtml.substring(ultimaMarca + LYRA_MARK.length + 2);
+        const fimAspas = resto.indexOf('"');
+        if (fimAspas === -1) continue;
+        const elIdx = resto.substring(0, fimAspas);
 
-  private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
-    const anos = years && years.length > 0
-      ? (years.length === 1
-        ? `${years[0]}`
-        : `${years[0]}-${years[years.length - 1]}`)
-      : null;
+        if (!encontrados.has(elIdx)) {
+          encontrados.set(elIdx, { posHtml, texto: texto.trim() });
+        }
+      }
+    }
 
-    return [base, anos, quality].filter(Boolean).join(' ').trim();
-  }
+    logger.debug(`[BLUDV] findSections matches únicos=${encontrados.size}`);
 
-  findSections($: any, contentHtml: string, postTitle?: string): Section[] {
-    const strongEls = $('.content strong, .content b').toArray();
-    const headers: { pos: number; type: 'DUAL' | 'LEGENDADO' }[] = [];
-    const descartados: Array<{ texto: string; tipo: SectionType; motivo: string }> = [];
+    const candidatos: Array<{ tipo: 'DUAL' | 'LEGENDADO'; pos: number; texto: string }> = [];
+    const descartados: Array<{ texto: string; motivo: string }> = [];
 
-    for (const el of strongEls) {
-      const texto = $(el).text().trim();
-      if (!texto) continue;
+    for (const [elIdx, info] of encontrados) {
+      const $el = $(`[${LYRA_MARK}="${elIdx}"]`);
+      if (!$el.length) continue;
 
-      const diag = this.diagnosticarSecao(texto);
+      const tag = ($el.prop('tagName') || '').toLowerCase();
+      const textoEl = $el.text().replace(/\s+/g, ' ').trim();
+      const textoCurto = truncar(textoEl, 45);
 
-      if (diag.tipo === 'NONE') {
-        const potencial = texto.length <= 60 && (diag.flags.dual || diag.flags.dublado || diag.flags.nacional || diag.flags.legendado || !diag.flags.ruido);
-        if (potencial) descartados.push({ texto, tipo: diag.tipo, motivo: diag.motivo });
+      // Cada candidato loga o resultado das duas regras + veredito final.
+      const r1MagnetDesc = $el.find('a[href^="magnet:"]').length;
+      const r1 = r1MagnetDesc > 0 ? 'REJEITA' : 'passa';
+
+      let r2 = 'passa';
+      let r2Detalhe = 'sem-ancestral-com-magnet';
+      let $pai = $el.parent();
+      for (let nivel = 0; nivel < 3 && $pai.length; nivel++) {
+        const qtd = $pai.children('a[href^="magnet:"]').length;
+        if (qtd > 0) {
+          r2 = 'REJEITA';
+          const tagPai = ($pai.prop('tagName') || '').toLowerCase();
+          r2Detalhe = `n${nivel + 1}=${tagPai}(${qtd}magnet)`;
+          break;
+        }
+        $pai = $pai.parent();
+      }
+
+      logger.debug(
+        `   [check] <${tag}> "${textoCurto}" | r1=${r1}(desc=${r1MagnetDesc}) | r2=${r2}(${r2Detalhe})`
+      );
+
+      if (tag === 'script' || tag === 'style') {
+        descartados.push({ texto: textoEl, motivo: `tag-${tag}` });
+        continue;
+      }
+      if (!textoEl) continue;
+
+      if (r1MagnetDesc > 0) {
+        descartados.push({ texto: textoEl, motivo: 'r1:magnet-descendente' });
+        continue;
+      }
+      if (r2 === 'REJEITA') {
+        descartados.push({ texto: textoEl, motivo: `r2:${r2Detalhe}` });
         continue;
       }
 
-      const pos = contentHtml.indexOf($(el).toString());
-      if (pos === -1) continue;
+      const diag = this.diagnosticarSecao(textoEl);
+      if (diag.tipo === 'NONE') {
+        descartados.push({ texto: textoEl, motivo: diag.motivo });
+        continue;
+      }
 
-      headers.push({ pos, type: diag.tipo });
+      const pos = contentHtml.indexOf($el.toString());
+      if (pos === -1) {
+        descartados.push({ texto: textoEl, motivo: 'pos-nao-encontrada' });
+        continue;
+      }
+
+      candidatos.push({ tipo: diag.tipo, pos, texto: textoEl });
     }
 
-    headers.sort((a, b) => a.pos - b.pos);
-
-    if (headers.length === 0 && strongEls.length > 0) {
-      const amostra = descartados.slice(0, 8).map(d => `"${truncar(d.texto, 30)}"→${d.tipo}:${d.motivo}`);
-      logger.debug(
-        `[BLUDV] sem headers | strongs=${strongEls.length} descartados=${descartados.length} | ` +
-        `amostra: ${amostra.join(' | ') || '(nenhum relevante)'}`
-      );
+    logger.debug(`[BLUDV] findSections candidatos=${candidatos.length} descartados=${descartados.length}`);
+    for (const d of descartados.slice(0, 10)) {
+      logger.debug(`   [descarte] "${truncar(d.texto, 40)}" → ${d.motivo}`);
     }
 
-    const contentLength = contentHtml.length;
+    candidatos.sort((a, b) => a.pos - b.pos);
+
+    if (candidatos.length === 0) {
+      return [{ type: 'NONE', start: 0, end: contentHtml.length }];
+    }
+
     const sections: Section[] = [];
-
-    if (headers.length === 0) {
-      return [{ type: 'NONE', start: 0, end: contentLength }];
+    if (candidatos[0].pos > 0) {
+      sections.push({ type: 'NONE', start: 0, end: candidatos[0].pos });
     }
 
-    if (headers[0].pos > 0) {
-      sections.push({ type: 'NONE', start: 0, end: headers[0].pos });
+    for (let i = 0; i < candidatos.length; i++) {
+      const c = candidatos[i];
+      const prox = candidatos[i + 1];
+      sections.push({
+        type: c.tipo,
+        start: c.pos,
+        end: prox ? prox.pos : contentHtml.length,
+      });
     }
 
-    for (let i = 0; i < headers.length; i++) {
-      const start = headers[i].pos;
-      const end = i + 1 < headers.length ? headers[i + 1].pos : contentLength;
-      sections.push({ type: headers[i].type, start, end });
+    logger.debug(`[BLUDV] findSections secoes=${sections.length}`);
+    for (const s of sections) {
+      logger.debug(`   [secao] ${s.type} [${s.start}..${s.end}] (len=${s.end - s.start})`);
     }
 
     return sections;
@@ -553,7 +597,6 @@ export class BludvScraper {
     return this.diagnosticarSecao(text).tipo;
   }
 
-  // Igual ao detectSectionType, mas devolve o motivo da classificação. Usado só nos logs.
   private diagnosticarSecao(text: string): DiagnosticoSecao {
     const t = normalizarTexto(text).trim();
 
@@ -591,22 +634,72 @@ export class BludvScraper {
     return { tipo: 'NONE', motivo: 'sem-indicador', flags };
   }
 
-  extractDirectMagnets($: any, contentHtml: string, sections: Section[], postTitle?: string): ExtractedMagnet[] {
-    const resultados: ExtractedMagnet[] = [];
+  private extrairTextoDeHtml(html: string): string {
+    return html
+      .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
+      .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, ' ')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/gi, ' ')
+      .replace(/&amp;/gi, '&')
+      .replace(/&lt;/gi, '<')
+      .replace(/&gt;/gi, '>')
+      .replace(/&quot;/gi, '"')
+      .replace(/&#0?39;|&apos;/gi, "'")
+      .replace(/\s+/g, ' ')
+      .trim();
+  }
+
+  // Tree delimitada do magnet + contexto acima (texto entre magnet anterior e este, dentro da seção).
+  extrairTreeDoMagnet($: any, el: any, contextoAcima = ''): MagnetTree {
+    const $el = $(el);
+    const proprio = $el.text().trim().replace(/\s+/g, ' ');
+
+    const filhos: string[] = [];
+    $el.find('strong, b, span').each((_: number, child: any) => {
+      const t = $(child).text().trim().replace(/\s+/g, ' ');
+      if (t && t !== proprio) filhos.push(t);
+    });
+
+    const $img = $el.find('img').first();
+    const imgAlt = ($img.attr('alt') || $img.attr('title') || '').trim() || null;
+
+    const $pai = $el.parent();
+    const $paiClone = $pai.clone();
+    $paiClone.find('a').remove();
+    const paiTexto = $paiClone.text().trim().replace(/\s+/g, ' ');
+
+    const irmaos: string[] = [];
+    $pai.children('a').each((_: number, irmao: any) => {
+      if (irmao === el) return;
+      const t = $(irmao).text().trim().replace(/\s+/g, ' ');
+      if (t) irmaos.push(t);
+    });
+
+    return { proprio, filhos, imgAlt, paiTexto, irmaos, contextoAcima };
+  }
+
+  // Coleta magnets, agrupa por seção, ordena por posição e calcula o contexto acima de cada um (entre magnet anterior e este).
+  extractDirectMagnets($: any, contentHtml: string, sections: Section[]): ExtractedMagnet[] {
+    const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
     const stats: Record<SectionType, number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
 
-    const centerSpanCache = new Map<any, string>();
-    for (const centerEl of $('center').toArray()) {
-      centerSpanCache.set(centerEl, $(centerEl).find('span').first().text().trim());
-    }
+    type Candidato = {
+      el: any;
+      magnet: string;
+      pos: number;
+      htmlLen: number;
+      secao: SectionType;
+      section: Section | null;
+    };
 
-    const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
+    const candidatos: Candidato[] = [];
 
     for (const el of allMagnetAnchors) {
       const magnet = $(el).attr('href')?.trim();
       if (!magnet) continue;
 
-      const pos = contentHtml.indexOf($(el).toString());
+      const htmlStr = $(el).toString();
+      const pos = contentHtml.indexOf(htmlStr);
       if (pos === -1) {
         stats.NONE++;
         continue;
@@ -616,21 +709,40 @@ export class BludvScraper {
       const secao: SectionType = section?.type ?? 'NONE';
       stats[secao]++;
 
-      if (secao !== 'DUAL') continue;
+      candidatos.push({ el, magnet, pos, htmlLen: htmlStr.length, secao, section });
+    }
 
-      const $el = $(el);
-      const closestCenter = $el.closest('center').get(0);
-      const spanText = closestCenter ? (centerSpanCache.get(closestCenter) ?? '') : '';
-      const ctx = this.buildLinkContext($, el);
+    const contextoPorEl = new Map<any, string>();
 
+    const porSecaoDual = new Map<Section, Candidato[]>();
+    for (const c of candidatos) {
+      if (c.secao !== 'DUAL' || !c.section) continue;
+      if (!porSecaoDual.has(c.section)) porSecaoDual.set(c.section, []);
+      porSecaoDual.get(c.section)!.push(c);
+    }
+
+    for (const [section, mags] of porSecaoDual) {
+      mags.sort((a, b) => a.pos - b.pos);
+      let prevFim = section.start;
+      for (const mag of mags) {
+        if (mag.pos > prevFim) {
+          const trecho = contentHtml.substring(prevFim, mag.pos);
+          contextoPorEl.set(mag.el, this.extrairTextoDeHtml(trecho));
+        } else {
+          contextoPorEl.set(mag.el, '');
+        }
+        prevFim = mag.pos + mag.htmlLen;
+      }
+    }
+
+    const resultados: ExtractedMagnet[] = [];
+    for (const c of candidatos) {
+      if (c.secao !== 'DUAL') continue;
+      const contextoAcima = contextoPorEl.get(c.el) || '';
       resultados.push({
-        magnet,
-        link: {
-          linkText: ctx.linkText,
-          parentText: ctx.parentText,
-          fullContextText: spanText || ctx.fullContextText,
-        },
-        secao,
+        magnet: c.magnet,
+        tree: this.extrairTreeDoMagnet($, c.el, contextoAcima),
+        secao: c.secao,
       });
     }
 
@@ -643,7 +755,7 @@ export class BludvScraper {
     return resultados;
   }
 
-  extractProtectorLinks($: any, contentHtml: string, sections: Section[], postTitle?: string): ProtectorLink[] {
+  extractProtectorLinks($: any, contentHtml: string, sections: Section[]): ProtectorLink[] {
     const allLinks = $('a[href*="systemads1.com"]').toArray();
     if (!allLinks.length) return [];
 
@@ -665,8 +777,8 @@ export class BludvScraper {
 
       result.push({
         url: $(el).attr('href') as string,
+        tree: this.extrairTreeDoMagnet($, el),
         secao,
-        ...this.buildLinkContext($, el),
       });
     }
 
@@ -685,15 +797,7 @@ export class BludvScraper {
         batch.map(async (link) => {
           const magnet = await this.extractMagnetFromProtector(link.url);
           if (!magnet) return null;
-          return {
-            magnet,
-            link: {
-              linkText: link.linkText,
-              parentText: link.parentText,
-              fullContextText: link.fullContextText,
-            },
-            secao: link.secao,
-          } as ExtractedMagnet;
+          return { magnet, tree: link.tree, secao: link.secao } as ExtractedMagnet;
         })
       );
       for (const r of batchResults) {
@@ -718,30 +822,43 @@ export class BludvScraper {
     return metaLanguage;
   }
 
-  private resolverQualidadeComFonte(
+  // Qualidade: contexto acima do magnet (dentro da seção) > texto próprio > img > filhos > pai > dn > metadata > post title.
+  resolverQualidade(
+    tree: MagnetTree,
     canonicalName: string | undefined,
-    link: LinkContext,
-    postTitle: string,
-    metadataQuality?: string
+    metadataQuality?: string,
+    postTitle?: string
   ): { qualidade: string; fonte: string } {
+    if (tree.contextoAcima) {
+      const q = this.qualityDetector.extractBestQuality(tree.contextoAcima);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') {
+        return { qualidade: q, fonte: 'contextoAcima' };
+      }
+    }
+
+    if (tree.proprio) {
+      const q = this.qualityDetector.extractBestQuality(tree.proprio);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'proprio' };
+    }
+
+    if (tree.imgAlt) {
+      const q = this.qualityDetector.extractBestQuality(tree.imgAlt);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'imgAlt' };
+    }
+
+    for (const filho of tree.filhos) {
+      const q = this.qualityDetector.extractBestQuality(filho);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'filhos' };
+    }
+
+    if (tree.paiTexto) {
+      const q = this.qualityDetector.extractBestQuality(tree.paiTexto);
+      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'paiTexto' };
+    }
+
     if (canonicalName) {
       const q = this.qualityDetector.extractBestQuality(canonicalName);
       if (q && this.qualityDetector.isValidQuality(q)) return { qualidade: q, fonte: 'canonicalName' };
-    }
-
-    if (link.fullContextText) {
-      const q = this.qualityDetector.extractBestQuality(link.fullContextText);
-      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'fullContextText' };
-    }
-
-    if (link.linkText) {
-      const q = this.qualityDetector.extractBestQuality(link.linkText);
-      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'linkText' };
-    }
-
-    if (link.parentText) {
-      const q = this.qualityDetector.extractBestQuality(link.parentText);
-      if (q && this.qualityDetector.isValidQuality(q) && q !== 'HD') return { qualidade: q, fonte: 'parentText' };
     }
 
     if (metadataQuality) {
@@ -757,32 +874,53 @@ export class BludvScraper {
     return { qualidade: 'HD', fonte: 'fallback' };
   }
 
-  resolverQualidade(
-    canonicalName: string | undefined,
-    link: LinkContext,
-    postTitle: string,
-    metadataQuality?: string
-  ): string {
-    return this.resolverQualidadeComFonte(canonicalName, link, postTitle, metadataQuality).qualidade;
-  }
-
+  // Episódio: texto próprio do <a> > filhos > contexto acima > irmãos > dn.
   resolverEpisodio(
-    canonicalName: string | undefined,
-    link: LinkContext
+    tree: MagnetTree,
+    canonicalName: string | undefined
   ): { episode?: number; episodeRangeText?: string } {
-    if (canonicalName) {
-      const r = this.formatarRange(extrairRangeEpisodios(canonicalName));
+    const r1 = this.formatarRange(extrairRangeEpisodios(tree.proprio));
+    if (r1) return r1;
+
+    for (const filho of tree.filhos) {
+      const r = this.formatarRange(extrairRangeEpisodios(filho));
       if (r) return r;
     }
 
-    const contexto = link.fullContextText || link.linkText;
-    const r = this.formatarRange(extrairRangeEpisodios(contexto));
-    if (r) return r;
-
-    const epMatch = contexto.match(/EPISÓDIO\s*(\d+)/i);
+    const epMatch = (tree.proprio + ' ' + tree.filhos.join(' ')).match(/EPIS[OÓ]DIO\s*(\d+)/i);
     if (epMatch) {
       const ep = parseInt(epMatch[1], 10);
       return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+    }
+
+    if (tree.contextoAcima) {
+      const rCtx = this.formatarRange(extrairRangeEpisodios(tree.contextoAcima));
+      if (rCtx) return rCtx;
+      const epCtx = tree.contextoAcima.match(/EPIS[OÓ]DIO\s*(\d+)/i);
+      if (epCtx) {
+        const ep = parseInt(epCtx[1], 10);
+        return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+      }
+    }
+
+    if (tree.paiTexto) {
+      const r4 = this.formatarRange(extrairRangeEpisodios(tree.paiTexto));
+      if (r4) return r4;
+    }
+
+    for (const ir of tree.irmaos) {
+      const r = this.formatarRange(extrairRangeEpisodios(ir));
+      if (r) return r;
+      const irMatch = ir.match(/EPIS[OÓ]DIO\s*(\d+)/i);
+      if (irMatch) {
+        const ep = parseInt(irMatch[1], 10);
+        return { episode: ep, episodeRangeText: `Episódio ${pad2(ep)}` };
+      }
+    }
+
+    if (canonicalName) {
+      const r6 = this.formatarRange(extrairRangeEpisodios(canonicalName));
+      if (r6) return r6;
     }
 
     return {};
@@ -893,15 +1031,6 @@ export class BludvScraper {
     };
   }
 
-  buildLinkContext($: any, el: any): LinkContext {
-    const $el = $(el);
-    return {
-      linkText: $el.text().trim(),
-      parentText: $el.parent().text().trim(),
-      fullContextText: this.getFullContextText($el),
-    };
-  }
-
   async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
     try {
       const res = await axios.get(protectorUrl, { ...AXIOS_OPTS, timeout: 8000, maxRedirects: 5 });
@@ -913,48 +1042,20 @@ export class BludvScraper {
     }
   }
 
-  getFullContextText($el: any): string {
-    const prevSpan = $el.parent().prev('span');
-    if (prevSpan.length) {
-      const text = prevSpan.text().trim();
-      if (text) return text;
-    }
-
-    let current = $el.parent();
-    for (let depth = 0; depth < 4; depth++) {
-      const text = current.text().trim();
-      if (text.length > 10) {
-        const matches = text.match(/\b(2160p|1080p|720p|480p|4K|HD)\b/gi);
-        if (matches && matches.length === 1) return text;
-      }
-      current = current.parent();
-    }
-
-    return $el.parent().text().trim();
+  private extrairTamanhoDoContexto(texto: string | undefined): string | undefined {
+    if (!texto) return undefined;
+    const m = texto.match(/([\d.,]+)\s*(GB|MB|KB)\b/i);
+    return m ? m[0] : undefined;
   }
 
-  cleanHtmlTitle(contextText: string, linkText: string, qualityOverride?: string | null): string {
-    const epPatterns = [
-      /EPIS[OÓ]DIO\s+\d{1,3}\s+AO?\s+\d{1,3}/i,
-      /EPIS[OÓ]DIO\s+\d{1,3}/i,
-      /\bS\d{1,2}\s*E\d{1,3}/i,
-      /\bE\d{1,3}/i
-    ];
+  private sintetizarCanonicalName(base: string, years: number[] | undefined, quality: string): string {
+    const anos = years && years.length > 0
+      ? (years.length === 1
+        ? `${years[0]}`
+        : `${years[0]}-${years[years.length - 1]}`)
+      : null;
 
-    let episode = '';
-    for (const pattern of epPatterns) {
-      const match = contextText.match(pattern);
-      if (match) { episode = match[0]; break; }
-    }
-
-    if (!episode) return '';
-
-    let quality = qualityOverride || null;
-    if (!quality) {
-      quality = this.qualityDetector.extractBestQuality(linkText) || this.qualityDetector.extractBestQuality(contextText);
-    }
-
-    return quality ? `${episode}: ${quality}` : episode;
+    return [base, anos, quality].filter(Boolean).join(' ').trim();
   }
 
   cleanTitle(title: string): string {

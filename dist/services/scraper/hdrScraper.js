@@ -36,10 +36,19 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.similarity = exports.sessaoCache = exports.SESSION_TTL = exports.axiosConfig = exports.BROWSER_HEADERS = exports.HDR_BASE = void 0;
-exports.extrairCookies = extrairCookies;
-exports.obterSessao = obterSessao;
-exports.limparSessao = limparSessao;
+exports.similarity = exports.BREAKER_COOLDOWN_MS = exports.BREAKER_LIMITE_ERROS = exports.BREAKER_JANELA_MS = exports.NEGATIVE_MAX_ENTRIES = exports.NEGATIVE_DEFAULT_TTL_MS = exports.axiosConfig = exports.BROWSER_HEADERS = exports.HDR_BASE = void 0;
+exports.negativeCacheKey = negativeCacheKey;
+exports.negativeCacheIsBlocked = negativeCacheIsBlocked;
+exports.negativeCacheMark = negativeCacheMark;
+exports.negativeCacheClear = negativeCacheClear;
+exports.negativeCacheStats = negativeCacheStats;
+exports.breakerStatus = breakerStatus;
+exports.breakerPodeUsar = breakerPodeUsar;
+exports.breakerRegistrarSucesso = breakerRegistrarSucesso;
+exports.breakerRegistrarFalha = breakerRegistrarFalha;
+exports.breakerReset = breakerReset;
+exports.breakerStats = breakerStats;
+exports.classificarErroFonte = classificarErroFonte;
 exports.detectSeasonRange = detectSeasonRange;
 exports.passaFiltroTemporada = passaFiltroTemporada;
 exports.extractLanguage = extractLanguage;
@@ -68,6 +77,7 @@ const magnetHelper_js_1 = require("../../magnet/magnetHelper.js");
 const SimilarityCalculator_js_1 = require("../../titulos/SimilarityCalculator.js");
 const logger = new logger_js_1.Logger('HdrScraper');
 exports.HDR_BASE = 'https://hdrtorrents.net';
+const FONTE = 'hdr';
 exports.BROWSER_HEADERS = {
     'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
     'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -87,36 +97,144 @@ exports.axiosConfig = {
     lookup: wordpressScraper_js_1.lookupCustomizado,
     headers: exports.BROWSER_HEADERS,
 };
-exports.SESSION_TTL = 30 * 60 * 1000;
-exports.sessaoCache = null;
-function extrairCookies(setCookie) {
-    if (!setCookie)
-        return '';
-    const lista = Array.isArray(setCookie) ? setCookie : [setCookie];
-    return lista.map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
+exports.NEGATIVE_DEFAULT_TTL_MS = 30 * 60 * 1000;
+exports.NEGATIVE_MAX_ENTRIES = 5000;
+const negativeStore = new Map();
+function negativeCacheKey(source, query, extra) {
+    const q = query.trim().toLowerCase();
+    const e = extra ? JSON.stringify(extra) : '';
+    return `${source}|${q}|${e}`;
 }
-async function obterSessao(forcar = false) {
-    if (!forcar && exports.sessaoCache && (Date.now() - exports.sessaoCache.criadaEm) < exports.SESSION_TTL) {
-        return exports.sessaoCache;
+function negativeCacheIsBlocked(key) {
+    const entry = negativeStore.get(key);
+    if (!entry)
+        return false;
+    if (Date.now() - entry.ts > entry.ttlMs) {
+        negativeStore.delete(key);
+        return false;
     }
-    const res = await axios_1.default.get(`${exports.HDR_BASE}/`, {
-        ...exports.axiosConfig,
-        headers: exports.BROWSER_HEADERS,
-    });
-    const token = res.data.match(/name="token"\s+value="([^"]+)"/)?.[1];
-    if (!token) {
-        throw new Error('HDR: token CSRF não encontrado na home');
-    }
-    const cookie = extrairCookies(res.headers['set-cookie']);
-    exports.sessaoCache = { token, cookie, criadaEm: Date.now() };
-    logger.debug('HDR: sessão renovada', {
-        token: token.substring(0, 8) + '...',
-        temCookie: !!cookie,
-    });
-    return exports.sessaoCache;
+    entry.hits++;
+    return true;
 }
-function limparSessao() {
-    exports.sessaoCache = null;
+function negativeCacheMark(key, ttlMs = exports.NEGATIVE_DEFAULT_TTL_MS) {
+    if (negativeStore.size >= exports.NEGATIVE_MAX_ENTRIES) {
+        const first = negativeStore.keys().next().value;
+        if (first)
+            negativeStore.delete(first);
+    }
+    negativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+function negativeCacheClear() {
+    negativeStore.clear();
+}
+function negativeCacheStats() {
+    const agora = Date.now();
+    return {
+        size: negativeStore.size,
+        maxEntries: exports.NEGATIVE_MAX_ENTRIES,
+        defaultTtlMs: exports.NEGATIVE_DEFAULT_TTL_MS,
+        entries: Array.from(negativeStore.entries()).map(([key, v]) => ({
+            key,
+            ageMs: agora - v.ts,
+            ttlMs: v.ttlMs,
+            expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+            hits: v.hits,
+        })),
+    };
+}
+exports.BREAKER_JANELA_MS = 5 * 60 * 1000;
+exports.BREAKER_LIMITE_ERROS = 5;
+exports.BREAKER_COOLDOWN_MS = 15 * 60 * 1000;
+const breakerStore = new Map();
+function getBreaker(fonte) {
+    let e = breakerStore.get(fonte);
+    if (!e) {
+        e = { erros: 0, ultimaFalha: 0, abertoEm: 0, estado: 'closed' };
+        breakerStore.set(fonte, e);
+    }
+    return e;
+}
+function breakerStatus(fonte) {
+    return getBreaker(fonte).estado;
+}
+function breakerPodeUsar(fonte) {
+    const e = getBreaker(fonte);
+    if (e.estado === 'closed')
+        return true;
+    if (e.estado === 'open') {
+        if (Date.now() - e.abertoEm > exports.BREAKER_COOLDOWN_MS) {
+            e.estado = 'half-open';
+            logger.debug(`HDR: circuit breaker half-open | fonte=${fonte}`);
+            return true;
+        }
+        return false;
+    }
+    return true;
+}
+function breakerRegistrarSucesso(fonte) {
+    const e = getBreaker(fonte);
+    if (e.estado !== 'closed') {
+        logger.info(`HDR: circuit breaker FECHADO | fonte=${fonte}`);
+    }
+    e.erros = 0;
+    e.estado = 'closed';
+    e.abertoEm = 0;
+}
+function breakerRegistrarFalha(fonte) {
+    const e = getBreaker(fonte);
+    const agora = Date.now();
+    if (agora - e.ultimaFalha > exports.BREAKER_JANELA_MS)
+        e.erros = 0;
+    e.erros++;
+    e.ultimaFalha = agora;
+    if (e.estado === 'half-open') {
+        e.estado = 'open';
+        e.abertoEm = agora;
+        logger.warn(`HDR: circuit breaker REABERTO após falha no half-open | fonte=${fonte}`, { erros: e.erros });
+        return;
+    }
+    if (e.erros >= exports.BREAKER_LIMITE_ERROS && e.estado === 'closed') {
+        e.estado = 'open';
+        e.abertoEm = agora;
+        logger.warn(`HDR: circuit breaker ABERTO | fonte=${fonte}`, {
+            erros: e.erros,
+            cooldownMs: exports.BREAKER_COOLDOWN_MS,
+        });
+    }
+}
+function breakerReset(fonte) {
+    if (fonte)
+        breakerStore.delete(fonte);
+    else
+        breakerStore.clear();
+}
+function breakerStats() {
+    const agora = Date.now();
+    return {
+        windowMs: exports.BREAKER_JANELA_MS,
+        threshold: exports.BREAKER_LIMITE_ERROS,
+        cooldownMs: exports.BREAKER_COOLDOWN_MS,
+        entries: Array.from(breakerStore.entries()).map(([fonte, e]) => ({
+            fonte,
+            estado: e.estado,
+            erros: e.erros,
+            ultimaFalhaMs: e.ultimaFalha ? agora - e.ultimaFalha : null,
+            abertoEmMs: e.abertoEm ? agora - e.abertoEm : null,
+            cooldownRestanteMs: e.estado === 'open'
+                ? Math.max(0, exports.BREAKER_COOLDOWN_MS - (agora - e.abertoEm))
+                : null,
+        })),
+    };
+}
+function classificarErroFonte(err) {
+    const status = err?.response?.status;
+    if (!status)
+        return 'fonte';
+    if (status >= 500)
+        return 'fonte';
+    if (status === 403 || status === 429)
+        return 'fonte';
+    return 'item';
 }
 exports.similarity = SimilarityCalculator_js_1.SimilarityCalculator.getInstance();
 function detectSeasonRange(text) {
@@ -334,28 +452,22 @@ function classificarSecao(texto) {
         return 'DUAL';
     return 'NONE';
 }
-function montarUrlBusca(query, token) {
+function montarUrlBusca(query) {
     const termo = encodeURIComponent(query.trim()).replace(/%20/g, '+');
-    return `${exports.HDR_BASE}/pesquisa/${termo}/?hp_bot_check=&token=${token}`;
+    return `${exports.HDR_BASE}/pesquisa/${termo}/`;
 }
 async function fetchComSessao(url, tentativa = 0) {
-    const sessao = await obterSessao(tentativa > 0);
     try {
         const res = await axios_1.default.get(url, {
             ...exports.axiosConfig,
-            headers: {
-                ...exports.BROWSER_HEADERS,
-                'Cookie': sessao.cookie,
-                'Referer': `${exports.HDR_BASE}/`,
-            },
+            headers: { ...exports.BROWSER_HEADERS, 'Referer': `${exports.HDR_BASE}/` },
         });
         return res.data;
     }
     catch (err) {
         const status = err.response?.status;
-        if (status === 403 && tentativa === 0) {
-            logger.debug('HDR: 403 detectado, renovando sessão e retentando');
-            exports.sessaoCache = null;
+        if (status >= 500 && tentativa === 0) {
+            logger.debug('HDR: erro 5xx, retentando');
             return fetchComSessao(url, 1);
         }
         throw err;
@@ -386,9 +498,12 @@ function mapearTipoEsperado(mediaType) {
 }
 async function searchHdrLinks(query, targetSeason, mediaType) {
     const t0 = Date.now();
+    if (!breakerPodeUsar(FONTE)) {
+        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${query.substring(0, 40)}"`);
+        return { status: 'blocked', items: [], reason: 'circuit breaker open' };
+    }
     try {
-        const sessao = await obterSessao();
-        const url = montarUrlBusca(query, sessao.token);
+        const url = montarUrlBusca(query);
         const html = await fetchComSessao(url);
         const $ = cheerio.load(html);
         const { blocks, malformados } = parseJsonLdBlocks($);
@@ -401,12 +516,14 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
                 query: query.substring(0, 40),
                 blocos: blocks.map(b => b?.['@type'] ?? '?').join(','),
             });
-            return [];
+            breakerRegistrarFalha(FONTE);
+            return { status: 'error', items: [], reason: 'no CollectionPage' };
         }
         const items = collectionPage.mainEntity?.itemListElement;
         if (!Array.isArray(items) || items.length === 0) {
-            logger.warn('HDR: CollectionPage sem itens', { query: query.substring(0, 40) });
-            return [];
+            breakerRegistrarSucesso(FONTE);
+            logger.debug(`HDR: CollectionPage vazia | "${query.substring(0, 40)}"`);
+            return { status: 'empty', items: [] };
         }
         const tipoEsperado = mapearTipoEsperado(mediaType);
         const results = [];
@@ -429,8 +546,9 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
                 continue;
             results.push({ title, postUrl: absoluteHref });
         }
+        breakerRegistrarSucesso(FONTE);
         logger.debug(`HDR: "${query.substring(0, 40)}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
-        return results.slice(0, 40);
+        return { status: 'ok', items: results.slice(0, 40) };
     }
     catch (err) {
         logger.warn('HDR busca falhou', {
@@ -438,7 +556,8 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
             status: err.response?.status || '-',
             error: err.message,
         });
-        return [];
+        breakerRegistrarFalha(FONTE);
+        return { status: 'error', items: [], error: err.message };
     }
 }
 async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, mediaType) {
@@ -576,13 +695,16 @@ async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, me
     return results;
 }
 async function processarPostHdr(item, imdbId, targetSeason, mediaType) {
-    limparSessao();
     let html;
     try {
         html = await fetchComSessao(item.postUrl);
     }
     catch (err) {
-        logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${err.message}`);
+        const classificacao = classificarErroFonte(err);
+        if (classificacao === 'fonte') {
+            breakerRegistrarFalha(FONTE);
+        }
+        logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${classificacao} | ${err.message}`);
         return { torrents: [], imdbConfirmed: false };
     }
     let imdbConfirmed = false;
@@ -609,27 +731,52 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
     const startTime = Date.now();
     const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
     const frasesValidas = queriesParaBusca.map(f => (0, TechnicalWords_js_1.normalizarTexto)(f)).filter(Boolean);
+    const ncKey = negativeCacheKey(FONTE, query, {
+        type,
+        season: targetSeason ?? 0,
+        mediaType: mediaType ?? null,
+    });
+    if (negativeCacheIsBlocked(ncKey)) {
+        logger.debug(`HDR: negative cache HIT | "${query.substring(0, 40)}"`);
+        return [];
+    }
+    if (!breakerPodeUsar(FONTE)) {
+        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${query.substring(0, 40)}"`);
+        return [];
+    }
     try {
         const allResults = [];
         const seenInfoHashes = new Set();
         const seenPostUrls = new Set();
         let queriesComResultado = 0;
+        let houveErro = false;
+        let houveSucesso = false;
         for (const q of queriesParaBusca) {
             const t0 = Date.now();
-            limparSessao();
-            const links = await searchHdrLinks(q, targetSeason, mediaType);
+            const searchResult = await searchHdrLinks(q, targetSeason, mediaType);
+            if (searchResult.status === 'blocked') {
+                logger.debug(`HDR: breaker abriu no meio do loop | "${q.substring(0, 40)}"`);
+                break;
+            }
+            if (searchResult.status === 'error') {
+                houveErro = true;
+                continue;
+            }
+            if (searchResult.status === 'empty') {
+                houveSucesso = true;
+                continue;
+            }
+            houveSucesso = true;
+            const links = searchResult.items;
             if (links.length === 0) {
                 logger.debug(`HDR: "${q.substring(0, 40)}" | 0 links (${Date.now() - t0}ms)`);
                 continue;
             }
-            const tokensRuido = (0, TechnicalWords_js_1.calcularTokensRuido)(links.map(l => l.title));
-            const ehSerie = mediaType === 'series' || mediaType === 'tv';
             const filtrados = links.filter(link => {
-                const tituloLimpo = (0, TechnicalWords_js_1.limparPorRaridade)(link.title, tokensRuido);
-                const resultado = exports.similarity.compararComTitulos(frasesValidas, tituloLimpo);
-                const isCollection = !ehSerie && (0, TechnicalWords_js_1.isCollectionTitle)(link.title, mediaType);
+                const resultado = exports.similarity.preFiltroContem(frasesValidas, link.title);
+                const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(link.title, mediaType);
                 if (!resultado.match && !isCollection) {
-                    logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} nivel=${resultado.nivel}`);
+                    logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
                     return false;
                 }
                 return true;
@@ -666,11 +813,16 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
             logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, ${filtrados.length} relevantes, ${novos.length} novos, ${magnetsDaQuery} magnets (${Date.now() - t0}ms)`);
         }
         const duration = Date.now() - startTime;
+        if (allResults.length === 0 && houveSucesso && !houveErro) {
+            negativeCacheMark(ncKey);
+            logger.info(`HDR: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${exports.NEGATIVE_DEFAULT_TTL_MS}`);
+        }
         logger.info(`HDR: ${allResults.length} magnets em ${duration}ms | queries=${queriesParaBusca.length} comResultado=${queriesComResultado}`);
         return allResults;
     }
     catch (err) {
         logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });
+        breakerRegistrarFalha(FONTE);
         return [];
     }
 }
