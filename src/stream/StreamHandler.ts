@@ -25,6 +25,11 @@ interface DatabaseStreamResult {
   processingTime: number;
 }
 
+interface SeedsCheckEntry {
+  ts: number;
+  sucesso: boolean;
+}
+
 export class StreamHandler {
   private static instance: StreamHandler;
   private readonly torboxService: TorboxService;
@@ -35,11 +40,12 @@ export class StreamHandler {
   private readonly streamFormatter: StreamFormatter;
   private readonly catalogProvider: CatalogProvider;
 
-  // Hashes checados em background — evita re-checar o mesmo por 1h.
-  private readonly seedsCheckedAt = new Map<string, number>();
-  private readonly SEEDS_RECHECK_TTL = 60 * 60 * 1000;
-  private readonly SEEDS_BG_CONCURRENCY = 5;
-  private readonly SEEDS_BG_TIMEOUT_SEC = 5;
+  private readonly seedsCheckedAt = new Map<string, SeedsCheckEntry>();
+  private readonly SEEDS_TTL_SUCESSO = 60 * 60 * 1000;
+  private readonly SEEDS_TTL_FALHA = 5 * 60 * 1000;
+  private readonly SEEDS_BG_CONCURRENCY = 2;
+  private readonly SEEDS_BG_TIMEOUT_SEC = 3;
+  private readonly SEEDS_CACHE_MAX = 5000;
 
   private stats = {
     totalRequests: 0,
@@ -138,7 +144,6 @@ export class StreamHandler {
         catalogStreams: catalogResult.streams.length,
       });
 
-      // Banco vazio e catálogo vazio → sem stream. Sem fallback informativo. Só um mini aviso pro terminal.
       return { streams: [] };
     } catch (error) {
       this.logger.error('Falha no processamento', {
@@ -160,7 +165,27 @@ export class StreamHandler {
     }
   }
 
-  //Dispara em background a checagem de seeders via torrentinfo. Não bloqueia a resposta.
+  // Verifica se um hash precisa ser re-checado. Sucesso tem TTL longo, falha tem TTL curto.
+  private precisaChecarSeeds(hash: string, agora: number): boolean {
+    const entry = this.seedsCheckedAt.get(hash);
+    if (!entry) return true;
+    const ttl = entry.sucesso ? this.SEEDS_TTL_SUCESSO : this.SEEDS_TTL_FALHA;
+    return (agora - entry.ts) > ttl;
+  }
+
+  // Eviction FIFO quando o cache estoura — descarta as entradas mais antigas.
+  private evictSeedsCache(): void {
+    if (this.seedsCheckedAt.size <= this.SEEDS_CACHE_MAX) return;
+    const remover = this.seedsCheckedAt.size - this.SEEDS_CACHE_MAX;
+    const iter = this.seedsCheckedAt.keys();
+    for (let i = 0; i < remover; i++) {
+      const next = iter.next();
+      if (next.done) break;
+      this.seedsCheckedAt.delete(next.value);
+    }
+  }
+
+  // Dispara em background a checagem de seeders via torrentinfo. Não bloqueia a resposta.
   private fireAndForgetSeeders(torrents: any[], apiKey: string): void {
     const hashes = [...new Set(
       torrents
@@ -168,42 +193,60 @@ export class StreamHandler {
         .filter((h): h is string => typeof h === 'string' && h.length >= 32)
     )];
 
-    const now = Date.now();
-    const paraChecar = hashes.filter(h => {
-      const ultima = this.seedsCheckedAt.get(h);
-      return !ultima || (now - ultima) > this.SEEDS_RECHECK_TTL;
-    });
+    const agora = Date.now();
+    const paraChecar = hashes.filter(h => this.precisaChecarSeeds(h, agora));
 
     if (paraChecar.length === 0) return;
-    for (const h of paraChecar) this.seedsCheckedAt.set(h, now);
 
     void this.enrichSeedersEmBackground(paraChecar, apiKey).catch(() => { });
   }
 
-  //Busca seeds reais de cada hash em lotes paralelos e grava no banco. Nunca lança.
+  // Busca seeds reais com concorrência limitada. Marca o hash só após a resposta:
+  // seeds > 0 = sucesso (TTL longo); seeds === 0 = falha (TTL curto); exceção de rede = não marca.
   private async enrichSeedersEmBackground(hashes: string[], apiKey: string): Promise<void> {
     const start = Date.now();
     let atualizados = 0;
+    let vazios = 0;
+    let erros = 0;
 
     for (let i = 0; i < hashes.length; i += this.SEEDS_BG_CONCURRENCY) {
       const batch = hashes.slice(i, i + this.SEEDS_BG_CONCURRENCY);
+
       await Promise.all(batch.map(async hash => {
-        const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC).catch(() => 0);
-        if (seeds > 0) {
-          await Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => { });
-          atualizados++;
+        try {
+          const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC);
+
+          if (seeds === null) {
+            // Erro de rede puro — não marca, próxima request tenta de novo.
+            erros++;
+          } else if (seeds > 0) {
+            await Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => { });
+            atualizados++;
+            this.seedsCheckedAt.set(hash, { ts: Date.now(), sucesso: true });
+          } else {
+            // Torbox respondeu OK mas sem metadata — TTL curto, revalida em 5min.
+            vazios++;
+            this.seedsCheckedAt.set(hash, { ts: Date.now(), sucesso: false });
+          }
+        } catch {
+          erros++;
         }
       }));
     }
 
+    this.evictSeedsCache();
+
     this.logger.debug('SEEDERS_BG', {
       hashes: hashes.length,
       atualizados,
+      vazios,
+      erros,
       durationMs: Date.now() - start,
+      cacheSize: this.seedsCheckedAt.size,
     });
   }
 
-  //Guarda os títulos TMDB no cache do Torbox pra usar no fallback de nome de arquivo
+  // Guarda os títulos TMDB no cache do Torbox pra usar no fallback de nome de arquivo.
   private registerTitlesForStreams(streams: Stream[], titles?: string[], year?: number): void {
     if (!titles || titles.length === 0) return;
 
@@ -264,8 +307,7 @@ export class StreamHandler {
           const season = parseInt(seasonMatch[1]);
           const episode = parseInt(seasonMatch[2]);
 
-          // Temporada: aceita se o alvo cai dentro do range [imdbSeason, imdbSeasonEnd],
-          // ou se o torrent não declara temporada nenhuma
+          // Temporada: aceita range [imdbSeason, imdbSeasonEnd] ou torrent sem season declarada.
           where[Op.and] = [
             {
               [Op.or]: [
@@ -340,11 +382,10 @@ export class StreamHandler {
         }
       }
 
-      // Usa o magnet completo salvo no banco; se não tiver, reconstrói mínimo pelo infoHash
       const magnetCompleto = torrent.magnet || `magnet:?xt=urn:btih:${torrent.infoHash}`;
 
       const torrentWithMagnet = {
-        ...torrent,   // seeders vem do banco — populado em background pelo SEEDERS_BG
+        ...torrent,
         magnet: magnetCompleto,
         magnet_link: magnetCompleto,
         quality,

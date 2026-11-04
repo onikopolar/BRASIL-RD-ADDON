@@ -20,6 +20,7 @@ class SimilarityCalculator {
         this.TMDB_TTL = 10 * 60 * 1000;
         this.EXTRAS_LEGITIMOS = /^(1080p|720p|480p|2160p|1440p|4k|x264|x265|h264|h265|hevc|dual|dublado|legendado|bluray|webrip|webdl|brrip|hdrip|dvdrip|remux)$/;
         this.REGEX_ANO = /^(19|20)\d{2}$/;
+        this.REGEX_ORDINAL = /\b(\d{1,2})(?:th|st|nd|rd)\b/gi;
         this.logger = new logger_js_1.Logger('SimilarityCalculator');
         this.tmdbScraper = useTmdbScraper ? ImdbScraperService_js_1.ImdbScraperService.getInstance() : null;
         this.languageDetector = LanguageDetector_js_1.LanguageDetector.getInstance();
@@ -27,6 +28,19 @@ class SimilarityCalculator {
         this.tokenCache = new CacheService_js_1.CacheService({ name: 'sim:token' });
         this.fuzzyCache = new CacheService_js_1.CacheService({ name: 'sim:fuzzy' });
         this.tmdbLocalCache = new CacheService_js_1.CacheService({ name: 'sim:tmdb' });
+    }
+    sequencias(texto) {
+        const base = (0, TechnicalWords_js_1.getPotentialSequelNumbers)(texto);
+        const normalizado = (0, TechnicalWords_js_1.normalizarTexto)(texto);
+        const matches = normalizado.match(this.REGEX_ORDINAL) ?? [];
+        const extras = [];
+        for (const m of matches) {
+            const n = parseInt(m, 10);
+            if (Number.isFinite(n) && n >= 2 && n <= 19 && !base.includes(n)) {
+                extras.push(n);
+            }
+        }
+        return extras.length > 0 ? [...base, ...extras] : base;
     }
     preFiltroContem(frases, tituloCandidato) {
         const t = (0, TechnicalWords_js_1.normalizarTexto)(tituloCandidato);
@@ -131,7 +145,7 @@ class SimilarityCalculator {
         const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
         const rangeTorrent = (0, TechnicalWords_js_1.extrairRangeEpisodios)(torrentTitle);
         const seasonDoTitulo = rangeTorrent?.seasonStart;
-        let seqTorrent = (0, TechnicalWords_js_1.getPotentialSequelNumbers)(torrentTitle);
+        let seqTorrent = this.sequencias(torrentTitle);
         if (isSerie && seasonDoTitulo !== undefined && seasonDoTitulo > 0) {
             const antes = seqTorrent.length;
             seqTorrent = seqTorrent.filter(n => n !== seasonDoTitulo);
@@ -140,7 +154,7 @@ class SimilarityCalculator {
             }
         }
         const tmdbDeclaraMesmoNumero = seqTorrent.length > 0
-            && titulosValidos.some(t => (0, TechnicalWords_js_1.getPotentialSequelNumbers)(t).some(n => seqTorrent.includes(n)));
+            && titulosValidos.some(t => this.sequencias(t).some(n => seqTorrent.includes(n)));
         let melhor = null;
         let melhorTitulo = '';
         let seqBloqueou = false;
@@ -148,7 +162,7 @@ class SimilarityCalculator {
             const { tokens: tmdbTokens } = this.tokensAnoCache(titulo);
             if (tmdbTokens.length === 0)
                 continue;
-            const seqTmdb = (0, TechnicalWords_js_1.getPotentialSequelNumbers)(titulo);
+            const seqTmdb = this.sequencias(titulo);
             let torrentTokensParaComparar = torrentTokens;
             if (seqTorrent.length > 0) {
                 if (seqTmdb.length > 0) {

@@ -583,7 +583,7 @@ class ImdbScraperService {
             .toLowerCase()
             .normalize('NFD')
             .replace(/[\u0300-\u036f]/g, '')
-            .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+            .replace(/[^\p{L}\p{N}\s\-]/gu, ' ')
             .replace(/\s+/g, ' ')
             .trim();
     }
@@ -614,8 +614,8 @@ class ImdbScraperService {
         return {
             cacheSize: ImdbScraperService.globalCache.size,
             cacheTTL: this.cacheTTL,
-            version: '2.5.1',
-            feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17) + fallback Cinemeta no /find vazio (R18)',
+            version: '2.5.2',
+            feature: 'Fallback HTML + cache memória + cache banco + correção mojibake + separação PT/EN no DB + fallback Cinemeta + preservação de hífen no normalizeTitle (fix 9-1-1)',
         };
     }
 }

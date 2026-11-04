@@ -147,13 +147,44 @@ export class TitleFilter {
         );
       }
 
+      // Coleção com ano no range: delega ao SimilarityCalculator pra validar título
+      // antes de aceitar. Sem isso, "Coleção Sexta-Feira 13 1980-2009" casa com
+      // qualquer filme de 1980-2009 (ex: "Next Friday" de 2000) só porque o ano bate.
       if (isCollection && isYearInCollection) {
-        this.logger.info(`✅ TF-STEP-4 ACEITA_COLECAO | "${shortTitle}" | imdbAno=${imdbTitles?.year} | years=[${yearsEfetivos?.join(',')}]`);
+        const titulosComparar = imdbTitles?.allTitles?.filter(t => t && t.trim().length > 0) ?? [];
+
+        if (titulosComparar.length === 0) {
+          this.logger.info(`🚫 TF-STEP-4 REJEITA_COLECAO_SEM_TITULOS | "${shortTitle}" | sem allTitles no TMDB`);
+          return {
+            matches: false,
+            similarity: 0,
+            torrentMetadata: metadados,
+            reason: 'Coleção sem títulos TMDB para comparar'
+          };
+        }
+
+        const comparacao = this.similarityCalculator.compararComTitulos(
+          titulosComparar,
+          tituloTorrent,
+          SimilarityCalculator.THRESHOLD_PRE_FILTRO
+        );
+
+        if (!comparacao.match) {
+          this.logger.info(`🚫 TF-STEP-4 REJEITA_COLECAO_SEM_MATCH | "${shortTitle}" | score=${comparacao.score.toFixed(2)} < ${SimilarityCalculator.THRESHOLD_PRE_FILTRO}`);
+          return {
+            matches: false,
+            similarity: 0,
+            torrentMetadata: metadados,
+            reason: `Coleção sem match de título (score ${comparacao.score.toFixed(2)})`
+          };
+        }
+
+        this.logger.info(`✅ TF-STEP-4 ACEITA_COLECAO | "${shortTitle}" | imdbAno=${imdbTitles?.year} | score=${comparacao.score.toFixed(2)} | years=[${yearsEfetivos?.join(',')}]`);
         return {
           matches: true,
           similarity: 0.8,
           torrentMetadata: metadados,
-          reason: 'Coleção/franquia com ano na faixa'
+          reason: `Coleção com match de título (score ${comparacao.score.toFixed(2)})`
         };
       }
 

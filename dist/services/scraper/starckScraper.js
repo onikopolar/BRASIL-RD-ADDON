@@ -120,6 +120,47 @@ exports.axiosConfig = {
         'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.5',
     },
 };
+function tituloNormalizavel(texto) {
+    if (!texto)
+        return false;
+    return (0, TechnicalWords_js_2.normalizarTexto)(texto).length > 0;
+}
+function escolherTituloNormalizavel(...candidatos) {
+    for (const c of candidatos) {
+        if (tituloNormalizavel(c))
+            return c;
+    }
+    for (const c of candidatos) {
+        if (c && c.trim().length > 0)
+            return c;
+    }
+    return undefined;
+}
+function decodeBase64Url(entrada) {
+    let s = entrada.replace(/-/g, '+').replace(/_/g, '/');
+    while (s.length % 4 !== 0)
+        s += '=';
+    try {
+        return Buffer.from(s, 'base64').toString('utf8');
+    }
+    catch {
+        return null;
+    }
+}
+function unshuffleString(entrada) {
+    const n = entrada.length;
+    const resultado = new Array(n);
+    const visitado = new Array(n).fill(false);
+    let o = 0;
+    for (let t = 0; t < n; t++) {
+        while (visitado[o])
+            o = (o + 1) % n;
+        visitado[o] = true;
+        resultado[t] = entrada[o];
+        o = (o + 3) % n;
+    }
+    return resultado.join('');
+}
 function cleanSlug(slug) {
     let decodificado = slug;
     try {
@@ -241,6 +282,10 @@ async function searchStarckLinks(searchQuery, allQueries, targetSeason, targetYe
 }
 function extractPostMetadata($) {
     const result = {};
+    const displayTitle = $('.post-description h2.post-title').first().text().trim() ||
+        $('.post-description h2').first().text().trim();
+    if (displayTitle)
+        result.displayTitle = displayTitle;
     $('.post-description p').each((_i, p) => {
         const spans = $(p).find('span');
         if (spans.length >= 2) {
@@ -439,16 +484,17 @@ function classificarLink($, linkEl, html, secoes) {
     return { ...base, origem: 'fallback', motivo: 'sem secao e sem botao' };
 }
 function extrairMagnetDoLink(href) {
-    const idMatch = href.match(/[?&]id=([^&]+)/i);
+    const idMatch = href.match(/[?&](x?id)=([^&]+)/i);
     if (!idMatch)
         return null;
+    const valorBruto = idMatch[2];
     try {
-        const decoded = decodeURIComponent(idMatch[1]);
-        let magnet = Buffer.from(decoded, 'base64').toString('utf8').replace(/&amp;/gi, '&');
-        if (!magnet.startsWith('magnet:?'))
+        const decoded = decodeURIComponent(valorBruto);
+        const desembaralhado = unshuffleString(decoded);
+        const magnet = decodeBase64Url(desembaralhado);
+        if (!magnet || !magnet.startsWith('magnet:?'))
             return null;
-        magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
-        return magnet;
+        return magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
     }
     catch {
         return null;
@@ -569,7 +615,7 @@ async function decodeBase64Magnets($, html, postTitle, metadata) {
             episode = range?.episodeStart && range.episodeStart > 0 ? range.episodeStart : undefined;
         }
         if (!item.canonicalName) {
-            const tituloBase = metadata.originalTitle || postTitle;
+            const tituloBase = escolherTituloNormalizavel(metadata.originalTitle, metadata.displayTitle, postTitle) || postTitle;
             const qualidadeLimpa = item.quality || item.qualityHint.replace(/^\d{3,4}p\s*$/i, '').trim() || null;
             const partes = [
                 tituloBase,
@@ -591,7 +637,10 @@ async function decodeBase64Magnets($, html, postTitle, metadata) {
             episode,
         });
     }
-    logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
+    logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}"` +
+        ` | display="${(metadata.displayTitle || '').substring(0, 50)}"` +
+        ` | original="${(metadata.originalTitle || '').substring(0, 40)}"` +
+        ` | totalExtraidos=${results.length}`);
     return { torrents: results, contagem };
 }
 async function searchStarck(query, type = 'movie', targetSeason, searchQueries, targetYear, imdbId, mediaType) {
@@ -645,7 +694,7 @@ async function searchStarck(query, type = 'movie', targetSeason, searchQueries, 
                     const dn = magnet.canonicalName;
                     const dnEhColecao = !!dn && (0, TechnicalWords_js_2.isCollectionTitle)(dn, mediaType);
                     const originalDoDn = dnEhColecao ? dn : undefined;
-                    magnet.originalTitle = originalDoDn || originalDoPost || metadata.originalTitle || link.slugTitle;
+                    magnet.originalTitle = escolherTituloNormalizavel(originalDoDn, originalDoPost, metadata.originalTitle, metadata.displayTitle, link.slugTitle);
                     const anosDoDn = dn ? (0, TechnicalWords_js_1.extrairAno)(dn) : undefined;
                     const years = (anosDoDn && anosDoDn.length > 0)
                         ? anosDoDn

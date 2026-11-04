@@ -58,6 +58,9 @@ export class SimilarityCalculator {
   public readonly EXTRAS_LEGITIMOS = /^(1080p|720p|480p|2160p|1440p|4k|x264|x265|h264|h265|hevc|dual|dublado|legendado|bluray|webrip|webdl|brrip|hdrip|dvdrip|remux)$/;
   public readonly REGEX_ANO = /^(19|20)\d{2}$/;
 
+  // Ordinais em inglês: 13th, 1st, 2nd, 3rd. Não casam com /^\d+$/ em getPotentialSequelNumbers.
+  private readonly REGEX_ORDINAL = /\b(\d{1,2})(?:th|st|nd|rd)\b/gi;
+
   private static instance: SimilarityCalculator;
 
   public static getInstance(): SimilarityCalculator {
@@ -78,10 +81,25 @@ export class SimilarityCalculator {
     this.tmdbLocalCache = new CacheService({ name: 'sim:tmdb' });
   }
 
-  //  API PÚBLICA — PRÉ-FILTRO BARATO
+  // Sequências de um título: números 2-19 + ordinais em inglês (13th, 1st, 2nd, 3rd).
+  // Extensão local do getPotentialSequelNumbers, sem mexer no TechnicalWords.
+  private sequencias(texto: string): number[] {
+    const base = getPotentialSequelNumbers(texto);
+    const normalizado = normalizarTexto(texto);
+    const matches = normalizado.match(this.REGEX_ORDINAL) ?? [];
+
+    const extras: number[] = [];
+    for (const m of matches) {
+      const n = parseInt(m, 10);
+      if (Number.isFinite(n) && n >= 2 && n <= 19 && !base.includes(n)) {
+        extras.push(n);
+      }
+    }
+
+    return extras.length > 0 ? [...base, ...extras] : base;
+  }
 
   // Checagem barata: alguma frase de busca aparece como substring no título, com boundary de palavra.
-  // Cobre "it" (2 chars) sem strip words. Sem fuzzy, sem cascata N1-N5, sem tokenização.
   preFiltroContem(frases: string[], tituloCandidato: string): ResultadoPreFiltro {
     const t = normalizarTexto(tituloCandidato);
     if (!t) return { match: false, score: 0 };
@@ -99,8 +117,6 @@ export class SimilarityCalculator {
 
     return { match: false, score: 0 };
   }
-
-  //  API PÚBLICA — PRÉ-FILTRO COMPLETO (fuzzy)
 
   compararComTitulos(
     titulosTmdb: string[],
@@ -142,8 +158,6 @@ export class SimilarityCalculator {
   pontuarTokens(tmdbTokens: string[], candidatoTokens: string[]): ScoreDetalhes {
     return this.calcularScore(tmdbTokens, candidatoTokens);
   }
-
-  //  API PÚBLICA — FLUXO PRINCIPAL
 
   async smartTitleContainsCheck(
     torrentTitle: string,
@@ -214,15 +228,13 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
-    // Em série, número no título é TEMPORADA, não sequência. Remove da lista de
-    // "sequências potenciais" o número que bate com a temporada declarada no título.
-    // Stremio tem prioridade sobre TMDB — o mediaType do TMDB vem undefined com frequência.
+    // Em série, número no título é TEMPORADA, não sequência.
     const tipoEfetivo: TipoConteudo = _torrentMetadata?.tipoConteudo ?? movieInfo.mediaType;
     const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
     const rangeTorrent = extrairRangeEpisodios(torrentTitle);
     const seasonDoTitulo = rangeTorrent?.seasonStart;
 
-    let seqTorrent = getPotentialSequelNumbers(torrentTitle);
+    let seqTorrent = this.sequencias(torrentTitle);
     if (isSerie && seasonDoTitulo !== undefined && seasonDoTitulo > 0) {
       const antes = seqTorrent.length;
       seqTorrent = seqTorrent.filter(n => n !== seasonDoTitulo);
@@ -231,9 +243,8 @@ export class SimilarityCalculator {
       }
     }
 
-    // Sequência confirmada quando algum título TMDB declara o mesmo número do torrent.
     const tmdbDeclaraMesmoNumero = seqTorrent.length > 0
-      && titulosValidos.some(t => getPotentialSequelNumbers(t).some(n => seqTorrent.includes(n)));
+      && titulosValidos.some(t => this.sequencias(t).some(n => seqTorrent.includes(n)));
 
     let melhor: ScoreDetalhes | null = null;
     let melhorTitulo = '';
@@ -243,7 +254,7 @@ export class SimilarityCalculator {
       const { tokens: tmdbTokens } = this.tokensAnoCache(titulo);
       if (tmdbTokens.length === 0) continue;
 
-      const seqTmdb = getPotentialSequelNumbers(titulo);
+      const seqTmdb = this.sequencias(titulo);
       let torrentTokensParaComparar = torrentTokens;
 
       if (seqTorrent.length > 0) {
@@ -259,7 +270,6 @@ export class SimilarityCalculator {
           seqBloqueou = true;
           continue;
         } else {
-          // Sequência confirmada em outro título — remove o número do torrent pra casar com o subtítulo.
           torrentTokensParaComparar = torrentTokens.filter(
             t => !/^\d{1,2}$/.test(t) || !seqTorrent.includes(parseInt(t))
           );
@@ -315,8 +325,6 @@ export class SimilarityCalculator {
     return result;
   }
 
-  //  API PÚBLICA — SIMILARIDADE DE TOKENS
-
   jaccardSimilarity(tokensA: string[], tokensB: string[]): number {
     if (tokensA.length === 0 && tokensB.length === 0) return 0;
     const setA = new Set(tokensA);
@@ -338,8 +346,6 @@ export class SimilarityCalculator {
     }
     return true;
   }
-
-  //  API PÚBLICA — TMDB
 
   async obterMovieInfo(
     imdbId: string,
@@ -394,8 +400,6 @@ export class SimilarityCalculator {
       return null;
     }
   }
-
-  //  NÚCLEO DE SIMILARIDADE — 5 NÍVEIS EM CASCATA
 
   calcularScore(tmdbTokens: string[], torrentTokens: string[]): ScoreDetalhes {
     const parteTmdb = extrairNumeroParte(tmdbTokens.join(' '));
@@ -567,8 +571,6 @@ export class SimilarityCalculator {
     };
   }
 
-  //  TOKENIZAÇÃO COM EXTRAÇÃO DE ANO
-
   extrairTokensAno(texto: string): TokensComAno {
     const todos = normalizarTexto(texto).split(' ').filter(w => w.length > 0);
     const semAno: string[] = [];
@@ -598,8 +600,6 @@ export class SimilarityCalculator {
     this.tokenCache.set(key, resultado, this.TOKEN_TTL);
     return resultado;
   }
-
-  //  FUZZY
 
   fuzzyRatioCache(a: string, b: string): number {
     const [x, y] = a < b ? [a, b] : [b, a];
@@ -645,8 +645,6 @@ export class SimilarityCalculator {
     return prev[n];
   }
 
-  //  GATE DE ANO
-
   imdbDentroDoRangeAnos(years: number[] | undefined, anoImdb: number | undefined): boolean {
     if (!years || years.length === 0 || anoImdb === undefined) return false;
 
@@ -658,8 +656,6 @@ export class SimilarityCalculator {
 
     return Math.abs(years[0] - anoImdb) <= 1;
   }
-
-  //  LOGS OBJETIVOS
 
   logarResultado(
     torrentTitle: string,
@@ -684,8 +680,6 @@ export class SimilarityCalculator {
       this.logger.debug(linha);
     }
   }
-
-  //  UTILITÁRIOS DE CACHE
 
   clearCaches(): void {
     this.resultCache.clear();

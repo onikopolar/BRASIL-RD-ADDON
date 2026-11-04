@@ -97,7 +97,8 @@ export interface StarckTorrent {
 }
 
 export interface PostMetadata {
-  originalTitle?: string;
+  originalTitle?: string;   // "Nome Original:" — pode vir em cirílico, CJK, árabe
+  displayTitle?: string;    // <h2 class="post-title"> do .post-description — sempre romanizado/PT
   year?: number;
   years?: number[];
   size?: string;
@@ -138,7 +139,6 @@ export interface SearchResultItem {
   range: EpisodeRange | null;
 }
 
-// Resultado discriminado — separa "site respondeu" de "site falhou". Essencial pro negative cache.
 export interface SearchLinksResult {
   status: 'ok' | 'error';
   items: SearchResultItem[];
@@ -166,7 +166,52 @@ export const axiosConfig = {
 
 export { STARCK_BASE, QUALIDADE_VALIDA_REGEX };
 
-// Decodifica slug: UTF-8 em hex, sufixo de data e hífen por espaço.
+// "Nome Original" pode vir em script não-latino (cirílico, CJK, árabe).
+// normalizarTexto() usa [^\w\s] que em JS é ASCII-only, então esses títulos
+// colapsam pra string vazia e quebram TitleFilter/Similarity/autoAddMagnet.
+function tituloNormalizavel(texto: string | undefined | null): boolean {
+  if (!texto) return false;
+  return normalizarTexto(texto).length > 0;
+}
+
+// Escolhe o primeiro título normalizável da lista (na ordem dada).
+// Se nenhum for normalizável, devolve o primeiro não-vazio como último recurso.
+function escolherTituloNormalizavel(...candidatos: (string | undefined | null)[]): string | undefined {
+  for (const c of candidatos) {
+    if (tituloNormalizavel(c)) return c!;
+  }
+  for (const c of candidatos) {
+    if (c && c.trim().length > 0) return c;
+  }
+  return undefined;
+}
+
+function decodeBase64Url(entrada: string): string | null {
+  let s = entrada.replace(/-/g, '+').replace(/_/g, '/');
+  while (s.length % 4 !== 0) s += '=';
+  try {
+    return Buffer.from(s, 'base64').toString('utf8');
+  } catch {
+    return null;
+  }
+}
+
+function unshuffleString(entrada: string): string {
+  const n = entrada.length;
+  const resultado = new Array<string>(n);
+  const visitado = new Array<boolean>(n).fill(false);
+  let o = 0;
+
+  for (let t = 0; t < n; t++) {
+    while (visitado[o]) o = (o + 1) % n;
+    visitado[o] = true;
+    resultado[t] = entrada[o];
+    o = (o + 3) % n;
+  }
+
+  return resultado.join('');
+}
+
 export function cleanSlug(slug: string): string {
   let decodificado = slug;
   try {
@@ -198,7 +243,6 @@ export function cleanSlug(slug: string): string {
   return semData.replace(/-/g, ' ');
 }
 
-// Título base sem temporada e ano.
 export function extrairTituloBaseDoSlug(slug: string): string {
   const limpo = cleanSlug(slug);
   const normalizado = normalizarTexto(limpo);
@@ -211,7 +255,6 @@ export function extrairTituloBaseDoSlug(slug: string): string {
     .trim();
 }
 
-// Frases normalizadas, sem temporada nem ano.
 function construirFrases(allQueries: string[]): Set<string> {
   const frases = new Set<string>();
   for (const q of allQueries) {
@@ -227,7 +270,6 @@ function construirFrases(allQueries: string[]): Set<string> {
   return frases;
 }
 
-// Uma busca só; o filtro já usa todas as queries como frases.
 export async function searchStarckLinks(
   searchQuery: string,
   allQueries: string[],
@@ -279,7 +321,6 @@ export async function searchStarckLinks(
     let aceitosPorColecao = 0;
 
     const filtered = results.filter(item => {
-      // Pré-filtro de tipo via slug: range != null sinaliza série; coleção de série cobre pack sem range.
       const isCollection = isCollectionTitle(item.slugTitle, mediaType);
       const isCollectionSeries = isCollectionTitle(item.slugTitle, 'series');
       const pareceSerie = item.range !== null || isCollectionSeries;
@@ -324,9 +365,16 @@ export async function searchStarckLinks(
   }
 }
 
-// Lê o bloco .post-description. Coleta todos os anos de "Lançamento" — "2002 - 2012" vira [2002, 2012].
 export function extractPostMetadata($: any): PostMetadata {
   const result: PostMetadata = {};
+
+  // Título de exibição do post (h2 dentro do .post-description). É o título
+  // romanizado/PT que o usuário vê no site. Sempre normalizável — ao contrário
+  // do "Nome Original" (abaixo), que pode vir em cirílico/CJK/árabe.
+  const displayTitle =
+    $('.post-description h2.post-title').first().text().trim() ||
+    $('.post-description h2').first().text().trim();
+  if (displayTitle) result.displayTitle = displayTitle;
 
   $('.post-description p').each((_i: any, p: any) => {
     const spans = $(p).find('span');
@@ -368,7 +416,6 @@ export function extractPostMetadata($: any): PostMetadata {
   return result;
 }
 
-// DUAL / LEGENDADO / NONE pra um cabeçalho de seção.
 export function classificarCabecalhoSecao(texto: string): TipoSecao {
   const t = normalizarTexto(texto).trim();
   if (!t || t.length > 60) return 'NONE';
@@ -384,7 +431,6 @@ export function classificarCabecalhoSecao(texto: string): TipoSecao {
   return 'NONE';
 }
 
-// Seções [start, end) a partir dos cabeçalhos, sem duplicar aninhados.
 export function detectarSecoesStarck($: any, html: string): SecaoStarck[] {
   const container = $('.post-buttons').first();
   const escopo = container.length ? container : $('body');
@@ -434,7 +480,6 @@ export function secaoDaPosicao(pos: number, secoes: SecaoStarck[]): SecaoStarck 
   return null;
 }
 
-// Idioma/formato/qualidade/tamanho do botão.
 export function classificarBotao($: any, botaoEl: any): MetadadosBotao {
   const container = $(botaoEl);
   if (!container.length) return { idioma: null, formato: null, qualidade: null, tamanho: null };
@@ -471,7 +516,6 @@ export function classificarBotao($: any, botaoEl: any): MetadadosBotao {
   };
 }
 
-// Qualidade/formato/tamanho do <p> em volta do link.
 function extrairMetadadosDoContexto($: any, linkEl: any): {
   qualidade: string | null;
   formato: string | null;
@@ -499,7 +543,6 @@ function extrairMetadadosDoContexto($: any, linkEl: any): {
   return { qualidade, formato, tamanho };
 }
 
-// Classifica link filmedl.com via seção, botão ou contexto.
 export function classificarLink(
   $: any,
   linkEl: any,
@@ -555,23 +598,26 @@ export function classificarLink(
   return { ...base, origem: 'fallback', motivo: 'sem secao e sem botao' };
 }
 
-// Base64 do id → magnet corrigido.
 export function extrairMagnetDoLink(href: string): string | null {
-  const idMatch = href.match(/[?&]id=([^&]+)/i);
+  const idMatch = href.match(/[?&](x?id)=([^&]+)/i);
   if (!idMatch) return null;
 
+  const valorBruto = idMatch[2];
+
   try {
-    const decoded = decodeURIComponent(idMatch[1]);
-    let magnet = Buffer.from(decoded, 'base64').toString('utf8').replace(/&amp;/gi, '&');
-    if (!magnet.startsWith('magnet:?')) return null;
-    magnet = magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
-    return magnet;
+    const decoded = decodeURIComponent(valorBruto);
+
+    const desembaralhado = unshuffleString(decoded);
+    const magnet = decodeBase64Url(desembaralhado);
+
+    if (!magnet || !magnet.startsWith('magnet:?')) return null;
+
+    return magnet.replace(/&(?!\s*(?:tr|xl|dn|xt)=)/gi, '%26');
   } catch {
     return null;
   }
 }
 
-// Número do episódio no <p> em volta.
 export function extrairEpisodioDoContexto($: any, linkEl: any): number | undefined {
   const parentP = $(linkEl).closest('p');
   const parentText = parentP.text().trim() || '';
@@ -596,7 +642,6 @@ function limparQualityHint(texto: string): string {
     .trim();
 }
 
-// Processa links filmedl.com e devolve magnets DUAL.
 export async function decodeBase64Magnets(
   $: any,
   html: string,
@@ -713,7 +758,13 @@ export async function decodeBase64Magnets(
     }
 
     if (!item.canonicalName) {
-      const tituloBase = metadata.originalTitle || postTitle;
+      // Nome Original pode ser não-normalizável (cirílico/CJK/árabe) — nesse caso
+      // usa o h2 do post (displayTitle), que é sempre romanizado/PT, ou o link.title.
+      const tituloBase = escolherTituloNormalizavel(
+        metadata.originalTitle,
+        metadata.displayTitle,
+        postTitle
+      ) || postTitle;
       const qualidadeLimpa = item.quality || item.qualityHint.replace(/^\d{3,4}p\s*$/i, '').trim() || null;
       const partes = [
         tituloBase,
@@ -737,11 +788,15 @@ export async function decodeBase64Magnets(
     });
   }
 
-  logger.debug(`Starck decode | post="${postTitle.substring(0, 50)}" | totalExtraidos=${results.length}`);
+  logger.debug(
+    `Starck decode | post="${postTitle.substring(0, 50)}"` +
+    ` | display="${(metadata.displayTitle || '').substring(0, 50)}"` +
+    ` | original="${(metadata.originalTitle || '').substring(0, 40)}"` +
+    ` | totalExtraidos=${results.length}`
+  );
   return { torrents: results, contagem };
 }
 
-// Entrypoint: uma busca, todos os posts relevantes, magnets prontos.
 export async function searchStarck(
   query: string,
   type: 'movie' | 'series' = 'movie',
@@ -755,7 +810,6 @@ export async function searchStarck(
 
   const allQueries = [...new Set([query, ...(searchQueries || [])])];
 
-  // Negative cache — pula tudo se a query já foi vista vazia.
   const ncKey = starckNegativeKey(query, {
     type,
     season: targetSeason ?? 0,
@@ -799,8 +853,6 @@ export async function searchStarck(
         const metadata = extractPostMetadata($);
         const { torrents } = await decodeBase64Magnets($, htmlSerializado, link.title, metadata);
 
-        // Post inteiro é coleção? (ex: "Quadrilogia Completa – A Era do Gelo").
-        // Nesse caso o título do post carrega o marcador de coleção — metadata PT só traz "Ice Age" puro.
         const postEhColecao = isCollectionTitle(link.title, mediaType);
         const originalDoPost = postEhColecao ? link.title : undefined;
 
@@ -810,14 +862,22 @@ export async function searchStarck(
 
           if (magnet.season === undefined && targetSeason) magnet.season = targetSeason;
 
-          // Quando o dn é coleção, ele manda no originalTitle — o título do botão costuma apontar pra um filme só.
           const dn = magnet.canonicalName;
           const dnEhColecao = !!dn && isCollectionTitle(dn, mediaType);
           const originalDoDn = dnEhColecao ? dn : undefined;
 
-          magnet.originalTitle = originalDoDn || originalDoPost || metadata.originalTitle || link.slugTitle;
+          // Prioridade: dn de coleção > título de coleção > Nome Original >
+          // título do h2 (displayTitle) > slug. Os três primeiros mantêm o
+          // comportamento original; displayTitle é novo e cobre o caso onde
+          // Nome Original vem em cirílico/CJK/árabe e normaliza pra vazio.
+          magnet.originalTitle = escolherTituloNormalizavel(
+            originalDoDn,
+            originalDoPost,
+            metadata.originalTitle,
+            metadata.displayTitle,
+            link.slugTitle
+          );
 
-          // years: range completo (ex: quadrilogia 2002-2012) do dn se tiver, senão do metadata.
           const anosDoDn = dn ? extrairAno(dn) : undefined;
           const years = (anosDoDn && anosDoDn.length > 0)
             ? anosDoDn
@@ -844,7 +904,6 @@ export async function searchStarck(
     }
   }
 
-  // Marca negative cache só quando 0 resultados E o site respondeu OK (não erro de rede).
   if (allResults.length === 0 && linksResult.status === 'ok') {
     starckNegativeMark(ncKey);
     logger.info(`Starck: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${STARCK_NEGATIVE_TTL_MS}`);

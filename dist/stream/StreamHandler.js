@@ -18,9 +18,11 @@ const LEGENDADO_REGEX = new RegExp('\\b(' + TechnicalWords_js_1.INDICADORES_INTE
 class StreamHandler {
     constructor(baseUrl) {
         this.seedsCheckedAt = new Map();
-        this.SEEDS_RECHECK_TTL = 60 * 60 * 1000;
-        this.SEEDS_BG_CONCURRENCY = 5;
-        this.SEEDS_BG_TIMEOUT_SEC = 5;
+        this.SEEDS_TTL_SUCESSO = 60 * 60 * 1000;
+        this.SEEDS_TTL_FALHA = 5 * 60 * 1000;
+        this.SEEDS_BG_CONCURRENCY = 2;
+        this.SEEDS_BG_TIMEOUT_SEC = 3;
+        this.SEEDS_CACHE_MAX = 5000;
         this.stats = {
             totalRequests: 0,
             servedFromDatabase: 0,
@@ -120,38 +122,71 @@ class StreamHandler {
             return { streams: [this.convertToStreamFormat(errorStream)] };
         }
     }
+    precisaChecarSeeds(hash, agora) {
+        const entry = this.seedsCheckedAt.get(hash);
+        if (!entry)
+            return true;
+        const ttl = entry.sucesso ? this.SEEDS_TTL_SUCESSO : this.SEEDS_TTL_FALHA;
+        return (agora - entry.ts) > ttl;
+    }
+    evictSeedsCache() {
+        if (this.seedsCheckedAt.size <= this.SEEDS_CACHE_MAX)
+            return;
+        const remover = this.seedsCheckedAt.size - this.SEEDS_CACHE_MAX;
+        const iter = this.seedsCheckedAt.keys();
+        for (let i = 0; i < remover; i++) {
+            const next = iter.next();
+            if (next.done)
+                break;
+            this.seedsCheckedAt.delete(next.value);
+        }
+    }
     fireAndForgetSeeders(torrents, apiKey) {
         const hashes = [...new Set(torrents
                 .map(t => (t.infoHash || '').toLowerCase())
                 .filter((h) => typeof h === 'string' && h.length >= 32))];
-        const now = Date.now();
-        const paraChecar = hashes.filter(h => {
-            const ultima = this.seedsCheckedAt.get(h);
-            return !ultima || (now - ultima) > this.SEEDS_RECHECK_TTL;
-        });
+        const agora = Date.now();
+        const paraChecar = hashes.filter(h => this.precisaChecarSeeds(h, agora));
         if (paraChecar.length === 0)
             return;
-        for (const h of paraChecar)
-            this.seedsCheckedAt.set(h, now);
         void this.enrichSeedersEmBackground(paraChecar, apiKey).catch(() => { });
     }
     async enrichSeedersEmBackground(hashes, apiKey) {
         const start = Date.now();
         let atualizados = 0;
+        let vazios = 0;
+        let erros = 0;
         for (let i = 0; i < hashes.length; i += this.SEEDS_BG_CONCURRENCY) {
             const batch = hashes.slice(i, i + this.SEEDS_BG_CONCURRENCY);
             await Promise.all(batch.map(async (hash) => {
-                const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC).catch(() => 0);
-                if (seeds > 0) {
-                    await models_js_1.Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => { });
-                    atualizados++;
+                try {
+                    const seeds = await this.torboxService.getTorrentInfoByHash(hash, apiKey, this.SEEDS_BG_TIMEOUT_SEC);
+                    if (seeds === null) {
+                        erros++;
+                    }
+                    else if (seeds > 0) {
+                        await models_js_1.Torrent.update({ seeders: seeds }, { where: { infoHash: hash } }).catch(() => { });
+                        atualizados++;
+                        this.seedsCheckedAt.set(hash, { ts: Date.now(), sucesso: true });
+                    }
+                    else {
+                        vazios++;
+                        this.seedsCheckedAt.set(hash, { ts: Date.now(), sucesso: false });
+                    }
+                }
+                catch {
+                    erros++;
                 }
             }));
         }
+        this.evictSeedsCache();
         this.logger.debug('SEEDERS_BG', {
             hashes: hashes.length,
             atualizados,
+            vazios,
+            erros,
             durationMs: Date.now() - start,
+            cacheSize: this.seedsCheckedAt.size,
         });
     }
     registerTitlesForStreams(streams, titles, year) {

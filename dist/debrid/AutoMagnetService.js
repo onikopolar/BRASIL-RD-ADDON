@@ -11,7 +11,6 @@ const qualityDetector_js_1 = require("../lib/qualityDetector.js");
 const magnetHelper_js_1 = require("../magnet/magnetHelper.js");
 const TechnicalWords_js_1 = require("../titulos/TechnicalWords.js");
 const LanguageDetector_js_1 = require("../titulos/LanguageDetector.js");
-const RescrapeService_js_1 = require("../services/scraper/RescrapeService.js");
 const CacheService_js_1 = require("../debrid/CacheService.js");
 const logger = new logger_js_1.Logger('AutoMagnetService');
 const torboxService = new RealDebridService_js_1.TorboxService();
@@ -164,7 +163,6 @@ class AutoMagnetService {
                 magnet: magnetData.magnet,
                 uploadDate: new Date(),
                 lastSeen: new Date(),
-                rescrapeAt: RescrapeService_js_1.RescrapeService.computeRescrapeAt(dnMagnet, magnetData.quality)
             });
             return true;
         }

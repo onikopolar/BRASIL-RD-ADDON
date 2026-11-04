@@ -31,6 +31,28 @@ const LYRA_MARK = 'data-lyra-h';
 
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 
+// Helpers
+export function limparEspacos(texto: string): string {
+  return texto.trim().replace(/\s+/g, ' ');
+}
+
+export function truncar(texto: string, max = 40): string {
+  return texto.substring(0, max);
+}
+
+export function decodeHtmlEntities(texto: string): string {
+  if (!texto || (!texto.includes('&') && !texto.includes('&#'))) return texto;
+  return texto
+    .replace(/&#(\d+);/g, (_m, cod) => String.fromCharCode(parseInt(cod, 10)))
+    .replace(/&#x([0-9a-f]+);/gi, (_m, cod) => String.fromCharCode(parseInt(cod, 16)))
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;|&apos;/gi, "'");
+}
+
 // Negative cache local do WordPress. Cada site tem seu veredito independente.
 const WP_NEGATIVE_TTL_MS = 30 * 60 * 1000;
 const WP_NEGATIVE_MAX = 5000;
@@ -87,19 +109,7 @@ export function wpNegativeStats() {
   };
 }
 
-export function decodeHtmlEntities(texto: string): string {
-  if (!texto || (!texto.includes('&') && !texto.includes('&#'))) return texto;
-  return texto
-    .replace(/&#(\d+);/g, (_m, cod) => String.fromCharCode(parseInt(cod, 10)))
-    .replace(/&#x([0-9a-f]+);/gi, (_m, cod) => String.fromCharCode(parseInt(cod, 16)))
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#0?39;|&apos;/gi, "'");
-}
-
+// DNS bypass
 export class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
     const hostname = options.hostname || options.host || '';
@@ -130,6 +140,7 @@ export function criarLookup() {
 }
 export const lookupCustomizado = criarLookup();
 
+// Sites e config
 export interface WordPressSite {
   name: string;
   baseUrl: string;
@@ -157,6 +168,7 @@ export const jsonAxiosConfig = {
   },
 };
 
+// Types
 export type MagnetCacheEntry = { nome: string | null; infoHash: string };
 export type InfoBlock = {
   originalTitle?: string;
@@ -217,6 +229,23 @@ type CandidatoAncora = {
   tag: string;
 };
 
+type CandidatoMagnet = {
+  el: any;
+  magnet: string;
+  pos: number;
+  htmlLen: number;
+  secao: 'DUAL' | 'LEGENDADO' | 'NONE';
+  section: Secao | null;
+};
+
+type FonteOriginal = 'html' | 'dn' | 'post' | 'heading';
+
+interface ResultadoTitulo {
+  originalTitleFinal: string | undefined;
+  displayTitle: string;
+  fonteOriginal: FonteOriginal;
+}
+
 export class WordPressScraper {
   public readonly qualityDetector: QualityDetector;
   public readonly magnetCache: CacheService;
@@ -231,6 +260,7 @@ export class WordPressScraper {
     this.similarity = SimilarityCalculator.getInstance();
   }
 
+  // Search
   async search(
     query: string,
     type: 'movie' | 'series',
@@ -258,7 +288,7 @@ export class WordPressScraper {
           });
 
           if (wpNegativeIsBlocked(ncKey)) {
-            logger.debug(`WP: negative cache HIT | site=${site.name} | "${q.substring(0, 40)}"`);
+            logger.debug(`WP: negative cache HIT | site=${site.name} | "${truncar(q)}"`);
             return [] as TorrentResult[];
           }
 
@@ -266,10 +296,9 @@ export class WordPressScraper {
             const r = await this.searchSite(site, q, type, targetSeason, searchQueries, imdbId, mediaType);
 
             // Só marca negativo quando o site respondeu OK e não achou nada.
-            // Erro de rede/servidor cai no catch e NÃO marca.
             if (r.length === 0) {
               wpNegativeMark(ncKey);
-              logger.info(`WP: 0 resultados, cacheado negativo | site=${site.name} | "${q.substring(0, 40)}"`);
+              logger.info(`WP: 0 resultados, cacheado negativo | site=${site.name} | "${truncar(q)}"`);
             }
 
             return r;
@@ -341,7 +370,7 @@ export class WordPressScraper {
       const batchPromises = batch.map(post =>
         this.scrapePostApi(post.id, post.title, site.name, type, imdbId, mediaType)
           .catch(err => {
-            logger.warn(`post falhou`, { post: post.title.substring(0, 50), error: err.message });
+            logger.warn(`post falhou`, { post: truncar(post.title, 50), error: err.message });
             return [] as TorrentResult[];
           })
       );
@@ -361,6 +390,7 @@ export class WordPressScraper {
     return results;
   }
 
+  // Pré-filtro e idioma
   montarFrasesDeBusca(searchQuery: string, searchQueries?: string[]): Set<string> {
     const allQueries = new Set<string>([searchQuery, ...(searchQueries || [])]);
     const frases = new Set<string>();
@@ -400,16 +430,16 @@ export class WordPressScraper {
     const isCollection = isCollectionTitle(post.title, mediaType);
 
     if (!resultado.match && !isCollection) {
-      logger.debug(`post rejeitado`, { score: resultado.score.toFixed(2), titulo: post.title.substring(0, 60) });
+      logger.debug(`post rejeitado`, { score: resultado.score.toFixed(2), titulo: truncar(post.title, 60) });
       return false;
     }
 
     if (!resultado.match && isCollection) {
-      logger.debug(`coleção aceita pré-filtro`, { titulo: post.title.substring(0, 60), mediaType: mediaType ?? '-' });
+      logger.debug(`coleção aceita pré-filtro`, { titulo: truncar(post.title, 60), mediaType: mediaType ?? '-' });
       return true;
     }
 
-    logger.debug(`post aceito`, { score: resultado.score.toFixed(2), frase: resultado.fraseVencedora || '-', titulo: post.title.substring(0, 60) });
+    logger.debug(`post aceito`, { score: resultado.score.toFixed(2), frase: resultado.fraseVencedora || '-', titulo: truncar(post.title, 60) });
     return true;
   }
 
@@ -425,104 +455,23 @@ export class WordPressScraper {
     };
   }
 
+  extractLanguage(title: string): string {
+    if (!title) return 'Desconhecido';
+    const f = this.classificarTextoIdioma(title);
+    if (f.temDual) return 'Dual';
+    if (f.temDublado) return 'Dublado';
+    if (f.temNacional) return 'Nacional';
+    if (f.temLegendado || f.temLegendaSubstantivo) return 'Legendado';
+    return 'Desconhecido';
+  }
+
+  // Qualidade
   extractQualityFromText(text: string): string | null {
     if (!text) return null;
     const q = this.qualityDetector.extractBestQuality(text);
     return (q && q !== 'HD') ? q : null;
   }
 
-  cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
-    if (!parentText) return '';
-
-    const epPatterns = [
-      /Epis[oó]dio\s+\d{1,3}\s+ao?\s+\d{1,3}/i,
-      /Epis[oó]dio\s+\d{1,3}/i,
-      /\bS\d{1,2}\s*E\d{1,3}/i,
-      /\bE\d{1,3}/i
-    ];
-
-    let episode = '';
-    for (const pattern of epPatterns) {
-      const match = parentText.match(pattern);
-      if (match) {
-        episode = match[0];
-        break;
-      }
-    }
-
-    if (!episode) return '';
-
-    let quality = qualityOverride || null;
-    if (!quality && linkText) {
-      quality = this.extractQualityFromText(linkText);
-    }
-
-    return quality ? `${episode}: ${quality}` : episode;
-  }
-
-  extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
-    const $el = $(el);
-    const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
-
-    let textoIrmaoAnterior: string | null = null;
-    let tituloIrmaoAnterior: string | null = null;
-
-    const $pai = $el.parent();
-    const idxLink = $el.index();
-
-    if (idxLink !== -1 && idxLink > 0) {
-      const textoAntes = $pai.contents().slice(0, idxLink).text().replace(/\s+/g, ' ').trim();
-      if (textoAntes) {
-        if (QUALIDADE_PURA_REGEX.test(textoAntes)) textoIrmaoAnterior = textoAntes;
-        if (this.pareceTituloDeItem(textoAntes)) tituloIrmaoAnterior = textoAntes;
-      }
-    }
-
-    if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
-      const $rotulo = $pai.find('strong, b').first();
-      if ($rotulo.length) {
-        const idxRotulo = $rotulo.index();
-        if (idxRotulo !== -1 && idxLink !== -1 && idxRotulo < idxLink) {
-          const texto = $rotulo.text().replace(/\s+/g, ' ').trim();
-          if (texto) {
-            if (QUALIDADE_PURA_REGEX.test(texto)) textoIrmaoAnterior = texto;
-            if (this.pareceTituloDeItem(texto)) tituloIrmaoAnterior = texto;
-          }
-        }
-      }
-    }
-
-    if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
-      let irmao = $pai.prev();
-      for (let passo = 0; passo < 3 && irmao.length; passo++) {
-        if (irmao.find('a[href^="magnet:"]').length > 0) {
-          irmao = irmao.prev();
-          continue;
-        }
-
-        const texto = irmao.text().replace(/\s+/g, ' ').trim();
-        if (texto) {
-          if (QUALIDADE_PURA_REGEX.test(texto)) textoIrmaoAnterior = texto;
-          if (this.pareceTituloDeItem(texto)) tituloIrmaoAnterior = texto;
-          break;
-        }
-        irmao = irmao.prev();
-      }
-    }
-
-    return { altDaImg, textoIrmaoAnterior, tituloIrmaoAnterior };
-  }
-
-  pareceTituloDeItem(texto: string): boolean {
-    if (texto.length < 3 || texto.length > 150) return false;
-    if (!/[a-zA-ZÀ-ÿ]/.test(texto)) return false;
-    if (QUALIDADE_PURA_REGEX.test(texto)) return false;
-    if (/^(assistir|baixar|download|ver|trailer|sinopse|informa[çc]|caso haja|k-lite|codec)/i.test(texto)) return false;
-    if (/^\d+\s*(gb|mb|kb|kbps|mbps|gbps)$/i.test(texto)) return false;
-    return true;
-  }
-
-  // Qualidade: contexto acima do magnet (dentro da seção) > texto próprio > img > filhos > pai > dn > metadata > post title.
   resolverQualidade(
     tree: MagnetTree,
     canonicalName: string | null,
@@ -580,7 +529,112 @@ export class WordPressScraper {
     return { qualidade: 'HD', fonte: 'fallback' };
   }
 
-  // Classifica seção apenas pelo texto: presença de dual/dublado/nacional vs legendado. Sem dependência de tag, tamanho ou posição.
+  cleanHtmlTitle(parentText: string, linkText: string, qualityOverride?: string | null): string {
+    if (!parentText) return '';
+
+    // delega corretamente pro technical words.
+    const range = extrairRangeEpisodios(parentText);
+
+    if (!range) return '';
+    if (range.episodeStart === 0 && range.seasonStart === 0) return '';
+
+    let episode: string;
+    if (range.seasonStart > 0 && range.episodeStart > 0) {
+      // SxxExx(-yy) — preserva o formato compacto original
+      const s = String(range.seasonStart).padStart(2, '0');
+      const e = range.episodeEnd > range.episodeStart
+        ? `${String(range.episodeStart).padStart(2, '0')}-${String(range.episodeEnd).padStart(2, '0')}`
+        : String(range.episodeStart).padStart(2, '0');
+      episode = `S${s}E${e}`;
+    } else if (range.episodeStart > 0) {
+      // Só episódios (sem temporada no texto do parentText)
+      episode = range.episodeEnd > range.episodeStart
+        ? `Episódio ${range.episodeStart}-${range.episodeEnd}`
+        : `Episódio ${range.episodeStart}`;
+    } else {
+      // Só temporada (season pack) — não é um "episódio", retorna vazio
+      return '';
+    }
+
+    let quality = qualityOverride || null;
+    if (!quality && linkText) {
+      quality = this.extractQualityFromText(linkText);
+    }
+
+    return quality ? `${episode}: ${quality}` : episode;
+  }
+
+  // Contexto local do magnet
+  private classificarTextoContexto(texto: string): { qualidade: string | null; titulo: string | null } {
+    if (!texto) return { qualidade: null, titulo: null };
+    return {
+      qualidade: QUALIDADE_PURA_REGEX.test(texto) ? texto : null,
+      titulo: this.pareceTituloDeItem(texto) ? texto : null,
+    };
+  }
+
+  extrairContextoLocal($: any, el: any): ContextoLocalMagnet {
+    const $el = $(el);
+    const altDaImg = ($el.find('img').attr('alt') || '').trim() || null;
+
+    let textoIrmaoAnterior: string | null = null;
+    let tituloIrmaoAnterior: string | null = null;
+
+    const $pai = $el.parent();
+    const idxLink = $el.index();
+
+    if (idxLink !== -1 && idxLink > 0) {
+      const textoAntes = limparEspacos($pai.contents().slice(0, idxLink).text());
+      const classif = this.classificarTextoContexto(textoAntes);
+      if (classif.qualidade) textoIrmaoAnterior = classif.qualidade;
+      if (classif.titulo) tituloIrmaoAnterior = classif.titulo;
+    }
+
+    if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
+      const $rotulo = $pai.find('strong, b').first();
+      if ($rotulo.length) {
+        const idxRotulo = $rotulo.index();
+        if (idxRotulo !== -1 && idxLink !== -1 && idxRotulo < idxLink) {
+          const texto = limparEspacos($rotulo.text());
+          const classif = this.classificarTextoContexto(texto);
+          if (classif.qualidade) textoIrmaoAnterior = classif.qualidade;
+          if (classif.titulo) tituloIrmaoAnterior = classif.titulo;
+        }
+      }
+    }
+
+    if (!textoIrmaoAnterior && !tituloIrmaoAnterior) {
+      let irmao = $pai.prev();
+      for (let passo = 0; passo < 3 && irmao.length; passo++) {
+        if (irmao.find('a[href^="magnet:"]').length > 0) {
+          irmao = irmao.prev();
+          continue;
+        }
+
+        const texto = limparEspacos(irmao.text());
+        if (texto) {
+          const classif = this.classificarTextoContexto(texto);
+          if (classif.qualidade) textoIrmaoAnterior = classif.qualidade;
+          if (classif.titulo) tituloIrmaoAnterior = classif.titulo;
+          break;
+        }
+        irmao = irmao.prev();
+      }
+    }
+
+    return { altDaImg, textoIrmaoAnterior, tituloIrmaoAnterior };
+  }
+
+  pareceTituloDeItem(texto: string): boolean {
+    if (texto.length < 3 || texto.length > 150) return false;
+    if (!/[a-zA-ZÀ-ÿ]/.test(texto)) return false;
+    if (QUALIDADE_PURA_REGEX.test(texto)) return false;
+    if (/^(assistir|baixar|download|ver|trailer|sinopse|informa[çc]|caso haja|k-lite|codec)/i.test(texto)) return false;
+    if (/^\d+\s*(gb|mb|kb|kbps|mbps|gbps)$/i.test(texto)) return false;
+    return true;
+  }
+
+  // Seções
   detectSectionType(text: string): 'DUAL' | 'LEGENDADO' | 'OUTRO' {
     const t = normalizarTexto(text).trim();
 
@@ -597,30 +651,35 @@ export class WordPressScraper {
     return 'OUTRO';
   }
 
+  private tentarCandidatoAncora($: any, el: any, content: string): CandidatoAncora | null {
+    const $el = $(el);
+    const texto = limparEspacos($el.text());
+
+    if (texto.length < 3 || texto.length > 200) return null;
+
+    if ($el.find('a[href^="magnet:"]').length > 0) return null;
+
+    const tipo = this.detectSectionType(texto);
+    if (tipo === 'OUTRO') return null;
+
+    const pos = content.indexOf($el.toString());
+    if (pos === -1) return null;
+
+    const range = extrairRangeEpisodios(texto);
+    const season = range && range.seasonStart > 0 && range.seasonStart === range.seasonEnd
+      ? range.seasonStart
+      : null;
+
+    const tag = ($el.prop('tagName') || '').toLowerCase();
+    return { el, tipo, pos, season, texto, tag };
+  }
+
   findSections($: any, content: string): Secao[] {
     const candidatos: CandidatoAncora[] = [];
 
     $('*').each((_: number, el: any) => {
-      const $el = $(el);
-      const texto = $el.text().replace(/\s+/g, ' ').trim();
-
-      if (texto.length < 3 || texto.length > 200) return;
-
-      if ($el.find('a[href^="magnet:"]').length > 0) return;
-
-      const tipo = this.detectSectionType(texto);
-      if (tipo === 'OUTRO') return;
-
-      const pos = content.indexOf($el.toString());
-      if (pos === -1) return;
-
-      const range = extrairRangeEpisodios(texto);
-      const season = range && range.seasonStart > 0 && range.seasonStart === range.seasonEnd
-        ? range.seasonStart
-        : null;
-
-      const tag = ($el.prop('tagName') || '').toLowerCase();
-      candidatos.push({ el, tipo, pos, season, texto, tag });
+      const c = this.tentarCandidatoAncora($, el, content);
+      if (c) candidatos.push(c);
     });
 
     logger.debug(`findSections candidatos brutos=${candidatos.length}`);
@@ -656,7 +715,7 @@ export class WordPressScraper {
     return null;
   }
 
-  // Converte um trecho de HTML em texto puro — serve pra extrair qualidade/episódio do contexto.
+  // Magnet tree
   private extrairTextoDeHtml(html: string): string {
     return html
       .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, ' ')
@@ -672,14 +731,13 @@ export class WordPressScraper {
       .trim();
   }
 
-  // Tree delimitada do magnet + contexto acima (texto entre magnet anterior e este, dentro da seção).
   extrairTreeDoMagnet($: any, el: any, contextoAcima = ''): MagnetTree {
     const $el = $(el);
-    const proprio = $el.text().trim().replace(/\s+/g, ' ');
+    const proprio = limparEspacos($el.text());
 
     const filhos: string[] = [];
     $el.find('strong, b, span').each((_: number, child: any) => {
-      const t = $(child).text().trim().replace(/\s+/g, ' ');
+      const t = limparEspacos($(child).text());
       if (t && t !== proprio) filhos.push(t);
     });
 
@@ -689,16 +747,35 @@ export class WordPressScraper {
     const $pai = $el.parent();
     const $paiClone = $pai.clone();
     $paiClone.find('a').remove();
-    const paiTexto = $paiClone.text().trim().replace(/\s+/g, ' ');
+    const paiTexto = limparEspacos($paiClone.text());
 
     const irmaos: string[] = [];
     $pai.children('a').each((_: number, irmao: any) => {
       if (irmao === el) return;
-      const t = $(irmao).text().trim().replace(/\s+/g, ' ');
+      const t = limparEspacos($(irmao).text());
       if (t) irmaos.push(t);
     });
 
     return { proprio, filhos, imgAlt, paiTexto, irmaos, contextoAcima };
+  }
+
+  private construirCandidatoMagnet(
+    $: any, el: any, contentHtml: string, sections: Secao[]
+  ): { candidato: CandidatoMagnet | null; secaoParaStats: 'DUAL' | 'LEGENDADO' | 'NONE' | null } {
+    const magnet = $(el).attr('href')?.trim();
+    if (!magnet) return { candidato: null, secaoParaStats: null };
+
+    const htmlStr = $(el).toString();
+    const pos = contentHtml.indexOf(htmlStr);
+    if (pos === -1) return { candidato: null, secaoParaStats: 'NONE' };
+
+    const section = this.secaoDaPosicao(pos, sections);
+    const secao = section?.tipo ?? 'NONE';
+
+    return {
+      candidato: { el, magnet, pos, htmlLen: htmlStr.length, secao, section },
+      secaoParaStats: secao,
+    };
   }
 
   // Coleta magnets, agrupa por seção, ordena por posição e calcula o contexto acima de cada um (entre magnet anterior e este).
@@ -706,40 +783,19 @@ export class WordPressScraper {
     const allMagnetAnchors = $('a[href^="magnet:"]').toArray();
     const stats: Record<'DUAL' | 'LEGENDADO' | 'NONE', number> = { DUAL: 0, LEGENDADO: 0, NONE: 0 };
 
-    type Candidato = {
-      el: any;
-      magnet: string;
-      pos: number;
-      htmlLen: number;
-      secao: 'DUAL' | 'LEGENDADO' | 'NONE';
-      section: Secao | null;
-    };
-
-    const candidatos: Candidato[] = [];
+    const candidatos: CandidatoMagnet[] = [];
 
     for (const el of allMagnetAnchors) {
-      const magnet = $(el).attr('href')?.trim();
-      if (!magnet) continue;
-
-      const htmlStr = $(el).toString();
-      const pos = contentHtml.indexOf(htmlStr);
-      if (pos === -1) {
-        stats.NONE++;
-        continue;
-      }
-
-      const section = this.secaoDaPosicao(pos, sections);
-      const secao = section?.tipo ?? 'NONE';
-      stats[secao]++;
-
-      candidatos.push({ el, magnet, pos, htmlLen: htmlStr.length, secao, section });
+      const { candidato, secaoParaStats } = this.construirCandidatoMagnet($, el, contentHtml, sections);
+      if (secaoParaStats) stats[secaoParaStats]++;
+      if (candidato) candidatos.push(candidato);
     }
 
     // Contexto por elemento: só nos DUAL. É o texto entre o magnet anterior (ou início da seção) e este magnet.
     const contextoPorEl = new Map<any, string>();
 
     const virtualSection: Secao = { tipo: 'DUAL', start: 0, end: contentHtml.length, season: null, textoHeading: '' };
-    const porSecaoDual = new Map<Secao, Candidato[]>();
+    const porSecaoDual = new Map<Secao, CandidatoMagnet[]>();
 
     for (const c of candidatos) {
       if (c.secao !== 'DUAL') continue;
@@ -783,6 +839,7 @@ export class WordPressScraper {
     return resultados;
   }
 
+  // Orquestração do post
   async scrapePostApi(
     postId: number,
     postTitle: string,
@@ -849,7 +906,7 @@ export class WordPressScraper {
     logger.debug(`seções do post ${postId}:`);
     for (const s of secoes) {
       const tag = s.season != null ? `S${s.season}` : 'range';
-      logger.debug(`   ${s.tipo.padEnd(9)} ${tag.padEnd(6)} [${s.start}..${s.end}] "${s.textoHeading.substring(0, 70)}"`);
+      logger.debug(`   ${s.tipo.padEnd(9)} ${tag.padEnd(6)} [${s.start}..${s.end}] "${truncar(s.textoHeading, 70)}"`);
     }
     if (secoes.length === 0) logger.debug(`   (nenhuma)`);
 
@@ -860,46 +917,51 @@ export class WordPressScraper {
       return [];
     }
 
-    const secoesValidas = secoes.filter(s => s.tipo === 'DUAL');
-    if (secoesValidas.length === 0) {
-      const allMagnets = this.extractDirectMagnets($, html, []);
-      logger.debug(`sem seções DUAL, processando todos`, { postId, magnets: allMagnets.length });
-
-      const sampleSize = Math.min(3, allMagnets.length);
-      for (let i = 0; i < sampleSize; i++) {
-        const t = allMagnets[i].tree;
-        logger.debug(
-          `tree #${i + 1} | proprio="${t.proprio.substring(0, 30)}" | img="${t.imgAlt || '-'}" | ` +
-          `contextoAcima="${t.contextoAcima.substring(0, 45)}"`
-        );
-      }
-
-      const results = await this.processarMagnets(
-        allMagnets, $, html, titleRendered, provider, type,
-        globalOriginalTitle, year, years, mediaType
-      );
-      if (imdbConfirmed) for (const r of results) r.imdbConfirmed = true;
-      return results;
-    }
-
-    const magnetsDual = this.extractDirectMagnets($, html, secoes);
-
-    const sampleSize = Math.min(3, magnetsDual.length);
-    for (let i = 0; i < sampleSize; i++) {
-      const t = magnetsDual[i].tree;
-      logger.debug(
-        `tree #${i + 1} | proprio="${t.proprio.substring(0, 30)}" | img="${t.imgAlt || '-'}" | ` +
-        `contextoAcima="${t.contextoAcima.substring(0, 45)}"`
-      );
-    }
-
-    const results = await this.processarMagnets(
-      magnetsDual, $, html, titleRendered, provider, type,
-      globalOriginalTitle, year, years, mediaType
+    const results = await this.processarComSecoes(
+      $, html, titleRendered, provider, type,
+      globalOriginalTitle, year, years, mediaType, secoes, postId
     );
 
     if (imdbConfirmed) for (const r of results) r.imdbConfirmed = true;
     return results;
+  }
+
+  // Processa com ou sem seções DUAL — quando tem dual, usa TODAS as seções (pra saber quais rejeitar); sem dual, usa vazio (nada casa).
+  private async processarComSecoes(
+    $: any,
+    html: string,
+    titleRendered: string,
+    provider: string,
+    type: 'movie' | 'series',
+    globalOriginalTitle: string | undefined,
+    year: number | undefined,
+    years: number[] | undefined,
+    mediaType: TipoConteudo | undefined,
+    secoes: Secao[],
+    postId: number
+  ): Promise<TorrentResult[]> {
+    const temDual = secoes.some(s => s.tipo === 'DUAL');
+    const secoesParaExtract = temDual ? secoes : [];
+
+    const magnets = this.extractDirectMagnets($, html, secoesParaExtract);
+
+    if (!temDual) {
+      logger.debug(`sem seções DUAL, processando todos`, { postId, magnets: magnets.length });
+    }
+
+    const sampleSize = Math.min(3, magnets.length);
+    for (let i = 0; i < sampleSize; i++) {
+      const t = magnets[i].tree;
+      logger.debug(
+        `tree #${i + 1} | proprio="${truncar(t.proprio, 30)}" | img="${t.imgAlt || '-'}" | ` +
+        `contextoAcima="${truncar(t.contextoAcima, 45)}"`
+      );
+    }
+
+    return this.processarMagnets(
+      magnets, $, html, titleRendered, provider, type,
+      globalOriginalTitle, year, years, mediaType
+    );
   }
 
   async processarMagnets(
@@ -941,47 +1003,19 @@ export class WordPressScraper {
     return results;
   }
 
-  async processMagnetItem(
-    m: ExtractedMagnet,
+  // Título original
+  private determinarTituloOriginal(
     parentText: string,
-    linkText: string,
-    ctxLocal: ContextoLocalMagnet,
     postTitle: string,
-    html: string,
-    provider: string,
-    type: 'movie' | 'series',
+    ctxLocal: ContextoLocalMagnet,
+    secao: Secao | null,
+    canonicalName: string | null,
     globalOriginalTitle: string | undefined,
-    year: number | undefined,
-    years?: number[],
-    mediaType?: TipoConteudo,
-  ): Promise<TorrentResult | null> {
-    const dados = await this.analisarMagnetComCache(m.magnet, provider);
-    const canonicalName = dados?.nome ?? null;
-    const tree = m.tree;
-    const secao = m.section;
-
-    const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidade(
-      tree, canonicalName, linkText, parentText, postTitle, html
-    );
-
-    if (!this.qualityDetector.isValidQuality(quality)) {
-      logger.warn(`qualidade inválida`, { provider, quality, fonte: fonteQualidade });
-      return null;
-    }
-
-    const sizeParent = this.extractSize(parentText);
-    const sizePost = this.extractSize(postTitle);
-    const size = sizeParent || sizePost;
-
-    const language = this.extractLanguage(postTitle) || this.extractLanguage(parentText) || 'Desconhecido';
-    const episode = this.extractEpisodeFromText(tree.proprio) ?? this.extractEpisodeFromText(parentText);
-    const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
-
-    const isPostCollection = isCollectionTitle(postTitle, mediaType);
-
+    isPostCollection: boolean
+  ): ResultadoTitulo {
     let originalTitleFinal: string | undefined;
     let displayTitle: string;
-    let fonteOriginal: 'html' | 'dn' | 'post' | 'heading' = 'post';
+    let fonteOriginal: FonteOriginal = 'post';
 
     if (isPostCollection) {
       const ctxOriginal = this.extractOriginalTitleFromContext(parentText);
@@ -1027,6 +1061,17 @@ export class WordPressScraper {
       displayTitle = this.extractTitleFromPostTitle(postTitle) || canonicalName || postTitle;
     }
 
+    return { originalTitleFinal, displayTitle, fonteOriginal };
+  }
+
+  private resolverAnos(
+    originalTitleFinal: string | undefined,
+    fonteOriginal: FonteOriginal,
+    canonicalName: string | null,
+    isPostCollection: boolean,
+    year: number | undefined,
+    years: number[] | undefined
+  ): { yearFinal: number | undefined; yearsFinal: number[] | undefined } {
     const anosDoItem = originalTitleFinal ? extrairAno(originalTitleFinal) : undefined;
     const anosDoDnFallback = fonteOriginal !== 'dn' && canonicalName ? extrairAno(canonicalName) : undefined;
 
@@ -1046,6 +1091,55 @@ export class WordPressScraper {
     const yearsFinal = anosResolvidos
       ?? (anoDoPostEhRuido ? undefined : (yearFinal !== undefined ? [yearFinal] : years));
 
+    return { yearFinal, yearsFinal };
+  }
+
+  async processMagnetItem(
+    m: ExtractedMagnet,
+    parentText: string,
+    linkText: string,
+    ctxLocal: ContextoLocalMagnet,
+    postTitle: string,
+    html: string,
+    provider: string,
+    type: 'movie' | 'series',
+    globalOriginalTitle: string | undefined,
+    year: number | undefined,
+    years?: number[],
+    mediaType?: TipoConteudo,
+  ): Promise<TorrentResult | null> {
+    const dados = await this.analisarMagnetComCache(m.magnet, provider);
+    const canonicalName = dados?.nome ?? null;
+    const tree = m.tree;
+    const secao = m.section;
+
+    const { qualidade: quality, fonte: fonteQualidade } = this.resolverQualidade(
+      tree, canonicalName, linkText, parentText, postTitle, html
+    );
+
+    if (!this.qualityDetector.isValidQuality(quality)) {
+      logger.warn(`qualidade inválida`, { provider, quality, fonte: fonteQualidade });
+      return null;
+    }
+
+    const sizeParent = this.extractSize(parentText);
+    const sizePost = this.extractSize(postTitle);
+    const size = sizeParent || sizePost;
+
+    const language = this.extractLanguage(postTitle) || this.extractLanguage(parentText) || 'Desconhecido';
+    const episode = this.extractEpisodeFromText(tree.proprio) ?? this.extractEpisodeFromText(parentText);
+    const cleanedHtmlTitle = this.cleanHtmlTitle(parentText, linkText, quality);
+
+    const isPostCollection = isCollectionTitle(postTitle, mediaType);
+
+    const { originalTitleFinal, displayTitle, fonteOriginal } = this.determinarTituloOriginal(
+      parentText, postTitle, ctxLocal, secao, canonicalName, globalOriginalTitle, isPostCollection
+    );
+
+    const { yearFinal, yearsFinal } = this.resolverAnos(
+      originalTitleFinal, fonteOriginal, canonicalName, isPostCollection, year, years
+    );
+
     const canonicalFinal = canonicalName || this.sintetizarCanonicalName(
       originalTitleFinal || postTitle,
       yearsFinal,
@@ -1058,7 +1152,7 @@ export class WordPressScraper {
       : 'null';
 
     logger.debug(
-      `magnet | qual=${quality}(${fonteQualidade}) | ep=${episode ?? '-'} | fonte=${fonteOriginal} | range=${rangeStr} | ctx="${tree.contextoAcima.substring(0, 40)}"`
+      `magnet | qual=${quality}(${fonteQualidade}) | ep=${episode ?? '-'} | fonte=${fonteOriginal} | range=${rangeStr} | ctx="${truncar(tree.contextoAcima, 40)}"`
     );
 
     return {
@@ -1118,6 +1212,11 @@ export class WordPressScraper {
     return this.limparTituloBase(match[1].trim()) || null;
   }
 
+  cleanTitle(title: string): string {
+    return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Info block e idioma
   extractInfoBlock($: any, html: string): InfoBlock {
     const articleText = $.root().text() || html;
     const titleText = articleText;
@@ -1175,43 +1274,7 @@ export class WordPressScraper {
     return letras.length / Math.max(texto.length, 1) > 0.6;
   }
 
-  async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
-    const maxAttempts = 2;
-    for (let attempt = 0; attempt < maxAttempts; attempt++) {
-      try {
-        const res = await axios.get(protectorUrl, {
-          ...jsonAxiosConfig,
-          timeout: 12000,
-          maxRedirects: 5,
-        });
-        const html: string = res.data;
-        const match = html.match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
-        if (match) return match[1];
-        const altMatch = html.match(/DEST_URL\s*=\s*"([^"]+)"/);
-        if (altMatch) return altMatch[1];
-      } catch (err: any) {
-        if (attempt < maxAttempts - 1) {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          continue;
-        }
-        logger.warn(`protetor falhou`, { url: protectorUrl.substring(0, 50), error: err.message });
-      }
-    }
-    return null;
-  }
-
-  extractCanonicalNameSync(magnet: string): string | null {
-    const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
-    if (dnMatch) {
-      try {
-        return decodeURIComponent(dnMatch[1].replace(/\+/g, ' '));
-      } catch {
-        return dnMatch[1];
-      }
-    }
-    return null;
-  }
-
+  // Tamanho
   extrairTamanhoNumerico(text: string): TamanhoNumerico | null {
     if (!text) return null;
     const m = text.match(/([\d,.]+)\s*(GB|MB|KB)/i);
@@ -1236,18 +1299,42 @@ export class WordPressScraper {
     return Math.round(t.valor * multiplicador);
   }
 
-  extractLanguage(title: string): string {
-    if (!title) return 'Desconhecido';
-    const f = this.classificarTextoIdioma(title);
-    if (f.temDual) return 'Dual';
-    if (f.temDublado) return 'Dublado';
-    if (f.temNacional) return 'Nacional';
-    if (f.temLegendado || f.temLegendaSubstantivo) return 'Legendado';
-    return 'Desconhecido';
+  // Misc
+  async extractMagnetFromProtector(protectorUrl: string): Promise<string | null> {
+    const maxAttempts = 2;
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
+      try {
+        const res = await axios.get(protectorUrl, {
+          ...jsonAxiosConfig,
+          timeout: 12000,
+          maxRedirects: 5,
+        });
+        const html: string = res.data;
+        const match = html.match(/const\s+DEST_URL\s*=\s*"([^"]+)"/);
+        if (match) return match[1];
+        const altMatch = html.match(/DEST_URL\s*=\s*"([^"]+)"/);
+        if (altMatch) return altMatch[1];
+      } catch (err: any) {
+        if (attempt < maxAttempts - 1) {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          continue;
+        }
+        logger.warn(`protetor falhou`, { url: truncar(protectorUrl, 50), error: err.message });
+      }
+    }
+    return null;
   }
 
-  cleanTitle(title: string): string {
-    return title.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  extractCanonicalNameSync(magnet: string): string | null {
+    const dnMatch = magnet.match(/[&?]dn=([^&]+)/i);
+    if (dnMatch) {
+      try {
+        return decodeURIComponent(dnMatch[1].replace(/\+/g, ' '));
+      } catch {
+        return dnMatch[1];
+      }
+    }
+    return null;
   }
 
   async analisarMagnetComCache(magnet: string, provider: string): Promise<MagnetCacheEntry | null> {

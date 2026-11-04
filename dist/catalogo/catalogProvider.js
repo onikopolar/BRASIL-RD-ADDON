@@ -276,22 +276,8 @@ class CatalogProvider {
         const naoLegendado = torrents.filter(t => !(t.language && LEGENDADO_REGEX.test(t.language)));
         const results = await Promise.allSettled(naoLegendado.map(async (t) => {
             const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(t.originalTitle || t.title, mediaType);
-            if (isCollection &&
-                !this.mencionaTituloTmdb(t.htmlTitle, imdbTitles) &&
-                !this.mencionaTituloTmdb(t.canonicalName, imdbTitles)) {
-                const tituloExibicao = t.originalTitle || t.title;
-                t.canonicalName = tituloExibicao;
-                this.logger.info('🎯 ACEITO (pack de coleção sem título)', {
-                    imdbId,
-                    torrent: tituloExibicao.substring(0, 70),
-                    quality: t.quality,
-                    provider: t.provider,
-                    infoHash: t.infoHash?.substring(0, 12) || 'N/A',
-                });
-                return {
-                    torrent: t,
-                    result: { matches: true, similarity: 0.8, reason: 'Pack de coleção sem título' },
-                };
+            if (isCollection) {
+                t.canonicalName = t.originalTitle || t.title || t.canonicalName;
             }
             const tituloParaValidar = this.escolherTituloParaValidar(t.originalTitle, t.title, t.htmlTitle, t.canonicalName, isCollection, imdbTitles);
             const tituloParaIdioma = t.title || t.originalTitle || '';
@@ -308,16 +294,14 @@ class CatalogProvider {
             if (res.status === 'fulfilled') {
                 const { torrent, result } = res.value;
                 if (result.matches) {
-                    if (result.reason !== 'Pack de coleção sem título') {
-                        this.logger.info('🎯 ACEITO', {
-                            imdbId,
-                            alvo: `S${season ?? '?'}E${episode ?? '?'}`,
-                            torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
-                            quality: torrent.quality,
-                            provider: torrent.provider,
-                            infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
-                        });
-                    }
+                    this.logger.info('🎯 ACEITO', {
+                        imdbId,
+                        alvo: `S${season ?? '?'}E${episode ?? '?'}`,
+                        torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
+                        quality: torrent.quality,
+                        provider: torrent.provider,
+                        infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
+                    });
                     valid.push(torrent);
                 }
                 else {

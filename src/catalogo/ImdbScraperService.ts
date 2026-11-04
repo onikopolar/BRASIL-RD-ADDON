@@ -9,7 +9,6 @@ import { ImdbTitleCache } from '../database/models.js';
 
 const logger = new Logger('TMDBScraper');
 
-// DNS bypass igual aos outros scrapers.
 dns.setServers(['8.8.8.8', '1.1.1.1']);
 class DnsAgent extends https.Agent {
   createConnection(options: any, cb: any): any {
@@ -40,9 +39,6 @@ export interface ImdbTitles {
   mediaType?: 'movie' | 'tv';
   portuguesePriority: boolean;
   episodeTitles?: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> | null;
-  /** episode_count por season_number (sem S00). Ex: {1:39, 2:35, ..., 9:38}.
-   *  Usado pelo EpisodeMatcher pra calcular numeração absoluta em torrents tipo
-   *  "DBZ_Episodio 200" (sem season no nome). */
   seasonEpisodeCounts?: Record<number, number> | null;
 }
 
@@ -65,7 +61,6 @@ export class ImdbScraperService {
   private static cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private static readonly CACHE_CLEANUP_INTERVAL = 5 * 60 * 1000;
 
-  // TTL do cache em banco — mesma janela usada pelo resolveRoutes.
   private static readonly DB_CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
   private static instance: ImdbScraperService;
@@ -89,7 +84,6 @@ export class ImdbScraperService {
     logger.debug('TMDB Scraper ready');
   }
 
-  // Limpa entradas expiradas do cache em memória a cada 5min.
   private static startCleanupTimer(): void {
     if (ImdbScraperService.cleanupTimer) return;
 
@@ -112,7 +106,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Devolve do cache em memória se ainda estiver dentro do TTL.
   private static getFromCache(key: string): GlobalCacheEntry | undefined {
     const cached = ImdbScraperService.globalCache.get(key);
     if (!cached) return undefined;
@@ -126,7 +119,6 @@ export class ImdbScraperService {
     return cached;
   }
 
-  // Grava no cache em memória com eviction simples (FIFO) quando passa do limite.
   private static setCache(key: string, entry: GlobalCacheEntry): void {
     if (ImdbScraperService.globalCache.size >= ImdbScraperService.MAX_CACHE_SIZE) {
       const firstKey = ImdbScraperService.globalCache.keys().next().value;
@@ -136,8 +128,6 @@ export class ImdbScraperService {
     ImdbScraperService.globalCache.set(key, entry);
   }
 
-  // Lê do banco se a entrada é recente, tem episodeTitles quando precisa, não tem mojibake
-  // e não é uma entrada legacy (gravada antes do fix que separa titlesPt/titlesEn).
   private async getFromDbCache(imdbId: string, season: number): Promise<ImdbTitles | null> {
     try {
       const row: any = await ImdbTitleCache.findOne({
@@ -151,17 +141,13 @@ export class ImdbScraperService {
       const ageMs = Date.now() - new Date(row.updatedAt).getTime();
       if (ageMs > ImdbScraperService.DB_CACHE_TTL_MS) return null;
 
-      // Série precisa ter episodeTitles salvos; senão deixa a API buscar de novo.
       if (season > 0 && !row.episodeTitles) return null;
 
-      // Entrada com mojibake é ignorada — próxima request regrava limpo.
       if (this.temMojibake(row.episodeTitles) || this.temMojibake(row.titlesPt) || this.temMojibake(row.titlesEn)) {
         logger.debug('DB_CACHE_MOJIBAKE_SKIP', { imdbId, season });
         return null;
       }
 
-      // Entrada legacy: titlesPt === titlesEn (bug histórico do saveToDbCache que
-      // gravava o mesmo array nas duas colunas). Força re-fetch pra regravar com o fix.
       if (this.ehEntradaLegacy(row.titlesPt, row.titlesEn)) {
         logger.debug('DB_CACHE_LEGACY_SKIP', { imdbId, season });
         return null;
@@ -174,7 +160,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Detecta entrada gravada antes do fix: as duas colunas idênticas (mesmo array, mesma ordem).
   private ehEntradaLegacy(titlesPt: any, titlesEn: any): boolean {
     if (!Array.isArray(titlesPt) || !Array.isArray(titlesEn)) return false;
     if (titlesPt.length === 0 && titlesEn.length === 0) return false;
@@ -182,8 +167,6 @@ export class ImdbScraperService {
     return titlesPt.every((t: string, i: number) => t === titlesEn[i]);
   }
 
-  // Reconstrói o ImdbTitles a partir dos campos salvos.
-  // titlesEn[0] é o título original; titlesPt[0] é o PT-BR (quando existe).
   private reconstruirImdbTitles(row: any): ImdbTitles {
     const pt: string[] = Array.isArray(row.titlesPt) ? row.titlesPt : [];
     const en: string[] = Array.isArray(row.titlesEn) ? row.titlesEn : [];
@@ -213,14 +196,12 @@ export class ImdbScraperService {
     };
   }
 
-  // Detecta mojibake — UTF-8 lido como Latin-1 gera "Ã" seguido de caractere não-espaço.
   private temMojibake(value: any): boolean {
     if (!value) return false;
     const str = typeof value === 'string' ? value : JSON.stringify(value);
     return /Ã[^\s]/.test(str);
   }
 
-  // Reverte mojibake — dado ruim esporádico da TMDB. Roda recursivo em strings/arrays/objetos.
   private corrigirMojibake(value: any): any {
     if (!value) return value;
     if (Array.isArray(value)) return value.map(v => this.corrigirMojibake(v));
@@ -239,19 +220,14 @@ export class ImdbScraperService {
     return value;
   }
 
-  // Grava no banco. Separa títulos PT e EN em colunas distintas pra reconstrução correta.
-  // Corrige mojibake antes de gravar. Falha vira debug.
   private async saveToDbCache(imdbId: string, season: number, data: ImdbTitles): Promise<void> {
     try {
       const origClean = this.corrigirMojibake(data.originalTitle || '');
       const ptClean = data.portugueseTitle ? this.corrigirMojibake(data.portugueseTitle) : null;
       const allClean = (data.allTitles || []).map(t => this.corrigirMojibake(t));
 
-      // titlesPt: apenas o título em português (quando existe).
       const titlesPt: string[] = ptClean ? [ptClean] : [];
 
-      // titlesEn: original primeiro (posição 0 é o que reconstruirImdbTitles lê),
-      // seguido dos demais títulos que não sejam o PT nem duplicatas do original.
       const titlesEnRaw = [origClean, ...allClean];
       const titlesEn: string[] = [];
       for (const t of titlesEnRaw) {
@@ -279,7 +255,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Ponto de entrada — memória → banco → API, nessa ordem.
   async getTitlesFromImdbId(imdbId: string, season?: number): Promise<ImdbTitles> {
     try {
       const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
@@ -289,7 +264,6 @@ export class ImdbScraperService {
         return cached.data;
       }
 
-      // Checa o banco antes de martelar a API — compartilhado entre stream, resolve e rescrape.
       const seasonKey = season ?? 0;
       const fromDb = await this.getFromDbCache(imdbId, seasonKey);
       if (fromDb) {
@@ -301,7 +275,6 @@ export class ImdbScraperService {
       const tmdbInfo = await this.findInTMDB(imdbId);
 
       if (!tmdbInfo) {
-        // Fallback 1: TMDB HTML scraper (OMDB → TMDB search → scrape).
         logger.debug('TMDB API offline, usando fallback HTML', { imdbId });
         const htmlResult = await getTmdbTitlesViaHtml(imdbId);
         if (htmlResult) {
@@ -310,7 +283,6 @@ export class ImdbScraperService {
           return htmlResult;
         }
 
-        // Fallback 2: IMDb HTML (só título original).
         logger.debug('TMDB HTML fallback falhou, tentando IMDb HTML', { imdbId });
         const imdbResult = await this.scrapeImdbTitle(imdbId);
         ImdbScraperService.setCache(cacheKey, { data: imdbResult, timestamp: Date.now() });
@@ -322,7 +294,6 @@ export class ImdbScraperService {
 
       const resolved = await this.resolveTitleFromTMDB(tmdbIdNum, mediaType, imdbId, season);
 
-      // Título original fora do alfabeto latino cai pro inglês (animes, etc).
       let finalOriginal = resolved.originalTitle;
       if (finalOriginal && !/^[a-z0-9\s\-\.':,!]+$/i.test(finalOriginal)) {
         finalOriginal = await this.getEnglishTitle(tmdbIdNum, mediaType) || finalOriginal;
@@ -343,7 +314,6 @@ export class ImdbScraperService {
         allTitles.push(normalizedOriginal);
       }
 
-      // OMDB complementa com título em inglês quando faz sentido.
       const englishTitle = await this.getEnglishTitleFromOmdb(imdbId);
       if (englishTitle) {
         const normalizedEn = this.normalizeTitle(englishTitle);
@@ -376,7 +346,6 @@ export class ImdbScraperService {
         mediaType,
       });
 
-      // Grava no banco pra próximas requests (outro processo, restart, etc).
       await this.saveToDbCache(imdbId, seasonKey, result);
 
       logger.debug('Títulos TMDB obtidos', {
@@ -404,7 +373,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Resolve títulos a partir do tmdbId + mediaType — chamado só depois do find.
   private async resolveTitleFromTMDB(
     tmdbId: number,
     mediaType: 'movie' | 'tv',
@@ -428,7 +396,6 @@ export class ImdbScraperService {
     }
 
     if (mediaType === 'tv') {
-      // Tenta dados da temporada, se aplicável.
       let year: number | undefined;
       if (season !== undefined && season > 0) {
         try {
@@ -443,8 +410,6 @@ export class ImdbScraperService {
 
       const seriesDetails = await this.fetchDetailsFromTMDB(tmdbId, 'tv');
       if (seriesDetails) {
-        // Extrai episode_count por season (ignora S00/specials) — dado que o TMDB já
-        // devolve no /tv/{id} e que hoje estava sendo descartado.
         const seasonEpisodeCounts: Record<number, number> = {};
         for (const s of seriesDetails.seasons || []) {
           if (typeof s?.season_number === 'number' && s.season_number > 0 && typeof s.episode_count === 'number') {
@@ -464,7 +429,6 @@ export class ImdbScraperService {
     return { originalTitle: '', portugueseTitle: null };
   }
 
-  // Busca o título em inglês no TMDB pra títulos não-latinos.
   private async getEnglishTitle(tmdbId: number, mediaType: 'movie' | 'tv'): Promise<string | null> {
     const enDetails = await this.fetchDetailsFromTMDB(tmdbId, mediaType, 'en-US');
     if (!enDetails) return null;
@@ -472,7 +436,6 @@ export class ImdbScraperService {
     return mediaType === 'tv' ? enDetails.name : enDetails.title;
   }
 
-  // Busca título em inglês no OMDB como complemento.
   private async getEnglishTitleFromOmdb(imdbId: string): Promise<string> {
     try {
       const omdbUrl = `http://www.omdbapi.com/?i=${imdbId}&apikey=${process.env.OMDB_API_KEY || 'trilogy'}`;
@@ -486,9 +449,6 @@ export class ImdbScraperService {
     return '';
   }
 
-  // Localiza o tmdbId a partir do imdbId. null significa fallback HTML.
-  // Tentativa 1: /find da API do TMDB. Se voltar VAZIO (bug conhecido de mapeamento
-  // — ex: tt0214341/DBZ) ou falhar, cai no fallback Cinemeta → search HTML.
   private async findInTMDB(imdbId: string): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/find/${imdbId}`, {
@@ -508,7 +468,6 @@ export class ImdbScraperService {
         return { tmdbId: response.data.tv_results[0].id, mediaType: 'tv' };
       }
 
-      // /find respondeu 200 mas VAZIO — bug de mapeamento do TMDB em alguns IDs antigos.
       logger.debug('TMDB /find vazio, tentando fallback Cinemeta', { imdbId });
       return await this.findViaCinemetaFallback(imdbId);
     } catch (error) {
@@ -517,14 +476,11 @@ export class ImdbScraperService {
     }
   }
 
-  // Fallback pra quando /find falha ou volta vazio: Cinemeta → título → busca HTML no TMDB → tmdbId.
-  // Funciona pra casos como tt0214341 (Dragon Ball Z), onde o mapeamento IMDb↔TMDB está quebrado.
   private async findViaCinemetaFallback(imdbId: string): Promise<{ tmdbId: number; mediaType: 'movie' | 'tv' } | null> {
     try {
       let title: string | null = null;
       let mediaType: 'movie' | 'tv' = 'tv';
 
-      // PASSO 1: Cinemeta devolve o título (só tem IDs IMDb, nunca TMDB).
       for (const tipo of ['series', 'movie'] as const) {
         try {
           const r = await axios.get(`https://v3-cinemeta.strem.io/meta/${tipo}/${imdbId}.json`, { timeout: 10000 });
@@ -541,7 +497,6 @@ export class ImdbScraperService {
         return null;
       }
 
-      // PASSO 2: busca o título no site do TMDB e extrai o tmdbId do href.
       const searchRes = await axios.get(
         `https://www.themoviedb.org/search?query=${encodeURIComponent(title)}`,
         {
@@ -570,7 +525,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Detalhes do filme ou série no idioma pedido.
   private async fetchDetailsFromTMDB(tmdbId: number, mediaType: 'movie' | 'tv', langOverride?: string): Promise<any> {
     try {
       const endpoint = mediaType === 'movie' ? 'movie' : 'tv';
@@ -585,7 +539,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Dados da temporada — inclui episodes.
   private async fetchSeasonFromTMDB(tmdbId: number, season: number, langOverride?: string): Promise<any> {
     try {
       const response = await axios.get(`${this.tmdbBaseUrl}/tv/${tmdbId}/season/${season}`, {
@@ -599,7 +552,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Busca nomes de episódios em pt-BR e en-US em paralelo e junta por episode_number.
   private async fetchEpisodeTitles(tmdbId: number, season: number): Promise<Array<{ episodeNumber: number; namePt?: string; nameEn?: string }>> {
     const result: Array<{ episodeNumber: number; namePt?: string; nameEn?: string }> = [];
     try {
@@ -624,7 +576,6 @@ export class ImdbScraperService {
     return result;
   }
 
-  // Fallback: scrape IMDb HTML quando TMDB não conhece o ID.
   private async scrapeImdbTitle(imdbId: string): Promise<ImdbTitles> {
     try {
       const url = `https://www.imdb.com/title/${imdbId}/`;
@@ -667,7 +618,6 @@ export class ImdbScraperService {
     }
   }
 
-  // Resultado vazio — usado quando tudo falha.
   private createEmptyResult(imdbId: string): ImdbTitles {
     logger.debug('Resultado vazio gerado', { imdbId });
     return {
@@ -680,18 +630,22 @@ export class ImdbScraperService {
     };
   }
 
-  // Normaliza pra comparação — lowercase, sem acento, sem pontuação.
+  // Normaliza pra comparação e busca — lowercase, sem acento, sem pontuação exceto hífen.
+  // Hífen é preservado porque é parte estrutural do título (ex: "9-1-1", "Spider-Man").
+  // Removê-lo colapsa "9-1-1" em "9 1 1" (três tokens comuns) e destrói a busca no
+  // WordPress/Starck/HDR — o site original tem o hífen e a query sem ele retorna genéricos.
+  // Downstream (TitleFilter/Similarity) usa normalizarTexto (ASCII-only) que strippa hífen
+  // pra comparação — então preservar aqui não afeta matching, só query.
   private normalizeTitle(title: string): string {
     return title
       .toLowerCase()
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, '')
-      .replace(/[^\p{L}\p{N}\s]/gu, ' ')
+      .replace(/[^\p{L}\p{N}\s\-]/gu, ' ')
       .replace(/\s+/g, ' ')
       .trim();
   }
 
-  // Compatibilidade — só devolve o título principal.
   async getTitleFromImdbId(imdbId: string): Promise<string | null> {
     try {
       const titles = await this.getTitlesFromImdbId(imdbId);
@@ -702,13 +656,11 @@ export class ImdbScraperService {
     }
   }
 
-  // Limpa o cache global em memória.
   static clearGlobalCache(): void {
     ImdbScraperService.globalCache.clear();
     logger.info('TMDB cache limpo');
   }
 
-  // Estatísticas do cache em memória.
   static getGlobalCacheStats() {
     return {
       size: ImdbScraperService.globalCache.size,
@@ -724,8 +676,8 @@ export class ImdbScraperService {
     return {
       cacheSize: ImdbScraperService.globalCache.size,
       cacheTTL: this.cacheTTL,
-      version: '2.5.1',
-      feature: 'Fallback HTML + cache memória + cache banco (R12) + correção mojibake (R16b) + separação PT/EN no DB (R17) + fallback Cinemeta no /find vazio (R18)',
+      version: '2.5.2',
+      feature: 'Fallback HTML + cache memória + cache banco + correção mojibake + separação PT/EN no DB + fallback Cinemeta + preservação de hífen no normalizeTitle (fix 9-1-1)',
     };
   }
 }

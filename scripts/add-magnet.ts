@@ -1,8 +1,9 @@
 #!/usr/bin/env ts-node
 /**
- * Curadoria pessoal — baixa magnet no Torbox e salva no banco.
+ * Curadoria pessoal — adiciona magnet no Torbox e salva no banco imediatamente.
  * Sem validação de similaridade: o usuário fornece IMDb ID e título.
- * Uso: npm run addmagnet
+ * Não espera o download concluir — o Torbox gerencia internamente.
+ * Uso: npm run add-magnet
  */
 
 import 'dotenv/config';
@@ -61,7 +62,7 @@ async function main() {
   const qualidade = await question(rl, 'Qualidade [HD]: ') || 'HD';
   const idioma = await question(rl, 'Idioma [pt-BR]: ') || 'pt-BR';
 
-  console.log('\n=== TORBOX: Baixando e ativando AirLock ===');
+  console.log('\n=== TORBOX: Adicionando e ativando AirLock ===');
 
   const curatorKey = process.env.TORBOX_CURATOR_API_KEY;
   if (!curatorKey || curatorKey.length < 10) {
@@ -83,53 +84,19 @@ async function main() {
     return;
   }
 
-  console.log('\nAguardando download...');
-  let lastProgress = -1;
-  let downloadDone = false;
-  const startTime = Date.now();
-  const MAX_WAIT_MS = 30 * 60 * 1000;
-
-  while (!downloadDone) {
-    if (Date.now() - startTime > MAX_WAIT_MS) {
-      console.log('\n[ERRO] Timeout — download demorou mais de 30 minutos.');
-      rl.close();
-      return;
-    }
-
-    try {
-      const info = await torboxService.getTorrentInfo(torrentId, curatorKey);
-      const progress = info.progress || 0;
-      const pct = Math.round(progress * 100);
-      const state = info.download_state || 'unknown';
-
-      if (pct !== lastProgress) {
-        const filled = Math.floor(pct / 5);
-        const bar = '█'.repeat(filled) + '░'.repeat(20 - filled);
-        process.stdout.write(`\r   [${bar}] ${pct}% | ${state}   `);
-        lastProgress = pct;
-      }
-
-      if (pct >= 100 || state === 'completed' || state === 'uploading' || state === 'cached') {
-        downloadDone = true;
-      }
-    } catch { }
-
-    if (!downloadDone) await new Promise(r => setTimeout(r, 5000));
-  }
-
-  console.log('\n   ✅ Download concluído!');
-
+  // AirLock é independente do estado do download — pode ativar agora.
   console.log('\nAtivando AirLock...');
   try {
     await torboxService.airlockTorrent(torrentId, curatorKey, !is4k);
     console.log(`   AirLock: ${is4k ? 'DESATIVADO (4K)' : 'ATIVADO'} ✅`);
   } catch (e) {
-    console.log('[ERRO] AirLock falhou:', (e as Error).message);
-    console.log('Torrent NAO salvo no banco — corrija o erro e tente novamente.');
-    rl.close();
-    return;
+    console.log('[AVISO] AirLock falhou:', (e as Error).message);
+    console.log('   Continuando — o torrent ainda pode ser salvo no banco.');
   }
 
+  // Salva no banco imediatamente. Não espera o Torbox terminar de baixar.
+  // O ResolveRoutes já lida com download_state 'metaDL'/'downloading' devolvendo
+  // o vídeo de status pro usuário. Quando o Torbox completar, o stream funciona.
   console.log('\nSalvando no banco...');
 
   if (!infoHash) {
@@ -168,7 +135,6 @@ async function main() {
       imdbId,
       imdbIds: [imdbId],
       imdbSeason: season ?? undefined,
-      // imdbEpisodeStart e imdbEpisodeEnd serão omitidos se undefined
       seeders: 50,
       idioma,
       qualidade,
@@ -176,13 +142,12 @@ async function main() {
       lastSeen: new Date(),
     };
 
-    // Remove propriedades com valor undefined para evitar conflitos com o Sequelize
     if (novoRegistro.imdbSeason === undefined) delete novoRegistro.imdbSeason;
-    // Não inclui imdbEpisodeStart/End pois não se aplica (curadoria não lida com episódios específicos)
 
     await createTorrent(novoRegistro);
 
-    console.log(`\nPRONTO! ${dn.substring(0, 70)}`);
+    console.log(`\n✅ PRONTO! ${dn.substring(0, 70)}`);
+    console.log(`   Torrent salvo. O Torbox vai baixar em background.`);
   }
 
   rl.close();

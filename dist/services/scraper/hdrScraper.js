@@ -37,6 +37,7 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.similarity = exports.BREAKER_COOLDOWN_MS = exports.BREAKER_LIMITE_ERROS = exports.BREAKER_JANELA_MS = exports.NEGATIVE_MAX_ENTRIES = exports.NEGATIVE_DEFAULT_TTL_MS = exports.axiosConfig = exports.BROWSER_HEADERS = exports.HDR_BASE = void 0;
+exports.truncar = truncar;
 exports.negativeCacheKey = negativeCacheKey;
 exports.negativeCacheIsBlocked = negativeCacheIsBlocked;
 exports.negativeCacheMark = negativeCacheMark;
@@ -97,6 +98,9 @@ exports.axiosConfig = {
     lookup: wordpressScraper_js_1.lookupCustomizado,
     headers: exports.BROWSER_HEADERS,
 };
+function truncar(texto, max = 40) {
+    return texto.substring(0, max);
+}
 exports.NEGATIVE_DEFAULT_TTL_MS = 30 * 60 * 1000;
 exports.NEGATIVE_MAX_ENTRIES = 5000;
 const negativeStore = new Map();
@@ -295,6 +299,9 @@ function limparTituloOriginal(titulo) {
         .replace(/\s+/g, ' ')
         .trim();
 }
+function criarMetadadoVazio() {
+    return { origem: { title: 'none', year: 'none' } };
+}
 function extrairMetadadosDoJsonLd(blocks) {
     const meta = blocks.find(b => b && (b['@type'] === 'TVSeries' || b['@type'] === 'Movie'));
     if (!meta)
@@ -310,68 +317,69 @@ function extrairMetadadosDoJsonLd(blocks) {
     }
     return out;
 }
-function extractHdrMetadata($, jsonLdBlocks) {
-    const result = { origem: { title: 'none', year: 'none' } };
-    if (jsonLdBlocks && jsonLdBlocks.length > 0) {
-        const meta = extrairMetadadosDoJsonLd(jsonLdBlocks);
-        if (meta.originalTitleBruto) {
-            result.originalTitleBruto = meta.originalTitleBruto;
-            result.originalTitle = limparTituloOriginal(meta.originalTitleBruto);
-            result.origem.title = 'jsonld';
+function aplicarJsonLd(result, jsonLdBlocks) {
+    if (!jsonLdBlocks || jsonLdBlocks.length === 0)
+        return;
+    const meta = extrairMetadadosDoJsonLd(jsonLdBlocks);
+    if (meta.originalTitleBruto) {
+        result.originalTitleBruto = meta.originalTitleBruto;
+        result.originalTitle = limparTituloOriginal(meta.originalTitleBruto);
+        result.origem.title = 'jsonld';
+    }
+    if (meta.year) {
+        result.year = meta.year;
+        result.origem.year = 'jsonld';
+    }
+}
+function extrairValorDeBold($, el) {
+    const html = $(el).parent().html() || '';
+    const elHtml = $(el).toString();
+    const idx = html.indexOf(elHtml);
+    if (idx === -1)
+        return null;
+    const after = html.substring(idx + elHtml.length);
+    const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
+    if (!match)
+        return null;
+    return match[1].replace(/<[^>]+>/g, '').trim();
+}
+function aplicarParagrafo(result, $, paragrafo) {
+    paragrafo.find('b').each((_i, el) => {
+        const rotulo = $(el).text().trim();
+        const valor = extrairValorDeBold($, el);
+        if (valor === null)
+            return;
+        if (/t[íi]tulo\s+original/i.test(rotulo) && !result.originalTitleBruto) {
+            result.originalTitleBruto = valor;
+            result.originalTitle = limparTituloOriginal(valor);
+            result.origem.title = 'html';
         }
-        if (meta.year) {
-            result.year = meta.year;
-            result.origem.year = 'jsonld';
+        else if (/lan[çc]amento/i.test(rotulo) && result.year === undefined) {
+            const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
+            if (yearMatch) {
+                result.year = parseInt(yearMatch[0]);
+                result.origem.year = 'html';
+            }
+        }
+        else if (/idiomas?/i.test(rotulo)) {
+            result.language = valor;
+        }
+    });
+    if (!result.originalTitle) {
+        const tituloBase = extrairTituloBasePosImdb($, paragrafo);
+        const originalFinal = tituloBase || result.originalTitleBruto;
+        if (originalFinal) {
+            result.originalTitle = limparTituloOriginal(originalFinal);
+            result.origem.title = 'html';
         }
     }
-    const paragrafo = $('p').filter((_i, el) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
-    if (paragrafo.length) {
-        paragrafo.find('b').each((_i, el) => {
-            const rotulo = $(el).text().trim();
-            const html = $(el).parent().html() || '';
-            const elHtml = $(el).toString();
-            const idx = html.indexOf(elHtml);
-            if (idx === -1)
-                return;
-            const after = html.substring(idx + elHtml.length);
-            const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
-            if (!match)
-                return;
-            const valor = match[1].replace(/<[^>]+>/g, '').trim();
-            if (/t[íi]tulo\s+original/i.test(rotulo) && !result.originalTitleBruto) {
-                result.originalTitleBruto = valor;
-                result.originalTitle = limparTituloOriginal(valor);
-                result.origem.title = 'html';
-            }
-            else if (/lan[çc]amento/i.test(rotulo) && result.year === undefined) {
-                const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
-                if (yearMatch) {
-                    result.year = parseInt(yearMatch[0]);
-                    result.origem.year = 'html';
-                }
-            }
-            else if (/idiomas?/i.test(rotulo)) {
-                result.language = valor;
-            }
-        });
-        if (!result.originalTitle) {
-            const tituloBase = extrairTituloBasePosImdb($, paragrafo);
-            const originalFinal = tituloBase || result.originalTitleBruto;
-            if (originalFinal) {
-                result.originalTitle = limparTituloOriginal(originalFinal);
-                result.origem.title = 'html';
-            }
-        }
-        const specsFallback = parseSpecsList($);
-        result.quality = result.quality || specsFallback['qualidade'];
-        result.size = result.size || specsFallback['tamanho'];
-        result.format = result.format || specsFallback['formato'];
-        result.duration = result.duration || specsFallback['duracao'] || specsFallback['duração'];
-        return result;
-    }
-    const specs = parseSpecsList($);
-    if (Object.keys(specs).length === 0)
-        return result;
+    const specsFallback = parseSpecsList($);
+    result.quality = result.quality || specsFallback['qualidade'];
+    result.size = result.size || specsFallback['tamanho'];
+    result.format = result.format || specsFallback['formato'];
+    result.duration = result.duration || specsFallback['duracao'] || specsFallback['duração'];
+}
+function aplicarSpecs(result, specs) {
     if (specs['titulo original'] && !result.originalTitleBruto) {
         result.originalTitleBruto = specs['titulo original'];
         result.originalTitle = limparTituloOriginal(specs['titulo original']);
@@ -384,9 +392,8 @@ function extractHdrMetadata($, jsonLdBlocks) {
             result.origem.year = 'html';
         }
     }
-    if (specs['idiomas']) {
+    if (specs['idiomas'])
         result.language = specs['idiomas'];
-    }
     if (specs['qualidade'])
         result.quality = specs['qualidade'];
     if (specs['tamanho'])
@@ -397,6 +404,19 @@ function extractHdrMetadata($, jsonLdBlocks) {
         result.duration = specs['duracao'];
     if (specs['duração'])
         result.duration = specs['duração'];
+}
+function extractHdrMetadata($, jsonLdBlocks) {
+    const result = criarMetadadoVazio();
+    aplicarJsonLd(result, jsonLdBlocks);
+    const paragrafo = $('p').filter((_i, el) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
+    if (paragrafo.length) {
+        aplicarParagrafo(result, $, paragrafo);
+        return result;
+    }
+    const specs = parseSpecsList($);
+    if (Object.keys(specs).length === 0)
+        return result;
+    aplicarSpecs(result, specs);
     return result;
 }
 function extrairTituloBasePosImdb($, paragrafo) {
@@ -452,6 +472,33 @@ function classificarSecao(texto) {
         return 'DUAL';
     return 'NONE';
 }
+function detectarSecoes($, html) {
+    const secaoHeaders = [];
+    $('h1, h2, h3, h4, h5, h6, strong, b').each((_i, el) => {
+        const texto = $(el).text().trim();
+        if (!texto)
+            return;
+        const tipo = classificarSecao(texto);
+        if (tipo === 'NONE')
+            return;
+        const pos = html.indexOf($(el).toString());
+        if (pos === -1)
+            return;
+        secaoHeaders.push({ pos, type: tipo });
+    });
+    secaoHeaders.sort((a, b) => a.pos - b.pos);
+    return secaoHeaders;
+}
+function secaoNaPosicao(pos, secaoHeaders) {
+    let secao = 'NONE';
+    for (const sh of secaoHeaders) {
+        if (pos > sh.pos)
+            secao = sh.type;
+        else
+            break;
+    }
+    return secao;
+}
 function montarUrlBusca(query) {
     const termo = encodeURIComponent(query.trim()).replace(/%20/g, '+');
     return `${exports.HDR_BASE}/pesquisa/${termo}/`;
@@ -496,10 +543,34 @@ function mapearTipoEsperado(mediaType) {
         return 'Movie';
     return null;
 }
+function parsearJsonLdItems(items, tipoEsperado, targetSeason, mediaType) {
+    const results = [];
+    const seen = new Set();
+    let cortadosPorTipo = 0;
+    for (const entry of items) {
+        const title = entry?.item?.name || entry?.name;
+        const rawUrl = entry?.item?.url || entry?.url;
+        if (!title || !rawUrl)
+            continue;
+        if (tipoEsperado && entry?.item?.['@type'] !== tipoEsperado) {
+            cortadosPorTipo++;
+            continue;
+        }
+        const absoluteHref = rawUrl.startsWith('http') ? rawUrl : `${exports.HDR_BASE}${rawUrl}`;
+        if (seen.has(absoluteHref))
+            continue;
+        seen.add(absoluteHref);
+        if (!passaFiltroTemporada([title], targetSeason, mediaType))
+            continue;
+        results.push({ title, postUrl: absoluteHref });
+    }
+    return { results, cortadosPorTipo };
+}
 async function searchHdrLinks(query, targetSeason, mediaType) {
     const t0 = Date.now();
+    const q = truncar(query);
     if (!breakerPodeUsar(FONTE)) {
-        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${query.substring(0, 40)}"`);
+        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${q}"`);
         return { status: 'blocked', items: [], reason: 'circuit breaker open' };
     }
     try {
@@ -508,13 +579,19 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
         const $ = cheerio.load(html);
         const { blocks, malformados } = parseJsonLdBlocks($);
         if (malformados > 0) {
-            logger.warn('HDR: JSON-LD malformado', { query: query.substring(0, 40), malformados });
+            logger.warn('HDR: JSON-LD malformado', { query: q, malformados });
         }
         const collectionPage = blocks.find(b => b && b['@type'] === 'CollectionPage');
         if (!collectionPage) {
+            const tipos = blocks.map(b => b?.['@type']).filter(Boolean);
+            const ehHome = tipos.length === 2 && tipos.includes('WebSite') && tipos.includes('Organization');
+            if (ehHome) {
+                logger.debug(`HDR: query rejeitada (home sem CollectionPage) | "${truncar(query)}"`);
+                return { status: 'empty', items: [] };
+            }
             logger.warn('HDR: JSON-LD sem CollectionPage', {
-                query: query.substring(0, 40),
-                blocos: blocks.map(b => b?.['@type'] ?? '?').join(','),
+                query: truncar(query),
+                blocos: tipos.join(','),
             });
             breakerRegistrarFalha(FONTE);
             return { status: 'error', items: [], reason: 'no CollectionPage' };
@@ -522,37 +599,18 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
         const items = collectionPage.mainEntity?.itemListElement;
         if (!Array.isArray(items) || items.length === 0) {
             breakerRegistrarSucesso(FONTE);
-            logger.debug(`HDR: CollectionPage vazia | "${query.substring(0, 40)}"`);
+            logger.debug(`HDR: CollectionPage vazia | "${q}"`);
             return { status: 'empty', items: [] };
         }
         const tipoEsperado = mapearTipoEsperado(mediaType);
-        const results = [];
-        const seen = new Set();
-        let cortadosPorTipo = 0;
-        for (const entry of items) {
-            const title = entry?.item?.name || entry?.name;
-            const rawUrl = entry?.item?.url || entry?.url;
-            if (!title || !rawUrl)
-                continue;
-            if (tipoEsperado && entry?.item?.['@type'] !== tipoEsperado) {
-                cortadosPorTipo++;
-                continue;
-            }
-            const absoluteHref = rawUrl.startsWith('http') ? rawUrl : `${exports.HDR_BASE}${rawUrl}`;
-            if (seen.has(absoluteHref))
-                continue;
-            seen.add(absoluteHref);
-            if (!passaFiltroTemporada([title], targetSeason, mediaType))
-                continue;
-            results.push({ title, postUrl: absoluteHref });
-        }
+        const { results, cortadosPorTipo } = parsearJsonLdItems(items, tipoEsperado, targetSeason, mediaType);
         breakerRegistrarSucesso(FONTE);
-        logger.debug(`HDR: "${query.substring(0, 40)}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
+        logger.debug(`HDR: "${q}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
         return { status: 'ok', items: results.slice(0, 40) };
     }
     catch (err) {
         logger.warn('HDR busca falhou', {
-            query: query.substring(0, 50),
+            query: truncar(query, 50),
             status: err.response?.status || '-',
             error: err.message,
         });
@@ -560,39 +618,7 @@ async function searchHdrLinks(query, targetSeason, mediaType) {
         return { status: 'error', items: [], error: err.message };
     }
 }
-async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, mediaType) {
-    const $ = cheerio.load(html);
-    const results = [];
-    const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
-    const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
-    const pageTitle = h1Title || titleTag || postTitle;
-    const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
-    const metadata = extractHdrMetadata($, jsonLdBlocks);
-    const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
-    const sectionHeaders = [];
-    $('h1, h2, h3, h4, h5, h6, strong, b').each((_i, el) => {
-        const texto = $(el).text().trim();
-        if (!texto)
-            return;
-        const tipo = classificarSecao(texto);
-        if (tipo === 'NONE')
-            return;
-        const pos = html.indexOf($(el).toString());
-        if (pos === -1)
-            return;
-        sectionHeaders.push({ pos, type: tipo });
-    });
-    sectionHeaders.sort((a, b) => a.pos - b.pos);
-    const detectarSecaoPorPosicao = (pos) => {
-        let secao = 'NONE';
-        for (const sh of sectionHeaders) {
-            if (pos > sh.pos)
-                secao = sh.type;
-            else
-                break;
-        }
-        return secao;
-    };
+function coletarRawLinks($, html, secaoHeaders, ctx) {
     const rawLinks = [];
     const totalAnchors = $('a[href^="magnet:"]').length;
     $('a[href^="magnet:"]').each((_i, el) => {
@@ -602,14 +628,14 @@ async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, me
         const containerText = getContainerText($, el);
         const linkText = $(el).text().trim();
         const posMagnet = html.indexOf($(el).toString());
-        const secaoPosicional = posMagnet !== -1 ? detectarSecaoPorPosicao(posMagnet) : 'NONE';
+        const secaoPosicional = posMagnet !== -1 ? secaoNaPosicao(posMagnet, secaoHeaders) : 'NONE';
         if (secaoPosicional === 'LEGENDADO')
             return;
         const isLegendado = /legendado|legendada|legenda/i.test(containerText);
         const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(containerText);
         if (isLegendado && !isDualOuDublado)
             return;
-        if (!passaFiltroTemporada([containerText, postTitle, pageTitle], targetSeason, mediaType))
+        if (!passaFiltroTemporada([containerText, ctx.postTitle, ctx.pageTitle], ctx.targetSeason, ctx.mediaType))
             return;
         const qualityMatch = containerText.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
         let sizeMatch = containerText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
@@ -620,79 +646,110 @@ async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, me
         }
         rawLinks.push({ href, containerText, linkText, qualityMatch, sizeMatch });
     });
-    for (const raw of rawLinks) {
+    return { rawLinks, totalAnchors };
+}
+async function processarRawLink(raw, ctx) {
+    try {
+        const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
+        let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
+        if (!infoHash) {
+            logger.warn(`HDR: magnet sem infoHash`, { magnet: raw.href.substring(0, 60) });
+            return null;
+        }
+        let canonicalName;
         try {
-            const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
-            let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
-            if (!infoHash) {
-                logger.warn(`HDR: magnet sem infoHash`, { magnet: raw.href.substring(0, 60) });
-                continue;
+            const dados = await (0, magnetHelper_js_1.analisarMagnet)(raw.href);
+            canonicalName = dados?.nome ?? undefined;
+            if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
+                infoHash = dados.infoHash.toLowerCase();
             }
-            let canonicalName;
-            try {
-                const dados = await (0, magnetHelper_js_1.analisarMagnet)(raw.href);
-                canonicalName = dados?.nome ?? undefined;
-                if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
-                    infoHash = dados.infoHash.toLowerCase();
-                }
-            }
-            catch {
-                canonicalName = undefined;
-            }
-            const originalTitle = tituloDoPost;
-            const anosDoMagnet = (0, TechnicalWords_js_1.extrairAno)(raw.containerText);
-            const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
-            const year = years ? years[0] : metadata.year;
-            const language = extractLanguage(raw.containerText) || metadata.language || extractLanguage(pageTitle);
-            const range = detectSeasonRange(raw.containerText) ??
-                detectSeasonRange(postTitle) ??
-                detectSeasonRange(pageTitle);
-            const rangeEp = (0, TechnicalWords_js_1.extrairRangeEpisodios)(raw.containerText);
-            let episodeStart = rangeEp?.episodeStart ?? undefined;
-            if (episodeStart === undefined && canonicalName) {
-                const rangeCanonical = (0, TechnicalWords_js_1.extrairRangeEpisodios)(canonicalName);
-                episodeStart = rangeCanonical?.episodeStart ?? undefined;
-            }
-            const episode = episodeStart;
-            const qualityMatch = raw.qualityMatch || metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
-            const sizeMatch = raw.sizeMatch || metadata.size?.trim();
-            const seasonLabel = range && range.seasonStart > 0
-                ? (range.seasonStart === range.seasonEnd
-                    ? `${range.seasonStart}ª Temporada`
-                    : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
-                : '';
-            const magnetTitle = seasonLabel
-                ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
-                : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
-            const htmlTitleLimpo = raw.containerText
-                .replace(/MAGNET LINK/gi, '')
-                .replace(/\s+/g, ' ')
-                .trim() || undefined;
-            results.push({
-                title: magnetTitle,
-                htmlTitle: htmlTitleLimpo,
-                magnet: raw.href,
-                infoHash,
-                seeders: 0,
-                size: sizeMatch || '',
-                language,
-                originalTitle,
-                year,
-                years,
-                canonicalName,
-                season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
-                episode,
-            });
         }
-        catch (err) {
-            logger.warn(`HDR: erro ao processar magnet`, { magnet: raw.href.substring(0, 60), error: err.message });
+        catch {
+            canonicalName = undefined;
         }
+        const anosDoMagnet = (0, TechnicalWords_js_1.extrairAno)(raw.containerText);
+        const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
+        const year = years ? years[0] : ctx.metadata.year;
+        const language = extractLanguage(raw.containerText) || ctx.metadata.language || extractLanguage(ctx.pageTitle);
+        const range = detectSeasonRange(raw.containerText) ??
+            detectSeasonRange(ctx.postTitle) ??
+            detectSeasonRange(ctx.pageTitle);
+        const rangeEp = (0, TechnicalWords_js_1.extrairRangeEpisodios)(raw.containerText);
+        let episodeStart = rangeEp?.episodeStart ?? undefined;
+        if (episodeStart === undefined && canonicalName) {
+            const rangeCanonical = (0, TechnicalWords_js_1.extrairRangeEpisodios)(canonicalName);
+            episodeStart = rangeCanonical?.episodeStart ?? undefined;
+        }
+        const episode = episodeStart;
+        const qualityMatch = raw.qualityMatch || ctx.metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
+        const sizeMatch = raw.sizeMatch || ctx.metadata.size?.trim();
+        const seasonLabel = range && range.seasonStart > 0
+            ? (range.seasonStart === range.seasonEnd
+                ? `${range.seasonStart}ª Temporada`
+                : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
+            : '';
+        const magnetTitle = seasonLabel
+            ? `${ctx.pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
+            : [ctx.pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
+        const htmlTitleLimpo = raw.containerText
+            .replace(/MAGNET LINK/gi, '')
+            .replace(/\s+/g, ' ')
+            .trim() || undefined;
+        return {
+            title: magnetTitle,
+            htmlTitle: htmlTitleLimpo,
+            magnet: raw.href,
+            infoHash,
+            seeders: 0,
+            size: sizeMatch || '',
+            language,
+            originalTitle: ctx.tituloDoPost,
+            year,
+            years,
+            canonicalName,
+            season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
+            episode,
+        };
     }
-    logger.debug(`HDR extract | "${postTitle.substring(0, 40)}" | anchors=${totalAnchors} rawLinks=${rawLinks.length} magnets=${results.length}`);
+    catch (err) {
+        logger.warn(`HDR: erro ao processar magnet`, { magnet: raw.href.substring(0, 60), error: err.message });
+        return null;
+    }
+}
+async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, mediaType) {
+    const $ = cheerio.load(html);
+    const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
+    const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
+    const pageTitle = h1Title || titleTag || postTitle;
+    const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
+    const metadata = extractHdrMetadata($, jsonLdBlocks);
+    const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
+    const secaoHeaders = detectarSecoes($, html);
+    const { rawLinks, totalAnchors } = coletarRawLinks($, html, secaoHeaders, { postTitle, pageTitle, targetSeason, mediaType });
+    const ctx = { pageTitle, postTitle, tituloDoPost, metadata, targetSeason, mediaType };
+    const results = [];
+    for (const raw of rawLinks) {
+        const torrent = await processarRawLink(raw, ctx);
+        if (torrent)
+            results.push(torrent);
+    }
+    logger.debug(`HDR extract | "${truncar(postTitle)}" | anchors=${totalAnchors} rawLinks=${rawLinks.length} magnets=${results.length}`);
     if (results.length > 0) {
-        logger.debug(`HDR post | "${postTitle.substring(0, 40)}" | title=${metadata.origem.title} year=${metadata.origem.year} | ${results.length} magnets`);
+        logger.debug(`HDR post | "${truncar(postTitle)}" | title=${metadata.origem.title} year=${metadata.origem.year} | ${results.length} magnets`);
     }
     return results;
+}
+function validarImdb(html, imdbId, titulo, mediaType) {
+    if (!imdbId)
+        return { imdbConfirmed: false, mismatch: false, imdbIdDoPost: null };
+    const imdbIdDoPost = html.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+    if (!imdbIdDoPost)
+        return { imdbConfirmed: false, mismatch: false, imdbIdDoPost: null };
+    const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(titulo, mediaType);
+    if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+        return { imdbConfirmed: false, mismatch: true, imdbIdDoPost };
+    }
+    return { imdbConfirmed: !isCollection, mismatch: false, imdbIdDoPost };
 }
 async function processarPostHdr(item, imdbId, targetSeason, mediaType) {
     let html;
@@ -704,31 +761,42 @@ async function processarPostHdr(item, imdbId, targetSeason, mediaType) {
         if (classificacao === 'fonte') {
             breakerRegistrarFalha(FONTE);
         }
-        logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${classificacao} | ${err.message}`);
+        logger.debug(`HDR post falhou | "${truncar(item.title)}" | ${classificacao} | ${err.message}`);
         return { torrents: [], imdbConfirmed: false };
     }
-    let imdbConfirmed = false;
-    if (imdbId) {
-        const imdbIdDoPost = html.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
-        if (imdbIdDoPost) {
-            const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(item.title, mediaType);
-            if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
-                logger.debug(`HDR imdb mismatch | "${item.title.substring(0, 40)}" | post=${imdbIdDoPost} alvo=${imdbId}`);
-                return { torrents: [], imdbConfirmed: false };
-            }
-            if (!isCollection) {
-                imdbConfirmed = true;
-            }
-        }
+    const validacao = validarImdb(html, imdbId, item.title, mediaType);
+    if (validacao.mismatch) {
+        logger.debug(`HDR imdb mismatch | "${truncar(item.title)}" | post=${validacao.imdbIdDoPost} alvo=${imdbId}`);
+        return { torrents: [], imdbConfirmed: false };
     }
     const torrents = await extractMagnetsFromPost(html, item.title, item.postUrl, targetSeason, mediaType);
     if (torrents.length === 0) {
-        logger.debug(`HDR post vazio | "${item.title.substring(0, 40)}" | html=${html.length}b`);
+        logger.debug(`HDR post vazio | "${truncar(item.title)}" | html=${html.length}b`);
     }
-    return { torrents, imdbConfirmed };
+    return { torrents, imdbConfirmed: validacao.imdbConfirmed };
+}
+function filtrarPorSimilaridade(links, frases, mediaType) {
+    return links.filter(link => {
+        const resultado = exports.similarity.preFiltroContem(frases, link.title);
+        const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(link.title, mediaType);
+        if (!resultado.match && !isCollection) {
+            logger.debug(`HDR rejeitado | "${truncar(link.title, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
+            return false;
+        }
+        return true;
+    });
+}
+function dedupPorPostUrl(items, seen) {
+    return items.filter(item => {
+        if (seen.has(item.postUrl))
+            return false;
+        seen.add(item.postUrl);
+        return true;
+    });
 }
 async function searchHdr(query, type = 'movie', targetSeason, searchQueries, targetYear, imdbId, mediaType) {
     const startTime = Date.now();
+    const qTruncada = truncar(query);
     const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
     const frasesValidas = queriesParaBusca.map(f => (0, TechnicalWords_js_1.normalizarTexto)(f)).filter(Boolean);
     const ncKey = negativeCacheKey(FONTE, query, {
@@ -737,11 +805,11 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
         mediaType: mediaType ?? null,
     });
     if (negativeCacheIsBlocked(ncKey)) {
-        logger.debug(`HDR: negative cache HIT | "${query.substring(0, 40)}"`);
+        logger.debug(`HDR: negative cache HIT | "${qTruncada}"`);
         return [];
     }
     if (!breakerPodeUsar(FONTE)) {
-        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${query.substring(0, 40)}"`);
+        logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${qTruncada}"`);
         return [];
     }
     try {
@@ -753,9 +821,10 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
         let houveSucesso = false;
         for (const q of queriesParaBusca) {
             const t0 = Date.now();
+            const qLog = truncar(q);
             const searchResult = await searchHdrLinks(q, targetSeason, mediaType);
             if (searchResult.status === 'blocked') {
-                logger.debug(`HDR: breaker abriu no meio do loop | "${q.substring(0, 40)}"`);
+                logger.debug(`HDR: breaker abriu no meio do loop | "${qLog}"`);
                 break;
             }
             if (searchResult.status === 'error') {
@@ -769,30 +838,17 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
             houveSucesso = true;
             const links = searchResult.items;
             if (links.length === 0) {
-                logger.debug(`HDR: "${q.substring(0, 40)}" | 0 links (${Date.now() - t0}ms)`);
+                logger.debug(`HDR: "${qLog}" | 0 links (${Date.now() - t0}ms)`);
                 continue;
             }
-            const filtrados = links.filter(link => {
-                const resultado = exports.similarity.preFiltroContem(frasesValidas, link.title);
-                const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(link.title, mediaType);
-                if (!resultado.match && !isCollection) {
-                    logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
-                    return false;
-                }
-                return true;
-            });
+            const filtrados = filtrarPorSimilaridade(links, frasesValidas, mediaType);
             if (filtrados.length === 0) {
-                logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, 0 relevantes (${Date.now() - t0}ms)`);
+                logger.debug(`HDR: "${qLog}" | ${links.length} links, 0 relevantes (${Date.now() - t0}ms)`);
                 continue;
             }
-            const novos = filtrados.filter(item => {
-                if (seenPostUrls.has(item.postUrl))
-                    return false;
-                seenPostUrls.add(item.postUrl);
-                return true;
-            });
+            const novos = dedupPorPostUrl(filtrados, seenPostUrls);
             if (novos.length === 0) {
-                logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, ${filtrados.length} relevantes, 0 novos (${Date.now() - t0}ms)`);
+                logger.debug(`HDR: "${qLog}" | ${links.length} links, ${filtrados.length} relevantes, 0 novos (${Date.now() - t0}ms)`);
                 continue;
             }
             const respostas = await Promise.all(novos.map(item => processarPostHdr(item, imdbId, targetSeason, mediaType)));
@@ -810,18 +866,18 @@ async function searchHdr(query, type = 'movie', targetSeason, searchQueries, tar
             }
             if (magnetsDaQuery > 0)
                 queriesComResultado++;
-            logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, ${filtrados.length} relevantes, ${novos.length} novos, ${magnetsDaQuery} magnets (${Date.now() - t0}ms)`);
+            logger.debug(`HDR: "${qLog}" | ${links.length} links, ${filtrados.length} relevantes, ${novos.length} novos, ${magnetsDaQuery} magnets (${Date.now() - t0}ms)`);
         }
         const duration = Date.now() - startTime;
         if (allResults.length === 0 && houveSucesso && !houveErro) {
             negativeCacheMark(ncKey);
-            logger.info(`HDR: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${exports.NEGATIVE_DEFAULT_TTL_MS}`);
+            logger.info(`HDR: 0 resultados, cacheado negativo | "${qTruncada}" | ttlMs=${exports.NEGATIVE_DEFAULT_TTL_MS}`);
         }
         logger.info(`HDR: ${allResults.length} magnets em ${duration}ms | queries=${queriesParaBusca.length} comResultado=${queriesComResultado}`);
         return allResults;
     }
     catch (err) {
-        logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });
+        logger.error('HDR erro', { query: truncar(query, 50), error: err.message });
         breakerRegistrarFalha(FONTE);
         return [];
     }

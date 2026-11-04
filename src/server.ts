@@ -20,7 +20,7 @@ import { createRateLimiter, torrentioRateLimiter } from './middlewares/rateLimit
 import { metricsService } from './catalogo/MetricsService.js';
 import { ultraDebugMiddleware, manifestDebugMiddleware, configureDebugMiddleware } from './middlewares/ultraDebug.js';
 import { etagMiddleware } from './middlewares/etag.js';
-import { RescrapeService } from './services/scraper/RescrapeService.js';
+import { CamCleanupService } from './services/scraper/CamCleanupService.js';
 
 const logger = new Logger('Main');
 const app = express();
@@ -336,7 +336,7 @@ async function startServer() {
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         createServer(app, port);
 
-        RescrapeService.getInstance().start();
+        CamCleanupService.getInstance().start();
     } catch (error) {
         logger.error('Falha na inicializacao do servidor', {
             error: error instanceof Error ? error.message : 'Erro desconhecido'

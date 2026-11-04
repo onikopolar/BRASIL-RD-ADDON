@@ -5,42 +5,40 @@ const models_js_1 = require("../../database/models.js");
 const TorrentScraperService_js_1 = require("./TorrentScraperService.js");
 const ImdbScraperService_js_1 = require("../../catalogo/ImdbScraperService.js");
 const AutoMagnetService_js_1 = require("../../debrid/AutoMagnetService.js");
-const magnetHelper_js_1 = require("../../magnet/magnetHelper.js");
 const logger_js_1 = require("../../utils/logger.js");
 const sequelize_1 = require("sequelize");
 const logger = new logger_js_1.Logger('RescrapeService');
 const SOURCE_PATTERNS = [
-    { regex: /\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i, days: null, rank: 9 },
-    { regex: /\b(2160p|4k|uhd)\b/i, days: null, rank: 10 },
-    { regex: /\b(dv|hdr10\+?|dolby\s*vision)\b/i, days: null, rank: 10 },
-    { regex: /\b(webrip|web\.rip|web\s*rip)\b/i, days: 14, rank: 7 },
-    { regex: /\b(dvdscr|screener|dvd-scr|dvdscr)\b/i, days: 10, rank: 4 },
-    { regex: /\b(hc|hard\s*coded)\b/i, days: 10, rank: 4 },
-    { regex: /\b(hdtv|hd-tv)\b/i, days: 7, rank: 6 },
-    { regex: /\b(hdrip|hd-rip|hd\.rip)\b/i, days: 7, rank: 6 },
-    { regex: /\b(hdcam|hd-cam|hdts|hd-ts|telecine|telesync)\b/i, days: 5, rank: 2 },
-    { regex: /\b(camrip|cam-rip|cam\.rip|cam\b|ts\b|workprint|wp\b)\b/i, days: 3, rank: 1 },
+    { regex: /\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i, rank: 9 },
+    { regex: /\b(2160p|4k|uhd)\b/i, rank: 10 },
+    { regex: /\b(dv|hdr10\+?|dolby\s*vision)\b/i, rank: 10 },
+    { regex: /\b(webrip|web\.rip|web\s*rip)\b/i, rank: 7 },
+    { regex: /\b(dvdscr|screener|dvd-scr)\b/i, rank: 4 },
+    { regex: /\b(hc|hard\s*coded)\b/i, rank: 4 },
+    { regex: /\b(hdtv|hd-tv)\b/i, rank: 6 },
+    { regex: /\b(hdrip|hd-rip|hd\.rip)\b/i, rank: 6 },
+    { regex: /\b(hdcam|hd-cam|hdts|hd-ts|telecine|telesync)\b/i, rank: 2 },
+    { regex: /\b(camrip|cam-rip|cam\.rip|cam\b|ts\b|workprint|wp\b)\b/i, rank: 1 },
 ];
 const QUALITY_RANK_EXTRA = {
-    '2160p': 10,
-    '4k': 10,
-    'uhd': 10,
-    'hdr': 10,
-    'dv': 10,
-    '1080p': 9,
-    '720p': 7,
-    'hd': 5,
-    'sd': 2,
+    '2160p': 10, '4k': 10, 'uhd': 10, 'hdr': 10, 'dv': 10,
+    '1080p': 9, '720p': 7, 'hd': 5, 'sd': 2,
 };
 const CAM_LIKE_REGEX = /\b(cam(?:[\s._-]?rip)?|hdcam|hd[\s._-]?cam|hd[\s._-]?ts|ts[\s._-]?rip|telecine|telesync|workprint)\b/i;
-const DELAY_BETWEEN_RESCRAPES = 60000;
 const MAX_RESCRAPE_PER_BATCH = 5;
-const RESCRAPE_CHECK_INTERVAL = 30 * 60 * 1000;
+const MAX_FETCH_DUE = 20;
+const DELAY_BETWEEN_RESCRAPES = 20000;
+const BOOT_DELAY_MS = 30000;
+const MIN_DELAY_MS = 60000;
+const MAX_DELAY_MS = 4 * 60 * 60 * 1000;
+const SCHEDULE_MARGIN_MS = 30000;
+const FALLBACK_DELAY_MS = 60 * 60 * 1000;
 class RescrapeService {
     constructor() {
         this.timer = null;
         this.isRunning = false;
-        this.stats = { totalRescraped: 0, totalNewTorrents: 0, lastRun: '' };
+        this.isStopping = false;
+        this.stats = { totalRescraped: 0, totalNewTorrents: 0, lastRun: '', lastScheduledFor: '' };
         this.torrentScraper = new TorrentScraperService_js_1.TorrentScraperService();
         this.imdbScraper = ImdbScraperService_js_1.ImdbScraperService.getInstance();
         this.autoMagnetService = new AutoMagnetService_js_1.AutoMagnetService();
@@ -56,19 +54,17 @@ class RescrapeService {
             logger.warn('RescrapeService já está rodando');
             return;
         }
-        logger.info('🔁 RescrapeService iniciado', {
-            intervalo: `${RESCRAPE_CHECK_INTERVAL / 60000}min`,
-            maxPorBatch: MAX_RESCRAPE_PER_BATCH,
-        });
-        setTimeout(() => this.runRescrapeCycle(), 2 * 60 * 1000);
-        this.timer = setInterval(() => this.runRescrapeCycle(), RESCRAPE_CHECK_INTERVAL);
+        this.isStopping = false;
+        logger.info('🔁 RescrapeService iniciado (agendamento dinâmico)');
+        this.scheduleNext(BOOT_DELAY_MS);
     }
     stop() {
+        this.isStopping = true;
         if (this.timer) {
-            clearInterval(this.timer);
+            clearTimeout(this.timer);
             this.timer = null;
-            logger.info('RescrapeService parado');
         }
+        logger.info('RescrapeService parado');
     }
     getStats() {
         return { ...this.stats };
@@ -77,25 +73,80 @@ class RescrapeService {
         if (!title && !qualidade)
             return null;
         const titleLower = (title || '').toLowerCase();
-        for (const { regex, days } of SOURCE_PATTERNS) {
-            if (regex.test(titleLower)) {
-                if (days === null)
-                    return null;
-                return new Date(Date.now() + days * 24 * 60 * 60 * 1000);
-            }
+        if (/\b(bluray|blu-ray|bdrip|brrip|remux|web-dl|web\.dl)\b/i.test(titleLower))
+            return null;
+        if (/\b(2160p|4k|uhd|hdr10\+?|dolby\s*vision|\bdv\b)\b/i.test(titleLower))
+            return null;
+        if (qualidade && /\b(2160p|4k|uhd|1080p)\b/i.test(qualidade))
+            return null;
+        if (/\b(camrip|cam-rip|cam\.rip|hdcam|hd-cam|hdts|hd-ts|ts\b|telecine|telesync|workprint)\b/i.test(titleLower)) {
+            return new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
         }
-        if (qualidade) {
-            const q = qualidade.toLowerCase();
-            if (q === '2160p' || q === '4k')
-                return null;
-            if (q === '1080p')
-                return null;
+        if (/\b(hdtv|hd-tv|hdrip|hd-rip|webrip|web\.rip)\b/i.test(titleLower)) {
+            return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
         }
-        return new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+        if (/\b(1080p|720p)\b/i.test(titleLower)) {
+            return new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+        }
+        return null;
+    }
+    scheduleNext(delayMs) {
+        if (this.isStopping)
+            return;
+        if (this.timer)
+            clearTimeout(this.timer);
+        const delayFinal = Math.max(MIN_DELAY_MS, Math.min(delayMs, MAX_DELAY_MS));
+        const target = new Date(Date.now() + delayFinal);
+        this.stats.lastScheduledFor = target.toISOString();
+        logger.debug('⏰ Próximo ciclo agendado', {
+            em: `${Math.round(delayFinal / 60000)}min`,
+            alvo: target.toISOString(),
+        });
+        this.timer = setTimeout(() => this.tick(), delayFinal);
+    }
+    async tick() {
+        if (this.isStopping)
+            return;
+        try {
+            await this.runRescrapeCycle();
+        }
+        catch (err) {
+            logger.error('Erro no ciclo', { error: err instanceof Error ? err.message : 'Erro' });
+        }
+        try {
+            const delay = await this.computeNextDelay();
+            this.scheduleNext(delay);
+        }
+        catch (err) {
+            logger.warn('Falha ao calcular próximo agendamento, usando fallback', {
+                error: err instanceof Error ? err.message : 'Erro',
+            });
+            this.scheduleNext(FALLBACK_DELAY_MS);
+        }
+    }
+    async computeNextDelay() {
+        const next = await models_js_1.Torrent.findOne({
+            attributes: ['rescrapeAt'],
+            where: {
+                rescrapeAt: { [sequelize_1.Op.ne]: null, [sequelize_1.Op.gt]: new Date() },
+            },
+            order: [['rescrapeAt', 'ASC']],
+            raw: true,
+        });
+        const nextAt = next?.rescrapeAt;
+        if (!nextAt)
+            return FALLBACK_DELAY_MS;
+        const ts = new Date(nextAt).getTime();
+        const delay = ts - Date.now() + SCHEDULE_MARGIN_MS;
+        logger.debug('📅 Próximo vencimento', {
+            em: `${Math.round(delay / 60000)}min`,
+            quando: new Date(ts).toISOString(),
+        });
+        return delay;
     }
     async runRescrapeCycle() {
         if (this.isRunning) {
-            logger.debug('Ciclo de re-scrape já em andamento, pulando...');
+            logger.debug('Ciclo já em andamento, pulando...');
             return;
         }
         this.isRunning = true;
@@ -103,7 +154,7 @@ class RescrapeService {
         try {
             const dueTitles = await this.findTitlesDueForRescrape();
             if (dueTitles.length === 0) {
-                logger.debug('Nenhum título precisa de re-scrape');
+                logger.debug('Nenhum título vencido');
                 return;
             }
             logger.info(`🔁 ${dueTitles.length} títulos para re-scrape`, {
@@ -130,17 +181,12 @@ class RescrapeService {
                 }
             }
             const elapsed = Date.now() - startTime;
-            logger.info(`✅ Ciclo de re-scrape concluído`, {
+            logger.info(`✅ Ciclo concluído`, {
                 processados: batch.length,
                 novosTorrents: newTorrentsFound,
                 tempo: `${(elapsed / 1000).toFixed(1)}s`,
             });
             this.stats.lastRun = new Date().toISOString();
-        }
-        catch (error) {
-            logger.error('Erro no ciclo de re-scrape', {
-                error: error instanceof Error ? error.message : 'Erro',
-            });
         }
         finally {
             this.isRunning = false;
@@ -149,11 +195,13 @@ class RescrapeService {
     async findTitlesDueForRescrape() {
         const now = new Date();
         const dueTorrents = await models_js_1.Torrent.findAll({
-            attributes: ['imdbId', 'type'],
+            attributes: ['imdbId', 'type', 'rescrapeAt'],
             where: {
                 rescrapeAt: { [sequelize_1.Op.ne]: null, [sequelize_1.Op.lte]: now },
                 imdbId: { [sequelize_1.Op.ne]: null },
             },
+            order: [['rescrapeAt', 'ASC']],
+            limit: MAX_FETCH_DUE,
             raw: true,
         });
         const seen = new Set();
@@ -170,7 +218,7 @@ class RescrapeService {
         logger.info(`🔍 Re-scraping: ${imdbId} (${type})`);
         const imdbTitles = await this.imdbScraper.getTitlesFromImdbId(imdbId);
         if (!imdbTitles || !imdbTitles.originalTitle) {
-            logger.warn(`Sem títulos TMDB para ${imdbId}, atualizando rescrapeAt`);
+            logger.warn(`Sem títulos TMDB para ${imdbId}`);
             await this.updateRescrapeAt(imdbId, new Date(Date.now() + 24 * 60 * 60 * 1000));
             return 0;
         }
@@ -197,7 +245,7 @@ class RescrapeService {
         }
         await this.removeCamIfBetterExists(imdbId);
         if (allResults.length === 0) {
-            logger.debug(`Nenhum resultado novo para ${imdbId}`);
+            logger.debug(`Nenhum resultado para ${imdbId}`);
             await this.updateRescrapeAt(imdbId, new Date(Date.now() + 12 * 60 * 60 * 1000));
             return 0;
         }
@@ -207,30 +255,19 @@ class RescrapeService {
         logger.info(`✅ Re-scrape ${imdbId}: ${newTorrents} novos de ${allResults.length} resultados`);
         return newTorrents;
     }
-    async isCamLike(torrent) {
-        if (torrent.magnet) {
-            const dados = await (0, magnetHelper_js_1.analisarMagnet)(torrent.magnet).catch(() => null);
-            if (dados?.nome)
-                return CAM_LIKE_REGEX.test(dados.nome);
-        }
-        return CAM_LIKE_REGEX.test(torrent.title || '');
-    }
     async removeCamIfBetterExists(imdbId) {
         const torrents = await models_js_1.Torrent.findAll({
-            attributes: ['infoHash', 'title', 'magnet'],
+            attributes: ['infoHash', 'title'],
             where: { imdbId },
             raw: true,
         });
-        const flags = await Promise.all(torrents.map((t) => this.isCamLike(t)));
-        const cams = [];
-        const nonCams = [];
-        torrents.forEach((t, i) => {
-            if (flags[i])
-                cams.push(t);
-            else
-                nonCams.push(t);
-        });
-        if (cams.length === 0 || nonCams.length === 0)
+        if (torrents.length < 2)
+            return 0;
+        const cams = torrents.filter((t) => CAM_LIKE_REGEX.test(t.title || ''));
+        if (cams.length === 0)
+            return 0;
+        const nonCams = torrents.filter((t) => !CAM_LIKE_REGEX.test(t.title || ''));
+        if (nonCams.length === 0)
             return 0;
         const hashes = cams.map((t) => t.infoHash).filter(Boolean);
         if (hashes.length === 0)
@@ -238,7 +275,7 @@ class RescrapeService {
         const destroyed = await models_js_1.Torrent.destroy({
             where: { imdbId, infoHash: { [sequelize_1.Op.in]: hashes } },
         });
-        logger.info(`🗑️ Removidos ${destroyed} torrent(s) CAM/TS de ${imdbId} — já tem qualidade melhor`);
+        logger.info(`🗑️ Removidos ${destroyed} torrent(s) CAM/TS de ${imdbId}`);
         return destroyed;
     }
     async updateRescrapeAt(imdbId, rescrapeAt) {

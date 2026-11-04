@@ -69,9 +69,15 @@ class TorboxService {
                 throw new StreamStatusException_js_1.StreamStatusException(StaticResponseService_js_1.StaticResponse.FAILED_DOWNLOAD, 'error', undefined, 'Torbox indisponível no momento');
             }
             if (status === 401 || status === 403) {
-                throw new Error('Torbox authentication failed: Invalid or expired API token');
+                const authErr = new Error('Torbox authentication failed: Invalid or expired API token');
+                authErr.nonRetryable = true;
+                authErr.httpStatus = status;
+                throw authErr;
             }
-            throw new Error(`Torbox API Error (${status}): ${errorMessage}`);
+            const genericErr = new Error(`Torbox API Error (${status}): ${errorMessage}`);
+            genericErr.httpStatus = status;
+            genericErr.response = error.response;
+            throw genericErr;
         });
         return client;
     }
@@ -180,7 +186,7 @@ class TorboxService {
     }
     async getTorrentInfoByHash(hash, apiKey, timeoutSec = 10) {
         if (!hash || hash.length < 32)
-            return 0;
+            return null;
         const client = this.createHttpClient(apiKey);
         const startTime = Date.now();
         try {
@@ -206,12 +212,21 @@ class TorboxService {
             return seeds;
         }
         catch (error) {
-            this.logger.debug('getTorrentInfoByHash: falha silenciosa (retorna 0)', {
+            const httpStatus = error?.response?.status;
+            const durationMs = Date.now() - startTime;
+            if (httpStatus === 500) {
+                this.logger.debug('getTorrentInfoByHash: metadata indisponível (500)', {
+                    hash: hash.substring(0, 16),
+                    durationMs,
+                });
+                return 0;
+            }
+            this.logger.debug('getTorrentInfoByHash: erro de rede, retorna null', {
                 hash: hash.substring(0, 16),
                 error: error.message,
-                durationMs: Date.now() - startTime,
+                durationMs,
             });
-            return 0;
+            return null;
         }
     }
     async selectFiles(_torrentId, _apiKey, _fileIds = 'all') {
@@ -597,6 +612,11 @@ class TorboxService {
                 lastError = error;
                 if (error instanceof StreamStatusException_js_1.StreamStatusException)
                     throw error;
+                const classified = error;
+                if (classified.nonRetryable) {
+                    this.logger.debug(`retryableRequest: erro nonRetryable, abortando ${operation}`, { error: lastError.message });
+                    break;
+                }
                 const axiosErr = error;
                 if (this.isRetryableError(axiosErr) && attempt < this.maxRetries) {
                     const delay = this.baseDelay * Math.pow(2, attempt - 1);
@@ -611,6 +631,8 @@ class TorboxService {
         throw lastError;
     }
     isRetryableError(error) {
+        if (error?.nonRetryable)
+            return false;
         const status = error.response?.status;
         return status ? [429, 500, 502, 503, 504].includes(status) : !error.response;
     }

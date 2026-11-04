@@ -8,7 +8,6 @@ import { QualityDetector } from '../lib/qualityDetector.js';
 import { analisarMagnet } from '../magnet/magnetHelper.js';
 import { extrairRangeEpisodios, INDICADORES_INTERNACIONAL_TORRENTS } from '../titulos/TechnicalWords.js';
 import { LanguageDetector } from '../titulos/LanguageDetector.js';
-import { RescrapeService } from '../services/scraper/RescrapeService.js';
 import { CacheService } from '../debrid/CacheService.js';
 
 const logger = new Logger('AutoMagnetService');
@@ -234,7 +233,6 @@ export class AutoMagnetService {
         magnet: magnetData.magnet,
         uploadDate: new Date(),
         lastSeen: new Date(),
-        rescrapeAt: RescrapeService.computeRescrapeAt(dnMagnet, magnetData.quality)
       });
 
       return true;

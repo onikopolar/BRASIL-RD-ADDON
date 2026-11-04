@@ -110,12 +110,32 @@ class TitleFilter {
                 this.logger.debug(`TF-STEP-3b SKIP_ANO_POR_IMDB | "${shortTitle}" | ano=${anoTorrent} imdbAno=${imdbTitles.year} diff=${Math.abs(anoTorrent - imdbTitles.year)}`);
             }
             if (isCollection && isYearInCollection) {
-                this.logger.info(`✅ TF-STEP-4 ACEITA_COLECAO | "${shortTitle}" | imdbAno=${imdbTitles?.year} | years=[${yearsEfetivos?.join(',')}]`);
+                const titulosComparar = imdbTitles?.allTitles?.filter(t => t && t.trim().length > 0) ?? [];
+                if (titulosComparar.length === 0) {
+                    this.logger.info(`🚫 TF-STEP-4 REJEITA_COLECAO_SEM_TITULOS | "${shortTitle}" | sem allTitles no TMDB`);
+                    return {
+                        matches: false,
+                        similarity: 0,
+                        torrentMetadata: metadados,
+                        reason: 'Coleção sem títulos TMDB para comparar'
+                    };
+                }
+                const comparacao = this.similarityCalculator.compararComTitulos(titulosComparar, tituloTorrent, SimilarityCalculator_js_1.SimilarityCalculator.THRESHOLD_PRE_FILTRO);
+                if (!comparacao.match) {
+                    this.logger.info(`🚫 TF-STEP-4 REJEITA_COLECAO_SEM_MATCH | "${shortTitle}" | score=${comparacao.score.toFixed(2)} < ${SimilarityCalculator_js_1.SimilarityCalculator.THRESHOLD_PRE_FILTRO}`);
+                    return {
+                        matches: false,
+                        similarity: 0,
+                        torrentMetadata: metadados,
+                        reason: `Coleção sem match de título (score ${comparacao.score.toFixed(2)})`
+                    };
+                }
+                this.logger.info(`✅ TF-STEP-4 ACEITA_COLECAO | "${shortTitle}" | imdbAno=${imdbTitles?.year} | score=${comparacao.score.toFixed(2)} | years=[${yearsEfetivos?.join(',')}]`);
                 return {
                     matches: true,
                     similarity: 0.8,
                     torrentMetadata: metadados,
-                    reason: 'Coleção/franquia com ano na faixa'
+                    reason: `Coleção com match de título (score ${comparacao.score.toFixed(2)})`
                 };
             }
             if (isCollection &&

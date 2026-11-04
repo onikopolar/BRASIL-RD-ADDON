@@ -18,7 +18,6 @@ const logger = new Logger('HdrScraper');
 
 export const HDR_BASE = 'https://hdrtorrents.net';
 
-// Identificador da fonte pro circuit breaker. Estrutura pronta pra outras fontes no futuro.
 const FONTE = 'hdr';
 
 export interface HdrTorrent {
@@ -38,7 +37,6 @@ export interface HdrTorrent {
   episode?: number;
 }
 
-// Headers de navegador real — sem Sec-Fetch-* ou Accept-Language o WAF devolve 403.
 export const BROWSER_HEADERS: Record<string, string> = {
   'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36',
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
@@ -60,7 +58,11 @@ export const axiosConfig = {
   headers: BROWSER_HEADERS,
 };
 
-// Negative cache — bloqueia queries que já retornaram vazio.
+export function truncar(texto: string, max = 40): string {
+  return texto.substring(0, max);
+}
+
+// Negative cache
 export const NEGATIVE_DEFAULT_TTL_MS = 30 * 60 * 1000;
 export const NEGATIVE_MAX_ENTRIES = 5000;
 
@@ -72,7 +74,6 @@ interface NegativeEntry {
 
 const negativeStore = new Map<string, NegativeEntry>();
 
-// Chave = fonte + query + contexto. Season entra na chave, episode não.
 export function negativeCacheKey(
   source: string,
   query: string,
@@ -83,7 +84,6 @@ export function negativeCacheKey(
   return `${source}|${q}|${e}`;
 }
 
-// Consulta se a chave está bloqueada. Se estiver, incrementa hits.
 export function negativeCacheIsBlocked(key: string): boolean {
   const entry = negativeStore.get(key);
   if (!entry) return false;
@@ -95,7 +95,6 @@ export function negativeCacheIsBlocked(key: string): boolean {
   return true;
 }
 
-// Marca uma chave como negativa. FIFO eviction quando estoura o limite.
 export function negativeCacheMark(key: string, ttlMs = NEGATIVE_DEFAULT_TTL_MS): void {
   if (negativeStore.size >= NEGATIVE_MAX_ENTRIES) {
     const first = negativeStore.keys().next().value;
@@ -124,7 +123,7 @@ export function negativeCacheStats() {
   };
 }
 
-// Circuit breaker — pausa a fonte quando acumula erros.
+// Circuit breaker
 export type BreakerState = 'closed' | 'open' | 'half-open';
 
 export const BREAKER_JANELA_MS = 5 * 60 * 1000;
@@ -153,7 +152,6 @@ export function breakerStatus(fonte: string): BreakerState {
   return getBreaker(fonte).estado;
 }
 
-// Verifica se pode usar a fonte. Consome o slot de half-open — chamar 1x por operação.
 export function breakerPodeUsar(fonte: string): boolean {
   const e = getBreaker(fonte);
   if (e.estado === 'closed') return true;
@@ -229,7 +227,6 @@ export function breakerStats() {
   };
 }
 
-// Decide se um erro conta como falha da fonte (network, 5xx, 403, 429) ou só do item (4xx).
 export function classificarErroFonte(err: any): 'fonte' | 'item' {
   const status = err?.response?.status;
   if (!status) return 'fonte';
@@ -238,6 +235,7 @@ export function classificarErroFonte(err: any): 'fonte' | 'item' {
   return 'item';
 }
 
+// Parsing
 export const similarity = SimilarityCalculator.getInstance();
 
 export function detectSeasonRange(text: string): EpisodeRange | null {
@@ -273,7 +271,6 @@ export function extractLanguage(parentText: string): string {
   return '';
 }
 
-// Lê metadados do layout <dl class="item-specs">.
 export function parseSpecsList($: any): Record<string, string> {
   const specs: Record<string, string> = {};
   $('dl.item-specs > div').each((_i: number, el: any) => {
@@ -287,7 +284,6 @@ export function parseSpecsList($: any): Record<string, string> {
   return specs;
 }
 
-// Remove sufixos de pack do título original.
 export function limparTituloOriginal(titulo: string): string {
   return titulo
     .replace(/\s*[-–—]\s*(complete|completa?)\s*s\d{1,2}$/i, '')
@@ -298,9 +294,25 @@ export function limparTituloOriginal(titulo: string): string {
     .trim();
 }
 
+// Metadata
 export type OrigemMetadado = 'jsonld' | 'html' | 'none';
 
-// Extrai alternateName (título original) e datePublished (ano) do JSON-LD.
+export interface HdrMetadata {
+  originalTitle?: string;
+  originalTitleBruto?: string;
+  year?: number;
+  language?: string;
+  quality?: string;
+  size?: string;
+  format?: string;
+  duration?: string;
+  origem: { title: OrigemMetadado; year: OrigemMetadado };
+}
+
+function criarMetadadoVazio(): HdrMetadata {
+  return { origem: { title: 'none', year: 'none' } };
+}
+
 export function extrairMetadadosDoJsonLd(blocks: any[]): { originalTitleBruto?: string; year?: number } {
   const meta = blocks.find(b => b && (b['@type'] === 'TVSeries' || b['@type'] === 'Movie'));
   if (!meta) return {};
@@ -319,96 +331,73 @@ export function extrairMetadadosDoJsonLd(blocks: any[]): { originalTitleBruto?: 
   return out;
 }
 
-// Metadados do post — JSON-LD primeiro, HTML complementa o que faltar.
-export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
-  originalTitle?: string;
-  originalTitleBruto?: string;
-  year?: number;
-  language?: string;
-  quality?: string;
-  size?: string;
-  format?: string;
-  duration?: string;
-  origem: { title: OrigemMetadado; year: OrigemMetadado };
-} {
-  const result: {
-    originalTitle?: string;
-    originalTitleBruto?: string;
-    year?: number;
-    language?: string;
-    quality?: string;
-    size?: string;
-    format?: string;
-    duration?: string;
-    origem: { title: OrigemMetadado; year: OrigemMetadado };
-  } = { origem: { title: 'none', year: 'none' } };
+function aplicarJsonLd(result: HdrMetadata, jsonLdBlocks?: any[]): void {
+  if (!jsonLdBlocks || jsonLdBlocks.length === 0) return;
 
-  if (jsonLdBlocks && jsonLdBlocks.length > 0) {
-    const meta = extrairMetadadosDoJsonLd(jsonLdBlocks);
-    if (meta.originalTitleBruto) {
-      result.originalTitleBruto = meta.originalTitleBruto;
-      result.originalTitle = limparTituloOriginal(meta.originalTitleBruto);
-      result.origem.title = 'jsonld';
+  const meta = extrairMetadadosDoJsonLd(jsonLdBlocks);
+
+  if (meta.originalTitleBruto) {
+    result.originalTitleBruto = meta.originalTitleBruto;
+    result.originalTitle = limparTituloOriginal(meta.originalTitleBruto);
+    result.origem.title = 'jsonld';
+  }
+  if (meta.year) {
+    result.year = meta.year;
+    result.origem.year = 'jsonld';
+  }
+}
+
+function extrairValorDeBold($: any, el: any): string | null {
+  const html = $(el).parent().html() || '';
+  const elHtml = $(el).toString();
+  const idx = html.indexOf(elHtml);
+  if (idx === -1) return null;
+
+  const after = html.substring(idx + elHtml.length);
+  const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
+  if (!match) return null;
+
+  return match[1].replace(/<[^>]+>/g, '').trim();
+}
+
+function aplicarParagrafo(result: HdrMetadata, $: any, paragrafo: any): void {
+  paragrafo.find('b').each((_i: number, el: any) => {
+    const rotulo = $(el).text().trim();
+    const valor = extrairValorDeBold($, el);
+    if (valor === null) return;
+
+    if (/t[íi]tulo\s+original/i.test(rotulo) && !result.originalTitleBruto) {
+      result.originalTitleBruto = valor;
+      result.originalTitle = limparTituloOriginal(valor);
+      result.origem.title = 'html';
+    } else if (/lan[çc]amento/i.test(rotulo) && result.year === undefined) {
+      const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
+      if (yearMatch) {
+        result.year = parseInt(yearMatch[0]);
+        result.origem.year = 'html';
+      }
+    } else if (/idiomas?/i.test(rotulo)) {
+      result.language = valor;
     }
-    if (meta.year) {
-      result.year = meta.year;
-      result.origem.year = 'jsonld';
+  });
+
+  if (!result.originalTitle) {
+    const tituloBase = extrairTituloBasePosImdb($, paragrafo);
+    const originalFinal = tituloBase || result.originalTitleBruto;
+    if (originalFinal) {
+      result.originalTitle = limparTituloOriginal(originalFinal);
+      result.origem.title = 'html';
     }
   }
 
-  // Layout antigo: <p><b>Rótulo</b> Valor<br>...</p>
-  const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
+  const specsFallback = parseSpecsList($);
+  result.quality = result.quality || specsFallback['qualidade'];
+  result.size = result.size || specsFallback['tamanho'];
+  result.format = result.format || specsFallback['formato'];
+  result.duration = result.duration || specsFallback['duracao'] || specsFallback['duração'];
+}
 
-  if (paragrafo.length) {
-    paragrafo.find('b').each((_i: number, el: any) => {
-      const rotulo = $(el).text().trim();
-      const html = $(el).parent().html() || '';
-      const elHtml = $(el).toString();
-      const idx = html.indexOf(elHtml);
-      if (idx === -1) return;
-
-      const after = html.substring(idx + elHtml.length);
-      const match = after.match(/^[:\s]*(.*?)(?:<br>|<b>|$)/i);
-      if (!match) return;
-      const valor = match[1].replace(/<[^>]+>/g, '').trim();
-
-      if (/t[íi]tulo\s+original/i.test(rotulo) && !result.originalTitleBruto) {
-        result.originalTitleBruto = valor;
-        result.originalTitle = limparTituloOriginal(valor);
-        result.origem.title = 'html';
-      } else if (/lan[çc]amento/i.test(rotulo) && result.year === undefined) {
-        const yearMatch = valor.match(/\b(19|20)\d{2}\b/);
-        if (yearMatch) {
-          result.year = parseInt(yearMatch[0]);
-          result.origem.year = 'html';
-        }
-      } else if (/idiomas?/i.test(rotulo)) {
-        result.language = valor;
-      }
-    });
-
-    if (!result.originalTitle) {
-      const tituloBase = extrairTituloBasePosImdb($, paragrafo);
-      const originalFinal = tituloBase || result.originalTitleBruto;
-      if (originalFinal) {
-        result.originalTitle = limparTituloOriginal(originalFinal);
-        result.origem.title = 'html';
-      }
-    }
-
-    const specsFallback = parseSpecsList($);
-    result.quality = result.quality || specsFallback['qualidade'];
-    result.size = result.size || specsFallback['tamanho'];
-    result.format = result.format || specsFallback['formato'];
-    result.duration = result.duration || specsFallback['duracao'] || specsFallback['duração'];
-
-    return result;
-  }
-
-  // Layout novo: <dl class="item-specs">.
-  const specs = parseSpecsList($);
-  if (Object.keys(specs).length === 0) return result;
-
+function aplicarSpecs(result: HdrMetadata, specs: Record<string, string>): void {
   if (specs['titulo original'] && !result.originalTitleBruto) {
     result.originalTitleBruto = specs['titulo original'];
     result.originalTitle = limparTituloOriginal(specs['titulo original']);
@@ -421,19 +410,33 @@ export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): {
       result.origem.year = 'html';
     }
   }
-  if (specs['idiomas']) {
-    result.language = specs['idiomas'];
-  }
+  if (specs['idiomas']) result.language = specs['idiomas'];
   if (specs['qualidade']) result.quality = specs['qualidade'];
   if (specs['tamanho']) result.size = specs['tamanho'].trim();
   if (specs['formato']) result.format = specs['formato'];
   if (specs['duracao']) result.duration = specs['duracao'];
   if (specs['duração']) result.duration = specs['duração'];
+}
 
+export function extractHdrMetadata($: any, jsonLdBlocks?: any[]): HdrMetadata {
+  const result = criarMetadadoVazio();
+
+  aplicarJsonLd(result, jsonLdBlocks);
+
+  const paragrafo = $('p').filter((_i: number, el: any) => /T[íi]tulo\s+Original/i.test($(el).text())).first();
+
+  if (paragrafo.length) {
+    aplicarParagrafo(result, $, paragrafo);
+    return result;
+  }
+
+  const specs = parseSpecsList($);
+  if (Object.keys(specs).length === 0) return result;
+
+  aplicarSpecs(result, specs);
   return result;
 }
 
-// Pega o texto do <a> logo depois do link IMDb no parágrafo.
 export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null {
   const imdbLink = paragrafo.find('a[href*="imdb.com/title/"]').first();
   if (!imdbLink.length) return null;
@@ -451,6 +454,7 @@ export function extrairTituloBasePosImdb($: any, paragrafo: any): string | null 
   return null;
 }
 
+// Magnet
 export function extrairDnDoMagnet(magnet: string): string | undefined {
   const m = magnet.match(/[&?]dn=([^&]+)/i);
   if (!m) return undefined;
@@ -461,7 +465,6 @@ export function extrairDnDoMagnet(magnet: string): string | undefined {
   }
 }
 
-// Acha o texto do container do magnet — layout novo (.download-row) ou antigo (<p>).
 export function getContainerText($: any, el: any): string {
   const row = $(el).closest('.download-row');
   if (row.length) {
@@ -475,7 +478,6 @@ export function getContainerText($: any, el: any): string {
   return $(el).text().trim();
 }
 
-// Classifica cabeçalho de seção como DUAL, LEGENDADO ou NONE.
 export function classificarSecao(texto: string): 'DUAL' | 'LEGENDADO' | 'NONE' {
   const t = normalizarTexto(texto).trim();
   if (!t || t.length > 60) return 'NONE';
@@ -490,12 +492,46 @@ export function classificarSecao(texto: string): 'DUAL' | 'LEGENDADO' | 'NONE' {
   return 'NONE';
 }
 
+interface SecaoHeader {
+  pos: number;
+  type: 'DUAL' | 'LEGENDADO';
+}
+
+function detectarSecoes($: any, html: string): SecaoHeader[] {
+  const secaoHeaders: SecaoHeader[] = [];
+
+  $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
+    const texto = $(el).text().trim();
+    if (!texto) return;
+
+    const tipo = classificarSecao(texto);
+    if (tipo === 'NONE') return;
+
+    const pos = html.indexOf($(el).toString());
+    if (pos === -1) return;
+
+    secaoHeaders.push({ pos, type: tipo });
+  });
+
+  secaoHeaders.sort((a, b) => a.pos - b.pos);
+  return secaoHeaders;
+}
+
+function secaoNaPosicao(pos: number, secaoHeaders: SecaoHeader[]): 'DUAL' | 'LEGENDADO' | 'NONE' {
+  let secao: 'DUAL' | 'LEGENDADO' | 'NONE' = 'NONE';
+  for (const sh of secaoHeaders) {
+    if (pos > sh.pos) secao = sh.type;
+    else break;
+  }
+  return secao;
+}
+
+// Search
 export interface SearchResultItem {
   title: string;
   postUrl: string;
 }
 
-// Resultado discriminado — separa "vazio" de "erro", essencial pro negative cache.
 export interface SearchLinksResult {
   status: 'ok' | 'empty' | 'error' | 'blocked';
   items: SearchResultItem[];
@@ -503,13 +539,11 @@ export interface SearchLinksResult {
   reason?: string;
 }
 
-// Monta a URL de busca. O HDR não usa mais token/sessão (out/2026).
 export function montarUrlBusca(query: string): string {
   const termo = encodeURIComponent(query.trim()).replace(/%20/g, '+');
   return `${HDR_BASE}/pesquisa/${termo}/`;
 }
 
-// GET com headers de navegador. Retry só em 5xx (falha transiente).
 export async function fetchComSessao(url: string, tentativa = 0): Promise<string> {
   try {
     const res = await axios.get(url, {
@@ -527,10 +561,10 @@ export async function fetchComSessao(url: string, tentativa = 0): Promise<string
   }
 }
 
-// Lê todos os blocos JSON-LD. Devolve blocos válidos + contagem de malformados.
 export function parseJsonLdBlocks($: any): { blocks: any[]; malformados: number } {
   const blocks: any[] = [];
   let malformados = 0;
+
   $('script[type="application/ld+json"]').each((_i: number, el: any) => {
     const raw = $(el).text().trim();
     if (!raw) return;
@@ -540,26 +574,58 @@ export function parseJsonLdBlocks($: any): { blocks: any[]; malformados: number 
       malformados++;
     }
   });
+
   return { blocks, malformados };
 }
 
-// Converte o mediaType do catalog pro @type do JSON-LD.
 export function mapearTipoEsperado(mediaType?: TipoConteudo): string | null {
   if (mediaType === 'series' || mediaType === 'tv') return 'TVSeries';
   if (mediaType === 'movie') return 'Movie';
   return null;
 }
 
-// Busca os links da página de resultados. Não abre posts — só lista.
+function parsearJsonLdItems(
+  items: any[],
+  tipoEsperado: string | null,
+  targetSeason?: number,
+  mediaType?: TipoConteudo
+): { results: SearchResultItem[]; cortadosPorTipo: number } {
+  const results: SearchResultItem[] = [];
+  const seen = new Set<string>();
+  let cortadosPorTipo = 0;
+
+  for (const entry of items) {
+    const title: string | undefined = entry?.item?.name || entry?.name;
+    const rawUrl: string | undefined = entry?.item?.url || entry?.url;
+    if (!title || !rawUrl) continue;
+
+    if (tipoEsperado && entry?.item?.['@type'] !== tipoEsperado) {
+      cortadosPorTipo++;
+      continue;
+    }
+
+    const absoluteHref = rawUrl.startsWith('http') ? rawUrl : `${HDR_BASE}${rawUrl}`;
+    if (seen.has(absoluteHref)) continue;
+    seen.add(absoluteHref);
+
+    if (!passaFiltroTemporada([title], targetSeason, mediaType)) continue;
+
+    results.push({ title, postUrl: absoluteHref });
+  }
+
+  return { results, cortadosPorTipo };
+}
+
 export async function searchHdrLinks(
   query: string,
   targetSeason?: number,
   mediaType?: TipoConteudo
 ): Promise<SearchLinksResult> {
   const t0 = Date.now();
+  const q = truncar(query);
 
   if (!breakerPodeUsar(FONTE)) {
-    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${query.substring(0, 40)}"`);
+    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdrLinks | "${q}"`);
     return { status: 'blocked', items: [], reason: 'circuit breaker open' };
   }
 
@@ -570,58 +636,48 @@ export async function searchHdrLinks(
 
     const { blocks, malformados } = parseJsonLdBlocks($);
     if (malformados > 0) {
-      logger.warn('HDR: JSON-LD malformado', { query: query.substring(0, 40), malformados });
+      logger.warn('HDR: JSON-LD malformado', { query: q, malformados });
     }
 
-    const collectionPage = blocks.find(b => b && b['@type'] === 'CollectionPage');
-    if (!collectionPage) {
-      // Sem CollectionPage pode ser WAF mascarado ou mudança de layout — trata como falha.
-      logger.warn('HDR: JSON-LD sem CollectionPage', {
-        query: query.substring(0, 40),
-        blocos: blocks.map(b => b?.['@type'] ?? '?').join(','),
-      });
-      breakerRegistrarFalha(FONTE);
-      return { status: 'error', items: [], reason: 'no CollectionPage' };
-    }
+const collectionPage = blocks.find(b => b && b['@type'] === 'CollectionPage');
+if (!collectionPage) {
+  // HDR às vezes devolve a home (WebSite + Organization) em vez de página de busca.
+  // Acontece com queries não-latinas, termos raros, ou quando o WAF mascara a resposta.
+  // Home sem CollectionPage NÃO é falha de fonte — é "0 resultados" disfarçado.
+  const tipos = blocks.map(b => b?.['@type']).filter(Boolean);
+  const ehHome = tipos.length === 2 && tipos.includes('WebSite') && tipos.includes('Organization');
+
+  if (ehHome) {
+    logger.debug(`HDR: query rejeitada (home sem CollectionPage) | "${truncar(query)}"`);
+    return { status: 'empty', items: [] };
+  }
+
+  // JSON-LD ausente com outros blocos = mudança de layout ou bloqueio real
+  logger.warn('HDR: JSON-LD sem CollectionPage', {
+    query: truncar(query),
+    blocos: tipos.join(','),
+  });
+  breakerRegistrarFalha(FONTE);
+  return { status: 'error', items: [], reason: 'no CollectionPage' };
+}
 
     const items = collectionPage.mainEntity?.itemListElement;
     if (!Array.isArray(items) || items.length === 0) {
       breakerRegistrarSucesso(FONTE);
-      logger.debug(`HDR: CollectionPage vazia | "${query.substring(0, 40)}"`);
+      logger.debug(`HDR: CollectionPage vazia | "${q}"`);
       return { status: 'empty', items: [] };
     }
 
     const tipoEsperado = mapearTipoEsperado(mediaType);
-    const results: SearchResultItem[] = [];
-    const seen = new Set<string>();
-    let cortadosPorTipo = 0;
-
-    for (const entry of items) {
-      const title: string | undefined = entry?.item?.name || entry?.name;
-      const rawUrl: string | undefined = entry?.item?.url || entry?.url;
-      if (!title || !rawUrl) continue;
-
-      if (tipoEsperado && entry?.item?.['@type'] !== tipoEsperado) {
-        cortadosPorTipo++;
-        continue;
-      }
-
-      const absoluteHref = rawUrl.startsWith('http') ? rawUrl : `${HDR_BASE}${rawUrl}`;
-      if (seen.has(absoluteHref)) continue;
-      seen.add(absoluteHref);
-
-      if (!passaFiltroTemporada([title], targetSeason, mediaType)) continue;
-
-      results.push({ title, postUrl: absoluteHref });
-    }
+    const { results, cortadosPorTipo } = parsearJsonLdItems(items, tipoEsperado, targetSeason, mediaType);
 
     breakerRegistrarSucesso(FONTE);
-    logger.debug(`HDR: "${query.substring(0, 40)}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
+    logger.debug(`HDR: "${q}" JSON-LD | ${items.length} itens, ${cortadosPorTipo} cortados por tipo, ${results.length} pós-temporada (${Date.now() - t0}ms)`);
 
     return { status: 'ok', items: results.slice(0, 40) };
   } catch (err: any) {
     logger.warn('HDR busca falhou', {
-      query: query.substring(0, 50),
+      query: truncar(query, 50),
       status: err.response?.status || '-',
       error: err.message,
     });
@@ -630,55 +686,30 @@ export async function searchHdrLinks(
   }
 }
 
-export async function extractMagnetsFromPost(
+interface RawLink {
+  href: string;
+  containerText: string;
+  linkText: string;
+  qualityMatch?: string;
+  sizeMatch?: string;
+}
+
+interface ContextoPost {
+  pageTitle: string;
+  postTitle: string;
+  tituloDoPost: string | undefined;
+  metadata: HdrMetadata;
+  targetSeason?: number;
+  mediaType?: TipoConteudo;
+}
+
+function coletarRawLinks(
+  $: any,
   html: string,
-  postTitle: string,
-  postUrl?: string,
-  targetSeason?: number,
-  mediaType?: TipoConteudo
-): Promise<HdrTorrent[]> {
-  const $ = cheerio.load(html);
-  const results: HdrTorrent[] = [];
-
-  const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
-  const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
-  const pageTitle = h1Title || titleTag || postTitle;
-
-  const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
-  const metadata = extractHdrMetadata($, jsonLdBlocks);
-
-  // originalTitle sempre vem do metadado do post, nunca do dn do magnet.
-  const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
-
-  const sectionHeaders: Array<{ pos: number; type: 'DUAL' | 'LEGENDADO' }> = [];
-  $('h1, h2, h3, h4, h5, h6, strong, b').each((_i: number, el: any) => {
-    const texto = $(el).text().trim();
-    if (!texto) return;
-    const tipo = classificarSecao(texto);
-    if (tipo === 'NONE') return;
-    const pos = html.indexOf($(el).toString());
-    if (pos === -1) return;
-    sectionHeaders.push({ pos, type: tipo });
-  });
-  sectionHeaders.sort((a, b) => a.pos - b.pos);
-
-  const detectarSecaoPorPosicao = (pos: number): 'DUAL' | 'LEGENDADO' | 'NONE' => {
-    let secao: 'DUAL' | 'LEGENDADO' | 'NONE' = 'NONE';
-    for (const sh of sectionHeaders) {
-      if (pos > sh.pos) secao = sh.type;
-      else break;
-    }
-    return secao;
-  };
-
-  const rawLinks: {
-    href: string;
-    containerText: string;
-    linkText: string;
-    qualityMatch?: string;
-    sizeMatch?: string;
-  }[] = [];
-
+  secaoHeaders: SecaoHeader[],
+  ctx: { postTitle: string; pageTitle: string; targetSeason?: number; mediaType?: TipoConteudo }
+): { rawLinks: RawLink[]; totalAnchors: number } {
+  const rawLinks: RawLink[] = [];
   const totalAnchors = $('a[href^="magnet:"]').length;
 
   $('a[href^="magnet:"]').each((_i: number, el: any) => {
@@ -689,14 +720,14 @@ export async function extractMagnetsFromPost(
     const linkText = $(el).text().trim();
 
     const posMagnet = html.indexOf($(el).toString());
-    const secaoPosicional = posMagnet !== -1 ? detectarSecaoPorPosicao(posMagnet) : 'NONE';
+    const secaoPosicional = posMagnet !== -1 ? secaoNaPosicao(posMagnet, secaoHeaders) : 'NONE';
     if (secaoPosicional === 'LEGENDADO') return;
 
     const isLegendado = /legendado|legendada|legenda/i.test(containerText);
     const isDualOuDublado = /dual\s*áudio|dual\s*audio|dublado|dublada|dublagem|nacional/i.test(containerText);
     if (isLegendado && !isDualOuDublado) return;
 
-    if (!passaFiltroTemporada([containerText, postTitle, pageTitle], targetSeason, mediaType)) return;
+    if (!passaFiltroTemporada([containerText, ctx.postTitle, ctx.pageTitle], ctx.targetSeason, ctx.mediaType)) return;
 
     const qualityMatch = containerText.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
     let sizeMatch = containerText.match(/(\d+(?:[.,]\d+)?)\s*(GB|MB)/i)?.[0];
@@ -709,99 +740,151 @@ export async function extractMagnetsFromPost(
     rawLinks.push({ href, containerText, linkText, qualityMatch, sizeMatch });
   });
 
-  for (const raw of rawLinks) {
-    try {
-      const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
-      let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
+  return { rawLinks, totalAnchors };
+}
 
-      if (!infoHash) {
-        logger.warn(`HDR: magnet sem infoHash`, { magnet: raw.href.substring(0, 60) });
-        continue;
-      }
+async function processarRawLink(raw: RawLink, ctx: ContextoPost): Promise<HdrTorrent | null> {
+  try {
+    const hashMatch = raw.href.match(/btih:([a-zA-Z0-9]+)/i);
+    let infoHash = hashMatch ? hashMatch[1].toLowerCase() : '';
 
-      let canonicalName: string | undefined;
-
-      try {
-        const dados = await analisarMagnet(raw.href);
-        canonicalName = dados?.nome ?? undefined;
-        if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
-          infoHash = dados.infoHash.toLowerCase();
-        }
-      } catch {
-        canonicalName = undefined;
-      }
-
-      const originalTitle = tituloDoPost;
-
-      const anosDoMagnet = extrairAno(raw.containerText);
-      const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
-      const year = years ? years[0] : metadata.year;
-
-      const language = extractLanguage(raw.containerText) || metadata.language || extractLanguage(pageTitle);
-
-      const range =
-        detectSeasonRange(raw.containerText) ??
-        detectSeasonRange(postTitle) ??
-        detectSeasonRange(pageTitle);
-
-      const rangeEp = extrairRangeEpisodios(raw.containerText);
-      let episodeStart = rangeEp?.episodeStart ?? undefined;
-
-      if (episodeStart === undefined && canonicalName) {
-        const rangeCanonical = extrairRangeEpisodios(canonicalName);
-        episodeStart = rangeCanonical?.episodeStart ?? undefined;
-      }
-
-      const episode = episodeStart;
-
-      const qualityMatch = raw.qualityMatch || metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
-      const sizeMatch = raw.sizeMatch || metadata.size?.trim();
-
-      const seasonLabel = range && range.seasonStart > 0
-        ? (range.seasonStart === range.seasonEnd
-          ? `${range.seasonStart}ª Temporada`
-          : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
-        : '';
-
-      const magnetTitle = seasonLabel
-        ? `${pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
-        : [pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
-
-      const htmlTitleLimpo = raw.containerText
-        .replace(/MAGNET LINK/gi, '')
-        .replace(/\s+/g, ' ')
-        .trim() || undefined;
-
-      results.push({
-        title: magnetTitle,
-        htmlTitle: htmlTitleLimpo,
-        magnet: raw.href,
-        infoHash,
-        seeders: 0,
-        size: sizeMatch || '',
-        language,
-        originalTitle,
-        year,
-        years,
-        canonicalName,
-        season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
-        episode,
-      });
-    } catch (err) {
-      logger.warn(`HDR: erro ao processar magnet`, { magnet: raw.href.substring(0, 60), error: (err as Error).message });
+    if (!infoHash) {
+      logger.warn(`HDR: magnet sem infoHash`, { magnet: raw.href.substring(0, 60) });
+      return null;
     }
+
+    let canonicalName: string | undefined;
+    try {
+      const dados = await analisarMagnet(raw.href);
+      canonicalName = dados?.nome ?? undefined;
+      if (dados?.infoHash && dados.infoHash.toLowerCase() !== infoHash) {
+        infoHash = dados.infoHash.toLowerCase();
+      }
+    } catch {
+      canonicalName = undefined;
+    }
+
+    const anosDoMagnet = extrairAno(raw.containerText);
+    const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
+    const year = years ? years[0] : ctx.metadata.year;
+
+    const language = extractLanguage(raw.containerText) || ctx.metadata.language || extractLanguage(ctx.pageTitle);
+
+    const range =
+      detectSeasonRange(raw.containerText) ??
+      detectSeasonRange(ctx.postTitle) ??
+      detectSeasonRange(ctx.pageTitle);
+
+    const rangeEp = extrairRangeEpisodios(raw.containerText);
+    let episodeStart = rangeEp?.episodeStart ?? undefined;
+
+    if (episodeStart === undefined && canonicalName) {
+      const rangeCanonical = extrairRangeEpisodios(canonicalName);
+      episodeStart = rangeCanonical?.episodeStart ?? undefined;
+    }
+
+    const episode = episodeStart;
+    const qualityMatch = raw.qualityMatch || ctx.metadata.quality?.match(/(\d{3,4}p|4K|FullHD|HD)/i)?.[0];
+    const sizeMatch = raw.sizeMatch || ctx.metadata.size?.trim();
+
+    const seasonLabel = range && range.seasonStart > 0
+      ? (range.seasonStart === range.seasonEnd
+        ? `${range.seasonStart}ª Temporada`
+        : `${range.seasonStart}ª à ${range.seasonEnd}ª Temporada`)
+      : '';
+
+    const magnetTitle = seasonLabel
+      ? `${ctx.pageTitle} - ${seasonLabel}${episode ? ` Episódio ${episode}` : ''}${language ? ` [${language}]` : ''}${qualityMatch ? ` ${qualityMatch}` : ''}`
+      : [ctx.pageTitle, episode ? `Episódio ${episode}` : '', language ? `[${language}]` : '', qualityMatch].filter(Boolean).join(' ');
+
+    const htmlTitleLimpo = raw.containerText
+      .replace(/MAGNET LINK/gi, '')
+      .replace(/\s+/g, ' ')
+      .trim() || undefined;
+
+    return {
+      title: magnetTitle,
+      htmlTitle: htmlTitleLimpo,
+      magnet: raw.href,
+      infoHash,
+      seeders: 0,
+      size: sizeMatch || '',
+      language,
+      originalTitle: ctx.tituloDoPost,
+      year,
+      years,
+      canonicalName,
+      season: range?.seasonStart && range.seasonStart > 0 ? range.seasonStart : undefined,
+      episode,
+    };
+  } catch (err) {
+    logger.warn(`HDR: erro ao processar magnet`, { magnet: raw.href.substring(0, 60), error: (err as Error).message });
+    return null;
+  }
+}
+
+export async function extractMagnetsFromPost(
+  html: string,
+  postTitle: string,
+  postUrl?: string,
+  targetSeason?: number,
+  mediaType?: TipoConteudo
+): Promise<HdrTorrent[]> {
+  const $ = cheerio.load(html);
+
+  const h1Title = $('h1').first().text().replace(/Torrent.*$/i, '').trim();
+  const titleTag = $('title').text().replace(/Torrent.*$/i, '').trim();
+  const pageTitle = h1Title || titleTag || postTitle;
+
+  const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
+  const metadata = extractHdrMetadata($, jsonLdBlocks);
+  const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
+
+  const secaoHeaders = detectarSecoes($, html);
+  const { rawLinks, totalAnchors } = coletarRawLinks($, html, secaoHeaders, { postTitle, pageTitle, targetSeason, mediaType });
+
+  const ctx: ContextoPost = { pageTitle, postTitle, tituloDoPost, metadata, targetSeason, mediaType };
+  const results: HdrTorrent[] = [];
+
+  for (const raw of rawLinks) {
+    const torrent = await processarRawLink(raw, ctx);
+    if (torrent) results.push(torrent);
   }
 
-  logger.debug(`HDR extract | "${postTitle.substring(0, 40)}" | anchors=${totalAnchors} rawLinks=${rawLinks.length} magnets=${results.length}`);
+  logger.debug(`HDR extract | "${truncar(postTitle)}" | anchors=${totalAnchors} rawLinks=${rawLinks.length} magnets=${results.length}`);
 
   if (results.length > 0) {
-    logger.debug(`HDR post | "${postTitle.substring(0, 40)}" | title=${metadata.origem.title} year=${metadata.origem.year} | ${results.length} magnets`);
+    logger.debug(`HDR post | "${truncar(postTitle)}" | title=${metadata.origem.title} year=${metadata.origem.year} | ${results.length} magnets`);
   }
 
   return results;
 }
 
-// Busca um único post. Só registra falha no breaker se for erro de fonte.
+interface ValidacaoImdb {
+  imdbConfirmed: boolean;
+  mismatch: boolean;
+  imdbIdDoPost: string | null;
+}
+
+function validarImdb(
+  html: string,
+  imdbId: string | undefined,
+  titulo: string,
+  mediaType?: TipoConteudo
+): ValidacaoImdb {
+  if (!imdbId) return { imdbConfirmed: false, mismatch: false, imdbIdDoPost: null };
+
+  const imdbIdDoPost = html.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
+  if (!imdbIdDoPost) return { imdbConfirmed: false, mismatch: false, imdbIdDoPost: null };
+
+  const isCollection = isCollectionTitle(titulo, mediaType);
+  if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
+    return { imdbConfirmed: false, mismatch: true, imdbIdDoPost };
+  }
+
+  return { imdbConfirmed: !isCollection, mismatch: false, imdbIdDoPost };
+}
+
 export async function processarPostHdr(
   item: SearchResultItem,
   imdbId: string | undefined,
@@ -816,30 +899,48 @@ export async function processarPostHdr(
     if (classificacao === 'fonte') {
       breakerRegistrarFalha(FONTE);
     }
-    logger.debug(`HDR post falhou | "${item.title.substring(0, 40)}" | ${classificacao} | ${(err as Error).message}`);
+    logger.debug(`HDR post falhou | "${truncar(item.title)}" | ${classificacao} | ${(err as Error).message}`);
     return { torrents: [], imdbConfirmed: false };
   }
 
-  let imdbConfirmed = false;
-  if (imdbId) {
-    const imdbIdDoPost = html.match(/imdb\.com\/title\/(tt\d+)/i)?.[1] || null;
-    if (imdbIdDoPost) {
-      const isCollection = isCollectionTitle(item.title, mediaType);
-      if (!isCollection && imdbIdDoPost.toLowerCase() !== imdbId.toLowerCase()) {
-        logger.debug(`HDR imdb mismatch | "${item.title.substring(0, 40)}" | post=${imdbIdDoPost} alvo=${imdbId}`);
-        return { torrents: [], imdbConfirmed: false };
-      }
-      if (!isCollection) {
-        imdbConfirmed = true;
-      }
-    }
+  const validacao = validarImdb(html, imdbId, item.title, mediaType);
+  if (validacao.mismatch) {
+    logger.debug(`HDR imdb mismatch | "${truncar(item.title)}" | post=${validacao.imdbIdDoPost} alvo=${imdbId}`);
+    return { torrents: [], imdbConfirmed: false };
   }
 
   const torrents = await extractMagnetsFromPost(html, item.title, item.postUrl, targetSeason, mediaType);
+
   if (torrents.length === 0) {
-    logger.debug(`HDR post vazio | "${item.title.substring(0, 40)}" | html=${html.length}b`);
+    logger.debug(`HDR post vazio | "${truncar(item.title)}" | html=${html.length}b`);
   }
-  return { torrents, imdbConfirmed };
+
+  return { torrents, imdbConfirmed: validacao.imdbConfirmed };
+}
+
+function filtrarPorSimilaridade(
+  links: SearchResultItem[],
+  frases: string[],
+  mediaType?: TipoConteudo
+): SearchResultItem[] {
+  return links.filter(link => {
+    const resultado = similarity.preFiltroContem(frases, link.title);
+    const isCollection = isCollectionTitle(link.title, mediaType);
+
+    if (!resultado.match && !isCollection) {
+      logger.debug(`HDR rejeitado | "${truncar(link.title, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
+      return false;
+    }
+    return true;
+  });
+}
+
+function dedupPorPostUrl(items: SearchResultItem[], seen: Set<string>): SearchResultItem[] {
+  return items.filter(item => {
+    if (seen.has(item.postUrl)) return false;
+    seen.add(item.postUrl);
+    return true;
+  });
 }
 
 export async function searchHdr(
@@ -852,24 +953,23 @@ export async function searchHdr(
   mediaType?: TipoConteudo
 ): Promise<HdrTorrent[]> {
   const startTime = Date.now();
+  const qTruncada = truncar(query);
 
   const queriesParaBusca = searchQueries && searchQueries.length > 0 ? [...searchQueries] : [query];
   const frasesValidas = queriesParaBusca.map(f => normalizarTexto(f)).filter(Boolean);
 
-  // Negative cache primeiro — se a query já foi vista vazia, sai rápido.
   const ncKey = negativeCacheKey(FONTE, query, {
     type,
     season: targetSeason ?? 0,
     mediaType: mediaType ?? null,
   });
   if (negativeCacheIsBlocked(ncKey)) {
-    logger.debug(`HDR: negative cache HIT | "${query.substring(0, 40)}"`);
+    logger.debug(`HDR: negative cache HIT | "${qTruncada}"`);
     return [];
   }
 
-  // Circuit breaker — se a fonte está aberta, nem tenta.
   if (!breakerPodeUsar(FONTE)) {
-    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${query.substring(0, 40)}"`);
+    logger.debug(`HDR: circuit breaker OPEN, pulando searchHdr | "${qTruncada}"`);
     return [];
   }
 
@@ -883,11 +983,12 @@ export async function searchHdr(
 
     for (const q of queriesParaBusca) {
       const t0 = Date.now();
+      const qLog = truncar(q);
 
       const searchResult = await searchHdrLinks(q, targetSeason, mediaType);
 
       if (searchResult.status === 'blocked') {
-        logger.debug(`HDR: breaker abriu no meio do loop | "${q.substring(0, 40)}"`);
+        logger.debug(`HDR: breaker abriu no meio do loop | "${qLog}"`);
         break;
       }
 
@@ -905,34 +1006,19 @@ export async function searchHdr(
       const links = searchResult.items;
 
       if (links.length === 0) {
-        logger.debug(`HDR: "${q.substring(0, 40)}" | 0 links (${Date.now() - t0}ms)`);
+        logger.debug(`HDR: "${qLog}" | 0 links (${Date.now() - t0}ms)`);
         continue;
       }
 
-      const filtrados = links.filter(link => {
-        const resultado = similarity.preFiltroContem(frasesValidas, link.title);
-        const isCollection = isCollectionTitle(link.title, mediaType);
-
-        if (!resultado.match && !isCollection) {
-          logger.debug(`HDR rejeitado | "${link.title.substring(0, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
-          return false;
-        }
-        return true;
-      });
-
+      const filtrados = filtrarPorSimilaridade(links, frasesValidas, mediaType);
       if (filtrados.length === 0) {
-        logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, 0 relevantes (${Date.now() - t0}ms)`);
+        logger.debug(`HDR: "${qLog}" | ${links.length} links, 0 relevantes (${Date.now() - t0}ms)`);
         continue;
       }
 
-      const novos = filtrados.filter(item => {
-        if (seenPostUrls.has(item.postUrl)) return false;
-        seenPostUrls.add(item.postUrl);
-        return true;
-      });
-
+      const novos = dedupPorPostUrl(filtrados, seenPostUrls);
       if (novos.length === 0) {
-        logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, ${filtrados.length} relevantes, 0 novos (${Date.now() - t0}ms)`);
+        logger.debug(`HDR: "${qLog}" | ${links.length} links, ${filtrados.length} relevantes, 0 novos (${Date.now() - t0}ms)`);
         continue;
       }
 
@@ -954,21 +1040,20 @@ export async function searchHdr(
 
       if (magnetsDaQuery > 0) queriesComResultado++;
 
-      logger.debug(`HDR: "${q.substring(0, 40)}" | ${links.length} links, ${filtrados.length} relevantes, ${novos.length} novos, ${magnetsDaQuery} magnets (${Date.now() - t0}ms)`);
+      logger.debug(`HDR: "${qLog}" | ${links.length} links, ${filtrados.length} relevantes, ${novos.length} novos, ${magnetsDaQuery} magnets (${Date.now() - t0}ms)`);
     }
 
     const duration = Date.now() - startTime;
 
-    // Só marca negative cache quando: 0 resultados E houve sucesso E nenhum erro.
     if (allResults.length === 0 && houveSucesso && !houveErro) {
       negativeCacheMark(ncKey);
-      logger.info(`HDR: 0 resultados, cacheado negativo | "${query.substring(0, 40)}" | ttlMs=${NEGATIVE_DEFAULT_TTL_MS}`);
+      logger.info(`HDR: 0 resultados, cacheado negativo | "${qTruncada}" | ttlMs=${NEGATIVE_DEFAULT_TTL_MS}`);
     }
 
     logger.info(`HDR: ${allResults.length} magnets em ${duration}ms | queries=${queriesParaBusca.length} comResultado=${queriesComResultado}`);
     return allResults;
   } catch (err: any) {
-    logger.error('HDR erro', { query: query.substring(0, 50), error: err.message });
+    logger.error('HDR erro', { query: truncar(query, 50), error: err.message });
     breakerRegistrarFalha(FONTE);
     return [];
   }

@@ -23,7 +23,7 @@ const rateLimit_js_1 = require("./middlewares/rateLimit.js");
 const MetricsService_js_1 = require("./catalogo/MetricsService.js");
 const ultraDebug_js_1 = require("./middlewares/ultraDebug.js");
 const etag_js_1 = require("./middlewares/etag.js");
-const RescrapeService_js_1 = require("./services/scraper/RescrapeService.js");
+const CamCleanupService_js_1 = require("./services/scraper/CamCleanupService.js");
 const logger = new logger_js_1.Logger('Main');
 const app = (0, express_1.default)();
 app.set('trust proxy', 1);
@@ -290,7 +290,7 @@ async function startServer() {
         app.use(stremioRouter);
         const port = process.env.PORT ? parseInt(process.env.PORT) : 7000;
         (0, serverFunctions_js_1.createServer)(app, port);
-        RescrapeService_js_1.RescrapeService.getInstance().start();
+        CamCleanupService_js_1.CamCleanupService.getInstance().start();
     }
     catch (error) {
         logger.error('Falha na inicializacao do servidor', {
