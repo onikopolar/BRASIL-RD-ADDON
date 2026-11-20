@@ -2,7 +2,7 @@ import { Logger } from '../utils/logger.js';
 import { SmartTitleMatch } from './interfaces.js';
 import { ImdbScraperService, ImdbTitles } from '../catalogo/ImdbScraperService.js';
 import { LanguageDetector } from './LanguageDetector.js';
-import { normalizarTexto, isCollectionTitle, extrairNumeroParte, getPotentialSequelNumbers, extrairRangeEpisodios, TipoConteudo } from './TechnicalWords.js';
+import { normalizarTexto, isCollectionTitle, extrairNumeroParte, getPotentialSequelNumbers, extrairRangeEpisodios, isTechnicalWord, COLLECTION_WORDS_FILMES, TipoConteudo } from './TechnicalWords.js';
 import { CacheService } from '../debrid/CacheService.js';
 
 export interface ScoreDetalhes {
@@ -228,6 +228,21 @@ export class SimilarityCalculator {
       return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
     }
 
+    // Em coleção, tira ruído técnico e palavras de coleção do torrent antes de comparar,
+    // pra sobrar só o nome da franquia ("todos os filmes 1080p dual audio" não pode diluir o score).
+    let torrentTokensBase = torrentTokens;
+    if (isCollection) {
+      const palavrasColecao = new Set<string>();
+      for (const termo of COLLECTION_WORDS_FILMES) {
+        for (const p of normalizarTexto(termo).split(' ')) palavrasColecao.add(p);
+      }
+      const limpos = torrentTokens.filter(t => !isTechnicalWord(t) && !palavrasColecao.has(t));
+      if (limpos.length > 0) torrentTokensBase = limpos;
+      this.logger.debug(
+        `COLECAO tokens limpos | "${torrentTitle.substring(0, 50)}" | ${torrentTokens.length}t -> ${torrentTokensBase.length}t [${torrentTokensBase.join(' ')}]`
+      );
+    }
+
     // Em série, número no título é TEMPORADA, não sequência.
     const tipoEfetivo: TipoConteudo = _torrentMetadata?.tipoConteudo ?? movieInfo.mediaType;
     const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
@@ -255,7 +270,7 @@ export class SimilarityCalculator {
       if (tmdbTokens.length === 0) continue;
 
       const seqTmdb = this.sequencias(titulo);
-      let torrentTokensParaComparar = torrentTokens;
+      let torrentTokensParaComparar = torrentTokensBase;
 
       if (seqTorrent.length > 0) {
         if (seqTmdb.length > 0) {
@@ -270,7 +285,7 @@ export class SimilarityCalculator {
           seqBloqueou = true;
           continue;
         } else {
-          torrentTokensParaComparar = torrentTokens.filter(
+          torrentTokensParaComparar = torrentTokensBase.filter(
             t => !/^\d{1,2}$/.test(t) || !seqTorrent.includes(parseInt(t))
           );
         }

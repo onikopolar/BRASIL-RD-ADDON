@@ -16,7 +16,7 @@ import { SimilarityCalculator } from '../../titulos/SimilarityCalculator.js';
 
 const logger = new Logger('StarckScraper');
 
-const STARCK_BASE = 'https://starckfilmes-v26.com';
+const STARCK_BASE = 'https://starckfilmes-v31.com';
 
 const QUALIDADE_VALIDA_REGEX = /\b(\d{3,4}p|4k|uhd|fhd|full\s*hd|hd)\b/i;
 

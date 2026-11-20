@@ -14,7 +14,6 @@ class StreamFormatter {
     constructor() {
         this.logger = new logger_js_1.Logger('StreamFormatter');
         this.qualityDetector = qualityDetector_js_1.QualityDetector.getInstance();
-        this.logger.debug('StreamFormatter ready');
     }
     async createMultipleQualityStreams(torrent, request, directLink, type, season, episode, isAvailableOnRD = false, fileIdx, titles, imdbId) {
         const imdbIdFinal = imdbId ?? request.imdbId ?? this.extrairImdbIdDoRequest(request);

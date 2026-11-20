@@ -770,10 +770,15 @@ async function processarRawLink(raw: RawLink, ctx: ContextoPost): Promise<HdrTor
 
     const language = extractLanguage(raw.containerText) || ctx.metadata.language || extractLanguage(ctx.pageTitle);
 
-    const range =
-      detectSeasonRange(raw.containerText) ??
+    const rangeDoEpisodio = detectSeasonRange(raw.containerText);
+    const rangeDaTemporada =
       detectSeasonRange(ctx.postTitle) ??
       detectSeasonRange(ctx.pageTitle);
+
+    const range =
+      (rangeDoEpisodio && rangeDoEpisodio.seasonStart > 0 ? rangeDoEpisodio : null) ??
+      rangeDaTemporada ??
+      rangeDoEpisodio;
 
     const rangeEp = extrairRangeEpisodios(raw.containerText);
     let episodeStart = rangeEp?.episodeStart ?? undefined;
@@ -838,7 +843,15 @@ export async function extractMagnetsFromPost(
 
   const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
   const metadata = extractHdrMetadata($, jsonLdBlocks);
-  const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
+  const tituloDoPost =
+    (metadata.originalTitle && normalizarTexto(metadata.originalTitle).length > 0
+      ? metadata.originalTitle
+      : undefined) ??
+    (metadata.originalTitleBruto && normalizarTexto(metadata.originalTitleBruto).length > 0
+      ? metadata.originalTitleBruto
+      : undefined) ??
+    pageTitle ??
+    postTitle;
 
   const secaoHeaders = detectarSecoes($, html);
   const { rawLinks, totalAnchors } = coletarRawLinks($, html, secaoHeaders, { postTitle, pageTitle, targetSeason, mediaType });
@@ -928,7 +941,7 @@ function filtrarPorSimilaridade(
     const isCollection = isCollectionTitle(link.title, mediaType);
 
     if (!resultado.match && !isCollection) {
-      logger.debug(`HDR rejeitado | "${truncar(link.title, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
+      // rejeitado: sem log por item, o resumo já aparece em "HDR: N links, M relevantes"
       return false;
     }
     return true;

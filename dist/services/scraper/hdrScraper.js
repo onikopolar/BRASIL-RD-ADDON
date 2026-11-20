@@ -671,9 +671,12 @@ async function processarRawLink(raw, ctx) {
         const years = (anosDoMagnet && anosDoMagnet.length > 0) ? anosDoMagnet : undefined;
         const year = years ? years[0] : ctx.metadata.year;
         const language = extractLanguage(raw.containerText) || ctx.metadata.language || extractLanguage(ctx.pageTitle);
-        const range = detectSeasonRange(raw.containerText) ??
-            detectSeasonRange(ctx.postTitle) ??
+        const rangeDoEpisodio = detectSeasonRange(raw.containerText);
+        const rangeDaTemporada = detectSeasonRange(ctx.postTitle) ??
             detectSeasonRange(ctx.pageTitle);
+        const range = (rangeDoEpisodio && rangeDoEpisodio.seasonStart > 0 ? rangeDoEpisodio : null) ??
+            rangeDaTemporada ??
+            rangeDoEpisodio;
         const rangeEp = (0, TechnicalWords_js_1.extrairRangeEpisodios)(raw.containerText);
         let episodeStart = rangeEp?.episodeStart ?? undefined;
         if (episodeStart === undefined && canonicalName) {
@@ -723,7 +726,14 @@ async function extractMagnetsFromPost(html, postTitle, postUrl, targetSeason, me
     const pageTitle = h1Title || titleTag || postTitle;
     const { blocks: jsonLdBlocks } = parseJsonLdBlocks($);
     const metadata = extractHdrMetadata($, jsonLdBlocks);
-    const tituloDoPost = metadata.originalTitle || metadata.originalTitleBruto;
+    const tituloDoPost = (metadata.originalTitle && (0, TechnicalWords_js_1.normalizarTexto)(metadata.originalTitle).length > 0
+        ? metadata.originalTitle
+        : undefined) ??
+        (metadata.originalTitleBruto && (0, TechnicalWords_js_1.normalizarTexto)(metadata.originalTitleBruto).length > 0
+            ? metadata.originalTitleBruto
+            : undefined) ??
+        pageTitle ??
+        postTitle;
     const secaoHeaders = detectarSecoes($, html);
     const { rawLinks, totalAnchors } = coletarRawLinks($, html, secaoHeaders, { postTitle, pageTitle, targetSeason, mediaType });
     const ctx = { pageTitle, postTitle, tituloDoPost, metadata, targetSeason, mediaType };
@@ -780,7 +790,6 @@ function filtrarPorSimilaridade(links, frases, mediaType) {
         const resultado = exports.similarity.preFiltroContem(frases, link.title);
         const isCollection = (0, TechnicalWords_js_1.isCollectionTitle)(link.title, mediaType);
         if (!resultado.match && !isCollection) {
-            logger.debug(`HDR rejeitado | "${truncar(link.title, 50)}" | score=${resultado.score.toFixed(2)} frase=${resultado.fraseVencedora || '-'}`);
             return false;
         }
         return true;

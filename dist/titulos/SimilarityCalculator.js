@@ -141,6 +141,18 @@ class SimilarityCalculator {
         if (titulosValidos.length === 0) {
             return { matches: false, similarity: 0, reason: 'Nenhum título TMDB' };
         }
+        let torrentTokensBase = torrentTokens;
+        if (isCollection) {
+            const palavrasColecao = new Set();
+            for (const termo of TechnicalWords_js_1.COLLECTION_WORDS_FILMES) {
+                for (const p of (0, TechnicalWords_js_1.normalizarTexto)(termo).split(' '))
+                    palavrasColecao.add(p);
+            }
+            const limpos = torrentTokens.filter(t => !(0, TechnicalWords_js_1.isTechnicalWord)(t) && !palavrasColecao.has(t));
+            if (limpos.length > 0)
+                torrentTokensBase = limpos;
+            this.logger.debug(`COLECAO tokens limpos | "${torrentTitle.substring(0, 50)}" | ${torrentTokens.length}t -> ${torrentTokensBase.length}t [${torrentTokensBase.join(' ')}]`);
+        }
         const tipoEfetivo = _torrentMetadata?.tipoConteudo ?? movieInfo.mediaType;
         const isSerie = tipoEfetivo === 'series' || tipoEfetivo === 'tv';
         const rangeTorrent = (0, TechnicalWords_js_1.extrairRangeEpisodios)(torrentTitle);
@@ -163,7 +175,7 @@ class SimilarityCalculator {
             if (tmdbTokens.length === 0)
                 continue;
             const seqTmdb = this.sequencias(titulo);
-            let torrentTokensParaComparar = torrentTokens;
+            let torrentTokensParaComparar = torrentTokensBase;
             if (seqTorrent.length > 0) {
                 if (seqTmdb.length > 0) {
                     const inter = seqTorrent.filter(n => seqTmdb.includes(n));
@@ -179,7 +191,7 @@ class SimilarityCalculator {
                     continue;
                 }
                 else {
-                    torrentTokensParaComparar = torrentTokens.filter(t => !/^\d{1,2}$/.test(t) || !seqTorrent.includes(parseInt(t)));
+                    torrentTokensParaComparar = torrentTokensBase.filter(t => !/^\d{1,2}$/.test(t) || !seqTorrent.includes(parseInt(t)));
                 }
             }
             const detalhes = this.calcularScore(tmdbTokens, torrentTokensParaComparar);

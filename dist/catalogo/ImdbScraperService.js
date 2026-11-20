@@ -257,13 +257,11 @@ class ImdbScraperService {
             const cacheKey = season ? `${imdbId}:s${season}` : imdbId;
             const cached = ImdbScraperService.getFromCache(cacheKey);
             if (cached) {
-                logger.debug('TMDB cache hit (mem)', { imdbId, season });
                 return cached.data;
             }
             const seasonKey = season ?? 0;
             const fromDb = await this.getFromDbCache(imdbId, seasonKey);
             if (fromDb) {
-                logger.debug('TMDB cache hit (db)', { imdbId, season: seasonKey });
                 ImdbScraperService.setCache(cacheKey, { data: fromDb, timestamp: Date.now() });
                 return fromDb;
             }

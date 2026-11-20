@@ -405,15 +405,6 @@ export class CatalogProvider {
         );
         const tituloParaIdioma = t.title || t.originalTitle || '';
 
-        // isCollection do log reflete a string que vai pro TitleFilter (tituloParaValidar), não o originalTitle do post — antes os dois divergiam (ex.: S01E03 CORRIGIDO logava true aqui e false no TF-STEP-1).
-        const isCollectionTitulo = isCollectionTitle(tituloParaValidar || t.title, mediaType);
-
-        this.logger.debug(
-          `TITLEFILTER_IN | "${(tituloParaValidar || t.title).substring(0, 60)}" | ` +
-          `isCollection=${isCollectionTitulo} | ano=${t.year ?? '-'} years=[${t.years?.join(',') ?? '-'}] ` +
-          `imdbConfirmed=${t.imdbConfirmed ?? false} provider=${t.provider}`
-        );
-
         const result = await this.titleFilter.titulosCombinam(
           tituloParaValidar,
           imdbId,
@@ -442,11 +433,12 @@ export class CatalogProvider {
         if (result.matches) {
           this.logger.info('🎯 ACEITO', {
             imdbId,
-            alvo: `S${season ?? '?'}E${episode ?? '?'}`,
+            alvo: (season !== undefined || episode !== undefined) ? `S${season ?? '?'}E${episode ?? '?'}` : 'filme',
             torrent: (torrent.canonicalName || torrent.title).substring(0, 70),
             quality: torrent.quality,
             provider: torrent.provider,
-            infoHash: torrent.infoHash?.substring(0, 12) || 'N/A'
+            infoHash: torrent.infoHash?.substring(0, 12) || 'N/A',
+            reason: result.reason
           });
           valid.push(torrent);
         } else {

@@ -46,7 +46,7 @@ const lookupCustomizado = (hostname: string, _opts: any, cb: any) => {
   });
 };
 
-const BASE_URL = 'https://bludvfilmes1.xyz';
+const BASE_URL = 'https://bludvfilmes2.xyz';
 const PROVIDER = 'BLUDV Filmes';
 const AXIOS_OPTS = {
   timeout: 15000,
@@ -67,6 +67,64 @@ const LYRA_MARK = 'data-lyra-h';
 
 // Keywords de seção procuradas no texto do HTML. Sem dependência de tag.
 const SECTION_KEYWORDS = /\b(dual|dublado|dublada|dublagem|legendado|legendada|nacional)\b/gi;
+
+// Negative cache local do BLUDV. Espelha o padrão de WordPress/Starck: TTL 30min,
+// chave por (query, type, season, mediaType), só marca quando o site respondeu OK
+// e não achou nada. Erro de rede NÃO marca negativo.
+const BLUDV_NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const BLUDV_NEGATIVE_MAX = 5000;
+
+interface BludvNegativeEntry {
+  ts: number;
+  ttlMs: number;
+  hits: number;
+}
+
+const bludvNegativeStore = new Map<string, BludvNegativeEntry>();
+
+function bludvNegativeKey(query: string, extra: Record<string, unknown>): string {
+  const q = query.trim().toLowerCase();
+  return `bludv|${q}|${JSON.stringify(extra)}`;
+}
+
+function bludvNegativeIsBlocked(key: string): boolean {
+  const entry = bludvNegativeStore.get(key);
+  if (!entry) return false;
+  if (Date.now() - entry.ts > entry.ttlMs) {
+    bludvNegativeStore.delete(key);
+    return false;
+  }
+  entry.hits++;
+  return true;
+}
+
+function bludvNegativeMark(key: string, ttlMs = BLUDV_NEGATIVE_TTL_MS): void {
+  if (bludvNegativeStore.size >= BLUDV_NEGATIVE_MAX) {
+    const first = bludvNegativeStore.keys().next().value;
+    if (first) bludvNegativeStore.delete(first);
+  }
+  bludvNegativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+
+export function bludvNegativeClear(): void {
+  bludvNegativeStore.clear();
+}
+
+export function bludvNegativeStats() {
+  const agora = Date.now();
+  return {
+    size: bludvNegativeStore.size,
+    maxEntries: BLUDV_NEGATIVE_MAX,
+    defaultTtlMs: BLUDV_NEGATIVE_TTL_MS,
+    entries: Array.from(bludvNegativeStore.entries()).map(([key, v]) => ({
+      key,
+      ageMs: agora - v.ts,
+      ttlMs: v.ttlMs,
+      expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+      hits: v.hits,
+    })),
+  };
+}
 
 export type SectionType = 'DUAL' | 'LEGENDADO' | 'NONE';
 export type Section = { type: SectionType; start: number; end: number };
@@ -161,7 +219,35 @@ export class BludvScraper {
       const seenUrls = new Set<string>();
 
       for (const q of queriesParaBusca) {
-        const posts = await this.searchPosts(q, targetSeason, frasesBusca, mediaType);
+        // Chave do negative cache: query + contexto (type, season, mediaType).
+        // Cada scraper tem seu veredito independente — não compartilha com WP/Starck/HDR.
+        const ncKey = bludvNegativeKey(q, {
+          type,
+          season: targetSeason ?? 0,
+          mediaType: mediaType ?? null,
+        });
+
+        if (bludvNegativeIsBlocked(ncKey)) {
+          logger.debug(`[BLUDV] negative cache HIT | "${truncar(q)}"`);
+          continue;
+        }
+
+        let posts: PostItem[];
+        try {
+          posts = await this.searchPosts(q, targetSeason, frasesBusca, mediaType);
+        } catch (err: any) {
+          // Erro de rede NÃO marca negativo — senão o site cai e ficamos 30min sem tentar de novo.
+          logger.warn(`[BLUDV] "${truncar(q)}" falhou: ${err.code || err.message}`);
+          continue;
+        }
+
+        // Só marca negativo quando o site respondeu OK e não achou nada.
+        if (posts.length === 0) {
+          bludvNegativeMark(ncKey);
+          logger.info(`[BLUDV] 0 resultados, cacheado negativo | "${truncar(q)}" | ttlMs=${BLUDV_NEGATIVE_TTL_MS}`);
+          logger.debug(`[BLUDV] "${q}" → 0`);
+          continue;
+        }
 
         for (const post of posts) {
           if (!seenUrls.has(post.url)) {
@@ -170,11 +256,8 @@ export class BludvScraper {
           }
         }
 
-        if (allPosts.length > 0) {
-          logger.debug(`[BLUDV] "${q}" → ${posts.length} posts`);
-          break;
-        }
-        logger.debug(`[BLUDV] "${q}" → 0`);
+        logger.debug(`[BLUDV] "${q}" → ${posts.length} posts`);
+        break;
       }
 
       if (!allPosts.length) return [];

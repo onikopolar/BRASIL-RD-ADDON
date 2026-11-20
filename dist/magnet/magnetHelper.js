@@ -63,7 +63,6 @@ async function gerarUrlResolve(magnet, chaveApi, nomeArquivo = 'video.mkv', indi
     }
     parametros.append('magnet', magnet);
     const consulta = parametros.toString();
-    logger.debug('GERAR_URL_RESOLVE', { tipo, temporada, episodio, qualidade, imdbId, infoHash });
     if (consulta)
         url += `?${consulta}`;
     return url;

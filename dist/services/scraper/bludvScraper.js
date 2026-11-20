@@ -37,6 +37,8 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.BludvScraper = exports.AXIOS_OPTS = exports.PROVIDER = exports.BASE_URL = void 0;
+exports.bludvNegativeClear = bludvNegativeClear;
+exports.bludvNegativeStats = bludvNegativeStats;
 const axios_1 = __importDefault(require("axios"));
 const cheerio = __importStar(require("cheerio"));
 const dns_1 = __importDefault(require("dns"));
@@ -77,7 +79,7 @@ const lookupCustomizado = (hostname, _opts, cb) => {
         cb(null, addresses[0], 4);
     });
 };
-const BASE_URL = 'https://bludvfilmes1.xyz';
+const BASE_URL = 'https://bludvfilmes2.xyz';
 exports.BASE_URL = BASE_URL;
 const PROVIDER = 'BLUDV Filmes';
 exports.PROVIDER = PROVIDER;
@@ -96,6 +98,50 @@ const CAT_FILMES = 92;
 const CAT_SERIES = 10;
 const LYRA_MARK = 'data-lyra-h';
 const SECTION_KEYWORDS = /\b(dual|dublado|dublada|dublagem|legendado|legendada|nacional)\b/gi;
+const BLUDV_NEGATIVE_TTL_MS = 30 * 60 * 1000;
+const BLUDV_NEGATIVE_MAX = 5000;
+const bludvNegativeStore = new Map();
+function bludvNegativeKey(query, extra) {
+    const q = query.trim().toLowerCase();
+    return `bludv|${q}|${JSON.stringify(extra)}`;
+}
+function bludvNegativeIsBlocked(key) {
+    const entry = bludvNegativeStore.get(key);
+    if (!entry)
+        return false;
+    if (Date.now() - entry.ts > entry.ttlMs) {
+        bludvNegativeStore.delete(key);
+        return false;
+    }
+    entry.hits++;
+    return true;
+}
+function bludvNegativeMark(key, ttlMs = BLUDV_NEGATIVE_TTL_MS) {
+    if (bludvNegativeStore.size >= BLUDV_NEGATIVE_MAX) {
+        const first = bludvNegativeStore.keys().next().value;
+        if (first)
+            bludvNegativeStore.delete(first);
+    }
+    bludvNegativeStore.set(key, { ts: Date.now(), ttlMs, hits: 0 });
+}
+function bludvNegativeClear() {
+    bludvNegativeStore.clear();
+}
+function bludvNegativeStats() {
+    const agora = Date.now();
+    return {
+        size: bludvNegativeStore.size,
+        maxEntries: BLUDV_NEGATIVE_MAX,
+        defaultTtlMs: BLUDV_NEGATIVE_TTL_MS,
+        entries: Array.from(bludvNegativeStore.entries()).map(([key, v]) => ({
+            key,
+            ageMs: agora - v.ts,
+            ttlMs: v.ttlMs,
+            expiraEmMs: Math.max(0, v.ttlMs - (agora - v.ts)),
+            hits: v.hits,
+        })),
+    };
+}
 function pad2(n) {
     return String(n).padStart(2, '0');
 }
@@ -131,18 +177,37 @@ class BludvScraper {
             const allPosts = [];
             const seenUrls = new Set();
             for (const q of queriesParaBusca) {
-                const posts = await this.searchPosts(q, targetSeason, frasesBusca, mediaType);
+                const ncKey = bludvNegativeKey(q, {
+                    type,
+                    season: targetSeason ?? 0,
+                    mediaType: mediaType ?? null,
+                });
+                if (bludvNegativeIsBlocked(ncKey)) {
+                    logger.debug(`[BLUDV] negative cache HIT | "${truncar(q)}"`);
+                    continue;
+                }
+                let posts;
+                try {
+                    posts = await this.searchPosts(q, targetSeason, frasesBusca, mediaType);
+                }
+                catch (err) {
+                    logger.warn(`[BLUDV] "${truncar(q)}" falhou: ${err.code || err.message}`);
+                    continue;
+                }
+                if (posts.length === 0) {
+                    bludvNegativeMark(ncKey);
+                    logger.info(`[BLUDV] 0 resultados, cacheado negativo | "${truncar(q)}" | ttlMs=${BLUDV_NEGATIVE_TTL_MS}`);
+                    logger.debug(`[BLUDV] "${q}" → 0`);
+                    continue;
+                }
                 for (const post of posts) {
                     if (!seenUrls.has(post.url)) {
                         seenUrls.add(post.url);
                         allPosts.push(post);
                     }
                 }
-                if (allPosts.length > 0) {
-                    logger.debug(`[BLUDV] "${q}" → ${posts.length} posts`);
-                    break;
-                }
-                logger.debug(`[BLUDV] "${q}" → 0`);
+                logger.debug(`[BLUDV] "${q}" → ${posts.length} posts`);
+                break;
             }
             if (!allPosts.length)
                 return [];

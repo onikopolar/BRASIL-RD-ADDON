@@ -19,7 +19,6 @@ export class StreamFormatter {
   constructor() {
     this.logger = new Logger('StreamFormatter');
     this.qualityDetector = QualityDetector.getInstance();
-    this.logger.debug('StreamFormatter ready');
   }
 
   //  API PÚBLICA

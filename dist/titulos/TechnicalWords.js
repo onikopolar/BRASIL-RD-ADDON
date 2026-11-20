@@ -40,7 +40,7 @@ exports.TECHNICAL_ACRONYMS = [
     'bluray', 'blu-ray', 'bdrip', 'brrip', 'webrip', 'web-dl', 'webdl',
     'hdtv', 'dvdrip', 'dvd', 'bd', 'remux', 'brrip', 'web',
     'matte', 'imax',
-    'dublado', 'dublada', 'dual', 'legendado', 'legendada', 'nacional',
+    'dublado', 'dublada', 'dual', 'audio', 'legendado', 'legendada', 'legenda', 'nacional',
     'portugues', 'português', 'pt-br', 'ptbr', 'brazilian',
     'www', 'com', 'org', 'net', 'tv', 'br', 'bludv', 'comando', 'comandotorrents',
     'torrents', 'filmes', 'hd', 'full', 'sf', 'dl', 'rip', 'xvid', 'divx',
